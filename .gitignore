@@ -1,0 +1,118 @@
+# If you prefer the allow list template instead of the deny list, see community template:
+# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
+#
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+
+# air command generates tmp/main file
+tmp
+
+# Ignore .DS_Store files
+.DS_Store
+
+# Ignore .env files
+.env
+
+# Ignore Claude Code documentation file
+CLAUDE.md
+
+# Terraform files
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfvars
+*.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+*.tfplan
+
+# Binary executables
+selfhost-dev
+/bin/
+main
+
+# IDE and editor files
+.idea/
+*.swp
+*.swo
+*~
+.vscode/
+*.sublime-*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+/logs/
+/tmp/
+
+# Test coverage
+*.out
+coverage.txt
+coverage.html
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Backup files
+*.bak
+*.backup
+/backups/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Build artifacts
+/dist/
+/build/
+
+# Database dumps
+*.sql.gz
+*.dump
+
+# Go workspace
+go.work
+go.work.sum
+
+# Dependency directories
+vendor/
+
+# Debug files
+debug
+__debug_bin
+
+# Profiling files
+*.prof
+
+# Generated files
+*.generated.go
+
+# Keep the lock file - it should be committed!
+# .terraform.lock.hcl
