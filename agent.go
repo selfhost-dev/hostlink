@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"os/exec"
-	"strings"
 	"time"
 )
 
@@ -28,12 +27,7 @@ func startAgent() {
 
 		updateCommand(cmd.ID, "running", "", "", 0)
 
-		fullCommand := cmd.Command
-		if len(cmd.Args) > 0 {
-			fullCommand = cmd.Command + " " + strings.Join(cmd.Args, " ")
-		}
-
-		execCmd := exec.Command("/bin/sh", "-c", fullCommand)
+		execCmd := exec.Command("/bin/sh", "-c", cmd.Command)
 		output, err := execCmd.CombinedOutput()
 
 		if err != nil {

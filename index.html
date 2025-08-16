@@ -27,14 +27,12 @@
     <script>
         async function submitCommand() {
             const input = document.getElementById('command');
-            const parts = input.value.trim().split(' ');
-            const command = parts[0];
-            const args = parts.slice(1);
+            const command = input.value.trim();
             
             const response = await fetch('/commands', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({command, args})
+                body: JSON.stringify({command})
             });
             
             if (response.ok) {
@@ -55,7 +53,7 @@
                 div.className = 'command-item';
                 div.innerHTML = 
                     '<div><strong>ID:</strong> ' + cmd.id + '</div>' +
-                    '<div><strong>Command:</strong> ' + cmd.command + ' ' + (cmd.args || []).join(' ') + '</div>' +
+                    '<div><strong>Command:</strong> ' + cmd.command + '</div>' +
                     '<div class="status ' + cmd.status + '"><strong>Status:</strong> ' + cmd.status + '</div>' +
                     (cmd.output ? '<div><strong>Output:</strong><pre>' + cmd.output + '</pre></div>' : '') +
                     (cmd.error ? '<div class="error"><strong>Error:</strong> ' + cmd.error + '</div>' : '');

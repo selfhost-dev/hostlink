@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"github.com/mattn/go-shellwords"
 )
 
 //go:embed index.html
@@ -20,8 +21,7 @@ var indexHTML string
 
 // CommandRequest represents the incoming command
 type CommandRequest struct {
-	Command string   `json:"command"`
-	Args    []string `json:"args,omitempty"`
+	Command string `json:"command"`
 }
 
 // CommandResponse represents the incoming command
@@ -36,7 +36,6 @@ type CommandResponse struct {
 type Command struct {
 	ID        string    `json:"id"`
 	Command   string    `json:"command"`
-	Args      []string  `json:"args,omitempty"`
 	Status    string    `json:"status"` // pending, running, completed
 	Output    string    `json:"output"`
 	Error     string    `json:"error"`
@@ -76,10 +75,21 @@ func main() {
 			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request"})
 		}
 
+		// Parse the command string with shellwords
+		if req.Command == "" {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "command is required"})
+		}
+
+		_, err := shellwords.Parse(req.Command)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{
+				"error": "Invalid command syntax: " + err.Error(),
+			})
+		}
+
 		cmd := &Command{
 			ID:        uuid.New().String(),
 			Command:   req.Command,
-			Args:      req.Args,
 			Status:    "pending",
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
@@ -129,7 +139,7 @@ func main() {
 			Status   string `json:"status"`
 			Output   string `json:"output"`
 			Error    string `json:"error"`
-			ExitCode int    `json:"exit_codd"`
+			ExitCode int    `json:"exit_code"`
 		}
 
 		if err := c.Bind(&update); err != nil {
@@ -176,20 +186,26 @@ func executeCommand(c echo.Context) error {
 		})
 	}
 
-	// Build the command string
-	fullCommand := req.Command
-	if len(req.Args) > 0 {
-		// Join command and args into a single string for shell execution
-		fullCommand = req.Command + " " + strings.Join(req.Args, " ")
+	// Parse command with shellwords to validate syntax
+	parts, err := shellwords.Parse(req.Command)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, CommandResponse{
+			Success: false,
+			Error:   "Invalid command syntax: " + err.Error(),
+		})
 	}
 
-	// Execute through /bin/sh -c
-	cmd := exec.Command("/bin/sh", "-c", fullCommand)
+	if len(parts) == 0 {
+		return c.JSON(http.StatusBadRequest, CommandResponse{
+			Success: false,
+			Error:   "Empty command",
+		})
+	}
 
-	// Execute theo command and capture output
+	cmd := exec.Command("/bin/sh", "-c", req.Command)
+
 	output, err := cmd.CombinedOutput()
 
-	// Prepare response
 	response := CommandResponse{
 		Success: err == nil,
 		Output:  strings.TrimSpace(string(output)),
@@ -197,11 +213,10 @@ func executeCommand(c echo.Context) error {
 
 	if err != nil {
 		response.Error = err.Error()
-		// Try to get exit code
 		if exitError, ok := err.(*exec.ExitError); ok {
 			response.Code = exitError.ExitCode()
 		}
-		return c.JSON(http.StatusOK, response) // Still return 200 OK but with error in response
+		return c.JSON(http.StatusOK, response)
 	}
 
 	return c.JSON(http.StatusOK, response)

@@ -5,6 +5,7 @@ go 1.24.4
 require (
 	github.com/google/uuid v1.6.0
 	github.com/labstack/echo/v4 v4.13.4
+	github.com/mattn/go-shellwords v1.0.12
 )
 
 require (
