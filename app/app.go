@@ -20,27 +20,33 @@ func New(config *config.Config) *App {
 
 // Start will create the database
 func (a *App) Start() error {
-	db, err := a.createSqliteDB()
+	db, err := a.openDB()
 	if err != nil {
 		return err
 	}
+
+	if err := a.initializeDB(db); err != nil {
+		db.Close()
+		return err
+	}
+
 	a.db = db
 	return nil
 }
 
-func (a *App) createSqliteDB() (*sql.DB, error) {
+func (a *App) initializeDB(db *sql.DB) error {
+	const vaccumSQL = "VACUUM;"
+	_, err := db.Exec(vaccumSQL)
+	return err
+}
+
+func (a *App) openDB() (*sql.DB, error) {
 	db, err := sql.Open("sqlite3", a.cfg.DBURL)
 	if err != nil {
 		return nil, err
 	}
 
 	if err := db.Ping(); err != nil {
-		return nil, err
-	}
-
-	initWithVaccume := `VACUUM;`
-
-	if _, err := db.Exec(initWithVaccume); err != nil {
 		return nil, err
 	}
 
