@@ -1,0 +1,6 @@
+.git
+*.md
+.gitignore
+.dockerignore
+hostlink
+/build
