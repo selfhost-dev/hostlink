@@ -16,7 +16,7 @@ import (
 	"github.com/mattn/go-shellwords"
 )
 
-//go:embed index.html
+//go:embed static/index.html
 var indexHTML string
 
 // CommandRequest represents the incoming command
