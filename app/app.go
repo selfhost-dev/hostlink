@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"database/sql"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -30,6 +31,12 @@ func (a *App) Start() error {
 	}
 
 	a.db = db
+
+	if err := a.PrepareDB(context.Background()); err != nil {
+		db.Close()
+		return err
+	}
+
 	return nil
 }
 
