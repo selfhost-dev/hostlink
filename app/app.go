@@ -2,17 +2,16 @@ package app
 
 import (
 	"database/sql"
-	"hostlink/config"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
 type App struct {
-	cfg *config.Config
+	cfg *Config
 	db  *sql.DB
 }
 
-func New(config *config.Config) *App {
+func New(config *Config) *App {
 	return &App{
 		cfg: config,
 	}

@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"hostlink/config"
 	"os"
 	"path/filepath"
 	"testing"
@@ -18,7 +17,7 @@ func TestSqliteDBCreation(t *testing.T) {
 	dbPath := filepath.Join(tempDir, "test.sqlite")
 	dbURL := fmt.Sprintf("file:%s", dbPath)
 
-	cfg := config.New().WithDBURL(dbURL)
+	cfg := NewConfig().WithDBURL(dbURL)
 
 	app := New(cfg)
 
@@ -43,7 +42,7 @@ func TestSqliteDBPersistence(t *testing.T) {
 	dbPath := filepath.Join(tempDir, "test.sqlite")
 	dbURL := fmt.Sprintf("file:%s", dbPath)
 
-	cfg := config.New().WithDBURL(dbURL)
+	cfg := NewConfig().WithDBURL(dbURL)
 
 	app1 := New(cfg)
 

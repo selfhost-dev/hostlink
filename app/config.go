@@ -1,4 +1,4 @@
-package config
+package app
 
 import "sync"
 
@@ -7,7 +7,7 @@ type Config struct {
 	DBURL string
 }
 
-func New() *Config {
+func NewConfig() *Config {
 	return &Config{
 		DBURL: "file:hostlink.sqlite3",
 	}
