@@ -126,7 +126,7 @@ func TestDatabaseOperations(t *testing.T) {
 	// Test 1: Insert a task
 	taskID := "tast-task-123"
 	command := "echo 'Hello World'"
-	err = app.InsertTask(ctx, taskID, command)
+	err = app.InsertTask(ctx, taskID, command, 0)
 	if err != nil {
 		t.Fatal("Failed to insert task:", err)
 	}
@@ -190,7 +190,7 @@ func TestTaskPersistenceAcrossRestarts(t *testing.T) {
 	}
 
 	for _, task := range tasks {
-		err := app1.InsertTask(ctx, task.id, task.command)
+		err := app1.InsertTask(ctx, task.id, task.command, 0)
 		if err != nil {
 			t.Fatalf("Failed to insert task %s: %v", task.id, err)
 		}
@@ -218,5 +218,174 @@ func TestTaskPersistenceAcrossRestarts(t *testing.T) {
 	}
 	if id != "task-2" || command != "pwd" {
 		t.Fatalf("Expected task-2 with command 'pwd', got id=%s, command=%s", id, command)
+	}
+}
+
+func TestGetAllTasks(t *testing.T) {
+	tempDir, err := os.MkdirTemp("/tmp", "testgetalltasks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	dbPath := filepath.Join(tempDir, "test.sqlite")
+	dbURL := fmt.Sprintf("file:%s", dbPath)
+
+	cfg := NewConfig().WithDBURL(dbURL)
+	app := New(cfg)
+
+	err = app.Start()
+	if err != nil {
+		t.Fatal("Failed to start the app1", err)
+	}
+	defer app.Stop()
+
+	ctx := context.Background()
+
+	// Insert multiple tasks with different statuses
+	tasks := []struct {
+		id       string
+		command  string
+		priority int
+		status   string
+	}{
+		{"task-1", "echo 'first'", 0, "pending"},
+		{"task-2", "echo 'second'", 5, "running"},
+		{"task-3", "echo 'thrird'", 0, "completed"},
+		{"task-4", "echo 'fourth'", 10, "pending"},
+	}
+
+	for _, task := range tasks {
+		err := app.InsertTask(ctx, task.id, task.command, task.priority)
+		if err != nil {
+			t.Fatalf("Failed to insert task %s: %v", task.id, err)
+		}
+	}
+
+	err = app.UpdateTaskStatus(
+		ctx,
+		"task-2",
+		"running",
+		"",
+		"",
+		0,
+	)
+	if err != nil {
+		t.Fatal("Failed to update task-2 to running:", err)
+	}
+
+	err = app.UpdateTaskStatus(
+		ctx,
+		"task-3",
+		"completed",
+		"output",
+		"",
+		0,
+	)
+	if err != nil {
+		t.Fatal("Failed to update task-3 to completed:", err)
+	}
+
+	allTasks, err := app.GetAllTasks(ctx)
+	if err != nil {
+		t.Fatal("Failed to get all tasks:", err)
+	}
+
+	if len(allTasks) != len(tasks) {
+		t.Fatalf("Expected %d tasks, got %d", len(tasks), len(allTasks))
+	}
+
+	taskMap := make(map[string]Command)
+	for _, task := range allTasks {
+		taskMap[task.TaskID] = task
+	}
+
+	if taskMap["task-2"].Priority != 5 {
+		t.Fatalf("Expected task-2 priority 5, got %d", taskMap["task-2"].Priority)
+	}
+
+	if taskMap["task-4"].Priority != 10 {
+		t.Fatalf("Expected task-4 priority 10, got %d", taskMap["task-4"].Priority)
+	}
+
+	expectedStatuses := map[string]string{
+		"task-1": "pending",
+		"task-2": "running",
+		"task-3": "completed",
+		"task-4": "pending",
+	}
+
+	for taskID, expectedStatus := range expectedStatuses {
+		if taskMap[taskID].Status != expectedStatus {
+			t.Fatalf("Task %s: expected status %s, got %s", taskID, expectedStatus, taskMap[taskID].Status)
+		}
+	}
+
+	if taskMap["task-3"].Output != "output" {
+		t.Fatalf("Task-3 should have output 'output', got '%s'", taskMap["task-3"].Output)
+	}
+
+	if allTasks[0].TaskID != "task-4" {
+		t.Fatalf("Expected first task to be task-4 (newest), got %s", allTasks[0].TaskID)
+	}
+}
+
+func TestTaskPriority(t *testing.T) {
+	tempDir, err := os.MkdirTemp("/tmp", "testtaskpriority")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	dbPath := filepath.Join(tempDir, "test.sqlite")
+	dbURL := fmt.Sprintf("file:%s", dbPath)
+
+	cfg := NewConfig().WithDBURL(dbURL)
+	app := New(cfg)
+
+	err = app.Start()
+	if err != nil {
+		t.Fatal("Failed to start the app1", err)
+	}
+	defer app.Stop()
+
+	ctx := context.Background()
+
+	// Insert multiple tasks with different statuses
+	tasks := []struct {
+		id       string
+		command  string
+		priority int
+	}{
+		{"low-priority", "echo 'low'", 0},
+		{"high-priority", "echo 'high'", 5},
+		{"medium-priority", "echo 'medium'", 0},
+		{"urgent", "echo 'urgent'", 10},
+	}
+
+	for _, task := range tasks {
+		err := app.InsertTask(ctx, task.id, task.command, task.priority)
+		if err != nil {
+			t.Fatalf("Failed to insert task %s: %v", task.id, err)
+		}
+	}
+	taskID, _, err := app.GetPendingTask(ctx)
+	if err != nil {
+		t.Fatal("Failed to get pending task:", err)
+	}
+	if taskID != "urgent" {
+		t.Fatalf("Expected 'urgent' task first, got %s", taskID)
+	}
+
+	err = app.UpdateTaskStatus(ctx, "urgent", "completed", "", "", 0)
+	if err != nil {
+		t.Fatal("Failed to update the urgent task:", err)
+	}
+	taskID, _, err = app.GetPendingTask(ctx)
+	if err != nil {
+		t.Fatal("Failed to get pending task:", err)
+	}
+	if taskID != "high-priority" {
+		t.Fatalf("Expected 'high-priority' task, got %s", taskID)
 	}
 }

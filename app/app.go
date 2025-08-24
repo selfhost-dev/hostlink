@@ -16,8 +16,10 @@ type App struct {
 // Command represents a command in the queue
 type Command struct {
 	ID        string    `json:"id"`
+	TaskID    string    `json:"task_id"`
 	Command   string    `json:"command"`
 	Status    string    `json:"status"` // pending, running, completed
+	Priority  int       `json:"priority"`
 	Output    string    `json:"output"`
 	Error     string    `json:"error"`
 	ExitCode  int       `json:"exit_code,omitempty"`

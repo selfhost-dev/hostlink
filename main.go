@@ -21,7 +21,8 @@ var indexHTML string
 
 // CommandRequest represents the incoming command
 type CommandRequest struct {
-	Command string `json:"command"`
+	Command  string `json:"command"`
+	Priority int    `json:"priority"`
 }
 
 // CommandResponse represents the incoming command
@@ -78,10 +79,10 @@ func main() {
 			})
 		}
 
-		id := uuid.New().String()
+		taskID := uuid.New().String()
 		ctx := c.Request().Context()
 
-		err = application.InsertTask(ctx, id, req.Command)
+		err = application.InsertTask(ctx, taskID, req.Command, req.Priority)
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{
 				"error": "Failed to save command: " + err.Error(),
@@ -89,7 +90,7 @@ func main() {
 		}
 
 		cmd := &app.Command{
-			ID:        uuid.New().String(),
+			TaskID:        taskID,
 			Command:   req.Command,
 			Status:    "pending",
 			CreatedAt: time.Now(),
