@@ -83,8 +83,8 @@ func (a *App) GetAllTasks(ctx context.Context) ([]Command, error) {
 			&cmd.Output,
 			&cmd.Error,
 			&cmd.ExitCode,
-			&cmd.UpdatedAt,
 			&cmd.CreatedAt,
+			&cmd.UpdatedAt,
 		)
 		if err != nil {
 			return nil, err
