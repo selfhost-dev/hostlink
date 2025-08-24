@@ -1,13 +1,13 @@
 package main
 
 import (
+	"database/sql"
 	_ "embed"
+	"hostlink/app"
 	"log"
 	"net/http"
 	"os/exec"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -32,25 +32,16 @@ type CommandResponse struct {
 	Code    int    `json:"exit_code"`
 }
 
-// Command represents a command in the queue
-type Command struct {
-	ID        string    `json:"id"`
-	Command   string    `json:"command"`
-	Status    string    `json:"status"` // pending, running, completed
-	Output    string    `json:"output"`
-	Error     string    `json:"error"`
-	ExitCode  int       `json:"exit_code,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-// In-memory storage
-var (
-	commands = make(map[string]*Command)
-	mu       sync.RWMutex
-)
-
 func main() {
+	cfg := app.NewConfig().WithDBURL("file:hostlink.db")
+	application := app.New(cfg)
+
+	err := application.Start()
+	if err != nil {
+		log.Fatal("Failed to start the application:", err)
+	}
+	defer application.Stop()
+
 	e := echo.New()
 
 	// Add middleware for logging and recovery
@@ -87,7 +78,17 @@ func main() {
 			})
 		}
 
-		cmd := &Command{
+		id := uuid.New().String()
+		ctx := c.Request().Context()
+
+		err = application.InsertTask(ctx, id, req.Command)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{
+				"error": "Failed to save command: " + err.Error(),
+			})
+		}
+
+		cmd := &app.Command{
 			ID:        uuid.New().String(),
 			Command:   req.Command,
 			Status:    "pending",
@@ -95,41 +96,43 @@ func main() {
 			UpdatedAt: time.Now(),
 		}
 
-		mu.Lock()
-		commands[cmd.ID] = cmd
-		mu.Unlock()
-
 		return c.JSON(http.StatusOK, cmd)
 	})
 
 	// Get all commands
 	e.GET("/commands", func(c echo.Context) error {
-		mu.RLock()
-		defer mu.RUnlock()
+		ctx := c.Request().Context()
 
-		cmdList := make([]*Command, 0, len(commands))
-		for _, cmd := range commands {
-			cmdList = append(cmdList, cmd)
+		tasks, err := application.GetAllTasks(ctx)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{
+				"error": "Failed to fetch tasks: " + err.Error(),
+			})
 		}
 
-		sort.Slice(cmdList, func(i, j int) bool {
-			return cmdList[i].CreatedAt.After(cmdList[j].CreatedAt)
-		})
-
-		return c.JSON(http.StatusOK, cmdList)
+		return c.JSON(http.StatusOK, tasks)
 	})
 
 	e.GET("/commands/pending", func(c echo.Context) error {
-		mu.RLock()
-		defer mu.RUnlock()
+		ctx := c.Request().Context()
 
-		for _, cmd := range commands {
-			if cmd.Status == "pending" {
-				return c.JSON(http.StatusOK, cmd)
+		id, command, err := application.GetPendingTask(ctx)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				return c.JSON(http.StatusOK, nil)
 			}
+			return c.JSON(http.StatusInternalServerError, map[string]string{
+				"error": "Failed to fetch pending task: " + err.Error(),
+			})
 		}
 
-		return c.JSON(http.StatusOK, nil)
+		cmd := &app.Command{
+			ID:      id,
+			Command: command,
+			Status:  "pending",
+		}
+
+		return c.JSON(http.StatusOK, cmd)
 	})
 
 	e.PUT("/commands/:id", func(c echo.Context) error {
@@ -146,21 +149,23 @@ func main() {
 			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request"})
 		}
 
-		mu.Lock()
-		defer mu.Unlock()
-
-		cmd, exists := commands[id]
-		if !exists {
-			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Command not found"})
+		ctx := c.Request().Context()
+		err = application.UpdateTaskStatus(
+			ctx,
+			id,
+			update.Status,
+			update.Output,
+			update.Error,
+			update.ExitCode,
+		)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{
+				"error": "Failed to update task: " + err.Error(),
+			})
 		}
-
-		cmd.Status = update.Status
-		cmd.Output = update.Output
-		cmd.Error = update.Error
-		cmd.ExitCode = update.ExitCode
-		cmd.UpdatedAt = time.Now()
-
-		return c.JSON(http.StatusOK, cmd)
+		return c.JSON(http.StatusOK, map[string]string{
+			"status": "updated",
+		})
 	})
 
 	go startAgent()

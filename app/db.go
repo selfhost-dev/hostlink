@@ -53,6 +53,52 @@ func (a *App) UpdateTaskStatus(ctx context.Context, id, status, output, errorMsg
 	return nil
 }
 
+func (a *App) GetAllTasks(ctx context.Context) ([]Command, error) {
+	const QUERY = `
+			SELECT
+				id,
+				command,
+				status,
+				COALESCE (output, '') as output,
+				COALESCE (error, '') as error,
+				COALESCE (exit_code, 0) as exit_code,
+				created_at,
+				updated_at
+			FROM tasks
+			ORDER BY created_at DESC
+		`
+	rows, err := a.db.QueryContext(ctx, QUERY)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tasks []Command
+	for rows.Next() {
+		var cmd Command
+		err := rows.Scan(
+			&cmd.ID,
+			&cmd.Command,
+			&cmd.Status,
+			&cmd.Output,
+			&cmd.Error,
+			&cmd.ExitCode,
+			&cmd.UpdatedAt,
+			&cmd.CreatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, cmd)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return tasks, nil
+}
+
 func (a *App) GetPendingTask(ctx context.Context) (id, command string, err error) {
 	const QUERY = `
 			SELECT id, command FROM tasks

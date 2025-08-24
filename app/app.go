@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -10,6 +11,18 @@ import (
 type App struct {
 	cfg *Config
 	db  *sql.DB
+}
+
+// Command represents a command in the queue
+type Command struct {
+	ID        string    `json:"id"`
+	Command   string    `json:"command"`
+	Status    string    `json:"status"` // pending, running, completed
+	Output    string    `json:"output"`
+	Error     string    `json:"error"`
+	ExitCode  int       `json:"exit_code,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func New(config *Config) *App {

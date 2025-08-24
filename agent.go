@@ -3,13 +3,14 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"hostlink/app"
 	"net/http"
 	"os/exec"
 	"time"
 )
 
 func startAgent() {
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
@@ -18,7 +19,7 @@ func startAgent() {
 			continue
 		}
 
-		var cmd Command
+		var cmd app.Command
 		if err := json.NewDecoder(resp.Body).Decode(&cmd); err != nil && cmd.ID == "" {
 			resp.Body.Close()
 			continue
