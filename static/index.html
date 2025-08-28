@@ -25,6 +25,11 @@
     <div id="output"></div>
     
     <script>
+        // Command history tracking
+        let commandHistory = JSON.parse(localStorage.getItem('commandHistory') || '[]');
+        let historyIndex = commandHistory.length;
+        let tempCommand = '';
+        
         async function submitCommand() {
             const input = document.getElementById('command');
             const command = input.value.trim();
@@ -36,6 +41,12 @@
             });
             
             if (response.ok) {
+                // Add to history if not duplicate
+                if (command && command !== commandHistory[commandHistory.length - 1]) {
+                    commandHistory.push(command);
+                    localStorage.setItem('commandHistory', JSON.stringify(commandHistory));
+                }
+                historyIndex = commandHistory.length;
                 input.value = '';
                 refreshCommands();
             }
@@ -60,6 +71,37 @@
                 output.appendChild(div);
             });
         }
+        
+        // Keyboard navigation for command history
+        document.getElementById('command').addEventListener('keydown', function(e) {
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                if (historyIndex > 0) {
+                    // Save current input if starting navigation
+                    if (historyIndex === commandHistory.length) {
+                        tempCommand = this.value;
+                    }
+                    historyIndex--;
+                    this.value = commandHistory[historyIndex];
+                }
+            } else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                if (historyIndex < commandHistory.length - 1) {
+                    historyIndex++;
+                    this.value = commandHistory[historyIndex];
+                } else if (historyIndex === commandHistory.length - 1) {
+                    // Restore temp command when reaching end
+                    historyIndex++;
+                    this.value = tempCommand;
+                }
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                submitCommand();
+            } else {
+                // Reset index on any other key
+                historyIndex = commandHistory.length;
+            }
+        });
         
         // Auto-refresh every 2 seconds
         setInterval(refreshCommands, 2000);
