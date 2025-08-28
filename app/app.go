@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 type App struct {
@@ -62,7 +62,7 @@ func (a *App) initializeDB(db *sql.DB) error {
 }
 
 func (a *App) openDB() (*sql.DB, error) {
-	db, err := sql.Open("sqlite3", a.cfg.DBURL)
+	db, err := sql.Open("sqlite", a.cfg.DBURL)
 	if err != nil {
 		return nil, err
 	}
