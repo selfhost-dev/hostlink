@@ -20,7 +20,7 @@ func startAgent() {
 		}
 
 		var cmd app.Command
-		if err := json.NewDecoder(resp.Body).Decode(&cmd); err != nil && cmd.ID == "" {
+		if err := json.NewDecoder(resp.Body).Decode(&cmd); err != nil || cmd.ID == "" {
 			resp.Body.Close()
 			continue
 		}
