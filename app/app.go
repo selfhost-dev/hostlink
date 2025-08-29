@@ -13,10 +13,10 @@ type App struct {
 	db  *sql.DB
 }
 
-// Command represents a command in the queue
-type Command struct {
+// Task represents a command in the queue
+type Task struct {
 	ID        string    `json:"id"`
-	TaskID    string    `json:"task_id"`
+	PID       string    `json:"pid"`
 	Command   string    `json:"command"`
 	Status    string    `json:"status"` // pending, running, completed
 	Priority  int       `json:"priority"`
