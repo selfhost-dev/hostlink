@@ -1,4 +1,3 @@
-.PHONY: test start
 .PHONY: test start pushbuild
 test:
 	go test ./...
