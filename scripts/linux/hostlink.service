@@ -1,0 +1,14 @@
+[Unit]
+Description=hostlink
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/usr/bin/
+ExecStart=/usr/bin/hostlink
+Restart=always
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target
+
