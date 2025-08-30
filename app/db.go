@@ -1,12 +1,14 @@
 package app
 
-import "context"
+import (
+	"context"
+)
 
 func (a *App) PrepareDB(ctx context.Context) error {
 	const QUERY = `
 			CREATE TABLE IF NOT EXISTS tasks (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				task_id TEXT UNIQUE NOT NULL,
+				pid TEXT UNIQUE NOT NULL,
 				command TEXT NOT NULL,
 				priority INTEGER DEFAULT 0,
 				status TEXT NOT NULL DEFAULT 'pending',
@@ -23,31 +25,31 @@ func (a *App) PrepareDB(ctx context.Context) error {
 	return nil
 }
 
-func (a *App) InsertTask(ctx context.Context, taskID, command string, priority int) error {
+func (a *App) InsertTask(ctx context.Context, task Task) error {
 	const QUERY = `
-			INSERT into tasks (task_id, command, priority, status) VALUES (?, ?, ?, 'pending')
+			INSERT into tasks (pid, command, priority, status) VALUES (?, ?, ?, 'pending')
 		`
-	if _, err := a.db.ExecContext(ctx, QUERY, taskID, command, priority); err != nil {
+	if _, err := a.db.ExecContext(ctx, QUERY, task.PID, task.Command, task.Priority); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (a *App) UpdateTaskStatus(ctx context.Context, taskID, status, output, errorMsg string, exitCode int) error {
+func (a *App) UpdateTask(ctx context.Context, task Task) error {
 	const QUERY = `
 			UPDATE tasks
 			SET status = ?, output = ?, error = ?, exit_code = ?, updated_at = CURRENT_TIMESTAMP
-			WHERE task_id = ?
+			WHERE pid = ?
 		`
 	if _, err := a.db.ExecContext(
 		ctx,
 		QUERY,
-		status,
-		output,
-		errorMsg,
-		exitCode,
-		taskID,
+		task.Status,
+		task.Output,
+		task.Error,
+		task.ExitCode,
+		task.PID,
 	); err != nil {
 		return err
 	}
@@ -55,11 +57,11 @@ func (a *App) UpdateTaskStatus(ctx context.Context, taskID, status, output, erro
 	return nil
 }
 
-func (a *App) GetAllTasks(ctx context.Context) ([]Command, error) {
+func (a *App) GetAllTasks(ctx context.Context) ([]Task, error) {
 	const QUERY = `
 			SELECT
 				id,
-				task_id,
+				pid,
 				command,
 				status,
 				priority,
@@ -77,12 +79,12 @@ func (a *App) GetAllTasks(ctx context.Context) ([]Command, error) {
 	}
 	defer rows.Close()
 
-	var tasks []Command
+	var tasks []Task
 	for rows.Next() {
-		var cmd Command
+		var cmd Task
 		err := rows.Scan(
 			&cmd.ID,
-			&cmd.TaskID,
+			&cmd.PID,
 			&cmd.Command,
 			&cmd.Status,
 			&cmd.Priority,
@@ -105,14 +107,19 @@ func (a *App) GetAllTasks(ctx context.Context) ([]Command, error) {
 	return tasks, nil
 }
 
-func (a *App) GetPendingTask(ctx context.Context) (taskID, command string, err error) {
+func (a *App) GetPendingTask(ctx context.Context) (*Task, error) {
 	const QUERY = `
-			SELECT task_id, command FROM tasks
+			SELECT pid, command FROM tasks
 			WHERE status = 'pending'
 			ORDER BY priority DESC, id ASC
 			LIMIT 1
-		`
+	`
+	var task Task
 
-	err = a.db.QueryRowContext(ctx, QUERY).Scan(&taskID, &command)
-	return taskID, command, err
+	err := a.db.QueryRowContext(ctx, QUERY).Scan(&task.PID, &task.Command)
+	if err != nil {
+		return nil, err
+	}
+
+	return &task, err
 }

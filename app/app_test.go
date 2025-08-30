@@ -124,38 +124,50 @@ func TestDatabaseOperations(t *testing.T) {
 	ctx := context.Background()
 
 	// Test 1: Insert a task
-	taskID := "tast-task-123"
-	command := "echo 'Hello World'"
-	err = app.InsertTask(ctx, taskID, command, 0)
+	task := Task{
+		PID:      "tast-task-123",
+		Command:  "echo 'Hello World'",
+		Priority: 0,
+	}
+	err = app.InsertTask(ctx, task)
 	if err != nil {
 		t.Fatal("Failed to insert task:", err)
 	}
 
 	// Test 2: Get pipeline task
-	gotID, gotCommand, err := app.GetPendingTask(ctx)
+	newTask, err := app.GetPendingTask(ctx)
 	if err != nil {
 		t.Fatal("Failed to get pending task:", err)
 	}
 
-	if gotID != taskID || gotCommand != command {
+	if newTask.PID != task.PID || newTask.Command != task.Command {
 		t.Fatalf(
-			"Task mismatch: expected ID=%s, command=%s, got ID=%s, command=%s",
-			taskID, command, gotID, gotCommand,
+			"Task mismatch: expected PID=%s, command=%s, got PID=%s, command=%s",
+			task.PID, task.Command, newTask.PID, newTask.Command,
 		)
 	}
 
-	err = app.UpdateTaskStatus(ctx, taskID, "running", "", "", 0)
+	err = app.UpdateTask(ctx, Task{
+		PID:      task.PID,
+		Status:   "running",
+		Priority: 0,
+	})
 	if err != nil {
 		t.Fatal("Failed to update task status:", err)
 	}
 
 	// Verify no pending task after the update
-	_, _, err = app.GetPendingTask(ctx)
+	_, err = app.GetPendingTask(ctx)
 	if err != sql.ErrNoRows {
 		t.Fatalf("Expected sql.ErrNoRows when no pending tasks, but got: %v", err)
 	}
 
-	err = app.UpdateTaskStatus(ctx, taskID, "completed", "Hello World", "", 0)
+	err = app.UpdateTask(ctx, Task{
+		PID:      task.PID,
+		Status:   "completed",
+		Output:   "Hello World",
+		Priority: 0,
+	})
 	if err != nil {
 		t.Fatal("Failed to update task completed:", err)
 	}
@@ -180,23 +192,25 @@ func TestTaskPersistenceAcrossRestarts(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	tasks := []struct {
-		id      string
-		command string
-	}{
-		{"task-1", "ls -al"},
-		{"task-2", "pwd"},
-		{"task-3", "echo test"},
+	tasks := []Task{
+		{PID: "task-1", Command: "ls -al"},
+		{PID: "task-2", Command: "pwd"},
+		{PID: "task-3", Command: "echo test"},
 	}
 
 	for _, task := range tasks {
-		err := app1.InsertTask(ctx, task.id, task.command, 0)
+		err := app1.InsertTask(ctx, task)
 		if err != nil {
-			t.Fatalf("Failed to insert task %s: %v", task.id, err)
+			t.Fatalf("Failed to insert task %s: %v", task.PID, err)
 		}
 	}
 
-	err = app1.UpdateTaskStatus(ctx, "task-1", "completed", "output", "", 0)
+	err = app1.UpdateTask(ctx, Task{
+		PID:      "task-1",
+		Status:   "completed",
+		Output:   "output",
+		Priority: 0,
+	})
 	if err != nil {
 		t.Fatal("Failed to update task-1:", err)
 	}
@@ -212,12 +226,16 @@ func TestTaskPersistenceAcrossRestarts(t *testing.T) {
 	defer app2.Stop()
 
 	// Should get task-2 and the next pending task
-	id, command, err := app2.GetPendingTask(ctx)
+	task, err := app2.GetPendingTask(ctx)
 	if err != nil {
 		t.Fatal("Failed to get pending task after restart:", err)
 	}
-	if id != "task-2" || command != "pwd" {
-		t.Fatalf("Expected task-2 with command 'pwd', got id=%s, command=%s", id, command)
+	if task.PID != "task-2" || task.Command != "pwd" {
+		t.Fatalf(
+			"Expected task-2 with command 'pwd', got id=%s, command=%s",
+			task.PID,
+			task.Command,
+		)
 	}
 }
 
@@ -243,45 +261,36 @@ func TestGetAllTasks(t *testing.T) {
 	ctx := context.Background()
 
 	// Insert multiple tasks with different statuses
-	tasks := []struct {
-		id       string
-		command  string
-		priority int
-		status   string
-	}{
-		{"task-1", "echo 'first'", 0, "pending"},
-		{"task-2", "echo 'second'", 5, "running"},
-		{"task-3", "echo 'thrird'", 0, "completed"},
-		{"task-4", "echo 'fourth'", 10, "pending"},
+	tasks := []Task{
+		{PID: "task-1", Command: "echo 'first'", Priority: 0, Status: "pending"},
+		{PID: "task-2", Command: "echo 'second'", Priority: 5, Status: "running"},
+		{PID: "task-3", Command: "echo 'thrird'", Priority: 0, Status: "completed"},
+		{PID: "task-4", Command: "echo 'fourth'", Priority: 10, Status: "pending"},
 	}
 
 	for _, task := range tasks {
-		err := app.InsertTask(ctx, task.id, task.command, task.priority)
+		err := app.InsertTask(ctx, task)
 		if err != nil {
-			t.Fatalf("Failed to insert task %s: %v", task.id, err)
+			t.Fatalf("Failed to insert task %s: %v", task.PID, err)
 		}
 	}
 
-	err = app.UpdateTaskStatus(
-		ctx,
-		"task-2",
-		"running",
-		"",
-		"",
-		0,
-	)
+	err = app.UpdateTask(ctx, Task{
+		PID:      "task-2",
+		Status:   "running",
+		Output:   "output",
+		Priority: 0,
+	})
 	if err != nil {
 		t.Fatal("Failed to update task-2 to running:", err)
 	}
 
-	err = app.UpdateTaskStatus(
-		ctx,
-		"task-3",
-		"completed",
-		"output",
-		"",
-		0,
-	)
+	err = app.UpdateTask(ctx, Task{
+		PID:      "task-3",
+		Status:   "completed",
+		Output:   "output",
+		Priority: 0,
+	})
 	if err != nil {
 		t.Fatal("Failed to update task-3 to completed:", err)
 	}
@@ -295,9 +304,9 @@ func TestGetAllTasks(t *testing.T) {
 		t.Fatalf("Expected %d tasks, got %d", len(tasks), len(allTasks))
 	}
 
-	taskMap := make(map[string]Command)
+	taskMap := make(map[string]Task)
 	for _, task := range allTasks {
-		taskMap[task.TaskID] = task
+		taskMap[task.PID] = task
 	}
 
 	if taskMap["task-2"].Priority != 5 {
@@ -325,8 +334,8 @@ func TestGetAllTasks(t *testing.T) {
 		t.Fatalf("Task-3 should have output 'output', got '%s'", taskMap["task-3"].Output)
 	}
 
-	if allTasks[0].TaskID != "task-4" {
-		t.Fatalf("Expected first task to be task-4 (newest), got %s", allTasks[0].TaskID)
+	if allTasks[0].PID != "task-4" {
+		t.Fatalf("Expected first task to be task-4 (newest), got %s", allTasks[0].PID)
 	}
 }
 
@@ -352,40 +361,40 @@ func TestTaskPriority(t *testing.T) {
 	ctx := context.Background()
 
 	// Insert multiple tasks with different statuses
-	tasks := []struct {
-		id       string
-		command  string
-		priority int
-	}{
-		{"low-priority", "echo 'low'", 0},
-		{"high-priority", "echo 'high'", 5},
-		{"medium-priority", "echo 'medium'", 0},
-		{"urgent", "echo 'urgent'", 10},
+	tasks := []Task{
+		{PID: "low-priority", Command: "echo 'low'", Priority: 0},
+		{PID: "high-priority", Command: "echo 'high'", Priority: 5},
+		{PID: "medium-priority", Command: "echo 'medium'", Priority: 0},
+		{PID: "urgent", Command: "echo 'urgent'", Priority: 10},
 	}
 
 	for _, task := range tasks {
-		err := app.InsertTask(ctx, task.id, task.command, task.priority)
+		err := app.InsertTask(ctx, task)
 		if err != nil {
-			t.Fatalf("Failed to insert task %s: %v", task.id, err)
+			t.Fatalf("Failed to insert task %s: %v", task.PID, err)
 		}
 	}
-	taskID, _, err := app.GetPendingTask(ctx)
+	task, err := app.GetPendingTask(ctx)
 	if err != nil {
 		t.Fatal("Failed to get pending task:", err)
 	}
-	if taskID != "urgent" {
-		t.Fatalf("Expected 'urgent' task first, got %s", taskID)
+	if task.PID != "urgent" {
+		t.Fatalf("Expected 'urgent' task first, got %s", task.PID)
 	}
 
-	err = app.UpdateTaskStatus(ctx, "urgent", "completed", "", "", 0)
+	err = app.UpdateTask(ctx, Task{
+		PID:      "urgent",
+		Status:   "completed",
+		Priority: 0,
+	})
 	if err != nil {
 		t.Fatal("Failed to update the urgent task:", err)
 	}
-	taskID, _, err = app.GetPendingTask(ctx)
+	task, err = app.GetPendingTask(ctx)
 	if err != nil {
 		t.Fatal("Failed to get pending task:", err)
 	}
-	if taskID != "high-priority" {
-		t.Fatalf("Expected 'high-priority' task, got %s", taskID)
+	if task.PID != "high-priority" {
+		t.Fatalf("Expected 'high-priority' task, got %s", task.PID)
 	}
 }

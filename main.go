@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"hostlink/app"
+	"hostlink/internal/agent"
 	"log"
 	"net/http"
 	"os/exec"
@@ -19,8 +20,8 @@ import (
 //go:embed static/index.html
 var indexHTML string
 
-// CommandRequest represents the incoming command
-type CommandRequest struct {
+// TaskRequest represents the incoming command
+type TaskRequest struct {
 	Command  string `json:"command"`
 	Priority int    `json:"priority"`
 }
@@ -62,7 +63,7 @@ func main() {
 
 	// Subnet a new command
 	e.POST("/commands", func(c echo.Context) error {
-		var req CommandRequest
+		var req TaskRequest
 		if err := c.Bind(&req); err != nil {
 			return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request"})
 		}
@@ -79,18 +80,22 @@ func main() {
 			})
 		}
 
-		taskID := uuid.New().String()
+		task := app.Task{
+			PID:      uuid.New().String(),
+			Command:  req.Command,
+			Priority: req.Priority,
+		}
 		ctx := c.Request().Context()
 
-		err = application.InsertTask(ctx, taskID, req.Command, req.Priority)
+		err = application.InsertTask(ctx, task)
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{
 				"error": "Failed to save command: " + err.Error(),
 			})
 		}
 
-		cmd := &app.Command{
-			TaskID:        taskID,
+		cmd := &app.Task{
+			PID:       task.PID,
 			Command:   req.Command,
 			Status:    "pending",
 			CreatedAt: time.Now(),
@@ -117,7 +122,7 @@ func main() {
 	e.GET("/commands/pending", func(c echo.Context) error {
 		ctx := c.Request().Context()
 
-		id, command, err := application.GetPendingTask(ctx)
+		task, err := application.GetPendingTask(ctx)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				return c.JSON(http.StatusOK, nil)
@@ -127,23 +132,20 @@ func main() {
 			})
 		}
 
-		cmd := &app.Command{
-			ID:      id,
-			Command: command,
+		cmd := &app.Task{
+			ID:      task.ID,
+			Command: task.Command,
 			Status:  "pending",
 		}
 
 		return c.JSON(http.StatusOK, cmd)
 	})
 
-	e.PUT("/commands/:id", func(c echo.Context) error {
-		id := c.Param("id")
+	e.PUT("/commands/:pid", func(c echo.Context) error {
+		pid := c.Param("pid")
 
-		var update struct {
-			Status   string `json:"status"`
-			Output   string `json:"output"`
-			Error    string `json:"error"`
-			ExitCode int    `json:"exit_code"`
+		update := app.Task{
+			PID: pid,
 		}
 
 		if err := c.Bind(&update); err != nil {
@@ -151,13 +153,9 @@ func main() {
 		}
 
 		ctx := c.Request().Context()
-		err = application.UpdateTaskStatus(
+		err = application.UpdateTask(
 			ctx,
-			id,
-			update.Status,
-			update.Output,
-			update.Error,
-			update.ExitCode,
+			update,
 		)
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{
@@ -169,12 +167,16 @@ func main() {
 		})
 	})
 
-	go startAgent()
+	go agent.StartAgent(
+		application.GetPendingTask,
+		application.UpdateTask,
+	)
+
 	log.Fatal(e.Start(":1323"))
 }
 
 func executeCommand(c echo.Context) error {
-	var req CommandRequest
+	var req TaskRequest
 
 	// Parse the request body
 	if err := c.Bind(&req); err != nil {

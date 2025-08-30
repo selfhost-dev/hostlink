@@ -59,15 +59,15 @@
             const output = document.getElementById('output');
             output.innerHTML = '<h3>Commands:</h3>';
             
-            commands.forEach(cmd => {
+            commands.forEach(task => {
                 const div = document.createElement('div');
                 div.className = 'command-item';
                 div.innerHTML = 
-                    '<div><strong>ID:</strong> ' + cmd.task_id + '</div>' +
-                    '<div><strong>Command:</strong> ' + cmd.command + '</div>' +
-                    '<div class="status ' + cmd.status + '"><strong>Status:</strong> ' + cmd.status + '</div>' +
-                    (cmd.output ? '<div><strong>Output:</strong><pre>' + cmd.output + '</pre></div>' : '') +
-                    (cmd.error ? '<div class="error"><strong>Error:</strong> ' + cmd.error + '</div>' : '');
+                    '<div><strong>ID:</strong> ' + task.pid + '</div>' +
+                    '<div><strong>Command:</strong> ' + task.command + '</div>' +
+                    '<div class="status ' + task.status + '"><strong>Status:</strong> ' + task.status + '</div>' +
+                    (task.output ? '<div><strong>Output:</strong><pre>' + task.output + '</pre></div>' : '') +
+                    (task.error ? '<div class="error"><strong>Error:</strong> ' + task.error + '</div>' : '');
                 output.appendChild(div);
             });
         }
