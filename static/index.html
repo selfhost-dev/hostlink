@@ -16,7 +16,7 @@
     </style>
 </head>
 <body>
-    <h2>Command Control Panel</h2>
+    <h2>Command Control Panel <span id="version" style="float: right; color: #666; font-size: 14px;">Version: <span id="versionNumber">loading...</span></span></h2>
     <div>
         <input type="text" id="command" placeholder="Enter command (e.g., ls -la)">
         <button onclick="submitCommand()">Submit</button>
@@ -29,6 +29,17 @@
         let commandHistory = JSON.parse(localStorage.getItem('commandHistory') || '[]');
         let historyIndex = commandHistory.length;
         let tempCommand = '';
+        
+        // Fetch version on load
+        async function fetchVersion() {
+            try {
+                const response = await fetch('/version');
+                const data = await response.json();
+                document.getElementById('versionNumber').textContent = data.version;
+            } catch (e) {
+                document.getElementById('versionNumber').textContent = 'unknown';
+            }
+        }
         
         async function submitCommand() {
             const input = document.getElementById('command');
@@ -106,6 +117,7 @@
         // Auto-refresh every 2 seconds
         setInterval(refreshCommands, 2000);
         refreshCommands();
+        fetchVersion();
     </script>
 </body>
 </html>

@@ -17,6 +17,8 @@ import (
 	"github.com/mattn/go-shellwords"
 )
 
+var Version = "dev"
+
 //go:embed static/index.html
 var indexHTML string
 
@@ -56,6 +58,11 @@ func main() {
 	// Health check endpoint
 	e.GET("/health", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "healthy"})
+	})
+
+	// Version endpoint
+	e.GET("/version", func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]string{"version": Version})
 	})
 
 	// Command execution endpoint

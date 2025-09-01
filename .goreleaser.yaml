@@ -20,6 +20,8 @@ builds:
       - CGO_ENABLED=0
     goos:
       - linux
+    ldflags:
+      - -s -w -X main.Version={{.Version}}
 
 archives:
   - formats: [tar.gz]
