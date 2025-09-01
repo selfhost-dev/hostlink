@@ -34,7 +34,7 @@ move_bin() {
 
 install_service() {
   echo "Installing systemd service..."
-  cp ./scripts/linux/hostlink.service /etc/systemd/system/
+  cp ./scripts/hostlink.service /etc/systemd/system/
   sudo systemctl daemon-reload
   sudo systemctl enable hostlink
   sudo systemctl start hostlink
