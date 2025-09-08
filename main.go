@@ -7,8 +7,6 @@ import (
 	"hostlink/internal/agent"
 	"log"
 	"net/http"
-	"os/exec"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -64,9 +62,6 @@ func main() {
 	e.GET("/version", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"version": Version})
 	})
-
-	// Command execution endpoint
-	e.POST("/execute", executeCommand)
 
 	// Subnet a new command
 	e.POST("/commands", func(c echo.Context) error {
@@ -180,59 +175,4 @@ func main() {
 	)
 
 	log.Fatal(e.Start(":1323"))
-}
-
-func executeCommand(c echo.Context) error {
-	var req TaskRequest
-
-	// Parse the request body
-	if err := c.Bind(&req); err != nil {
-		return c.JSON(http.StatusBadRequest, CommandResponse{
-			Success: false,
-			Error:   "Invalid request format",
-		})
-	}
-
-	// Validate command is not empty
-	if req.Command == "" {
-		return c.JSON(http.StatusBadRequest, CommandResponse{
-			Success: false,
-			Error:   "Command cannot be empty",
-		})
-	}
-
-	// Parse command with shellwords to validate syntax
-	parts, err := shellwords.Parse(req.Command)
-	if err != nil {
-		return c.JSON(http.StatusBadRequest, CommandResponse{
-			Success: false,
-			Error:   "Invalid command syntax: " + err.Error(),
-		})
-	}
-
-	if len(parts) == 0 {
-		return c.JSON(http.StatusBadRequest, CommandResponse{
-			Success: false,
-			Error:   "Empty command",
-		})
-	}
-
-	cmd := exec.Command("/bin/sh", "-c", req.Command)
-
-	output, err := cmd.CombinedOutput()
-
-	response := CommandResponse{
-		Success: err == nil,
-		Output:  strings.TrimSpace(string(output)),
-	}
-
-	if err != nil {
-		response.Error = err.Error()
-		if exitError, ok := err.(*exec.ExitError); ok {
-			response.Code = exitError.ExitCode()
-		}
-		return c.JSON(http.StatusOK, response)
-	}
-
-	return c.JSON(http.StatusOK, response)
 }
