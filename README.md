@@ -20,6 +20,7 @@ machine. You can access it on port :1232 of your machine.
 - Passing parameter in script
 - Registering agent through webhook call
 - Following a workflow from the remote control plane
+- Following multiple workflow from the remote control plane
 - Adding support for migrations in workflow
 - Adding support to revert migrations for any issue
 - Registering multiple agents to the same workflow
