@@ -33,7 +33,7 @@
         // Fetch version on load
         async function fetchVersion() {
             try {
-                const response = await fetch('/version');
+                const response = await fetch('/health');
                 const data = await response.json();
                 document.getElementById('versionNumber').textContent = data.version;
             } catch (e) {
@@ -45,7 +45,7 @@
             const input = document.getElementById('command');
             const command = input.value.trim();
             
-            const response = await fetch('/commands', {
+            const response = await fetch('/api/v1/tasks', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({command})
@@ -64,7 +64,7 @@
         }
         
         async function refreshCommands() {
-            const response = await fetch('/commands');
+            const response = await fetch('/api/v1/tasks');
             const commands = await response.json();
             
             const output = document.getElementById('output');
