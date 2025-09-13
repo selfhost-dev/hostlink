@@ -1,3 +1,4 @@
+// Package agent deals with all the logic when hostlink is run in the agent mode
 package agent
 
 import (
@@ -12,17 +13,29 @@ type (
 	TaskUpdater func(context.Context, app.Task) error
 )
 
-func StartAgent(tf TaskFetcher, tu TaskUpdater) {
+type Agent struct {
+	taskFetchFn  TaskFetcher
+	taskUpdateFn TaskUpdater
+}
+
+func New(taskFetchFn TaskFetcher, taskUpdateFn TaskUpdater) *Agent {
+	return &Agent{
+		taskFetchFn:  taskFetchFn,
+		taskUpdateFn: taskUpdateFn,
+	}
+}
+
+func (a Agent) StartAgent() {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		task, err := tf(context.Background())
+		task, err := a.taskFetchFn(context.Background())
 		if err != nil {
 			continue
 		}
 
-		tu(context.Background(), app.Task{
+		a.taskUpdateFn(context.Background(), app.Task{
 			PID:    task.PID,
 			Status: "running",
 		})
@@ -37,7 +50,7 @@ func StartAgent(tf TaskFetcher, tu TaskUpdater) {
 			}
 			errMsg = err.Error()
 		}
-		tu(context.Background(), app.Task{
+		a.taskUpdateFn(context.Background(), app.Task{
 			PID:      task.PID,
 			Status:   "completed",
 			Output:   string(output),

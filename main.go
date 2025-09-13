@@ -16,7 +16,6 @@ import (
 	"github.com/mattn/go-shellwords"
 )
 
-
 //go:embed static/index.html
 var indexHTML string
 
@@ -60,7 +59,6 @@ func main() {
 
 	// Version endpoint
 	e.GET("/version", func(c echo.Context) error {
-		return c.JSON(http.StatusOK, map[string]string{"version": Version})
 		return c.JSON(http.StatusOK, map[string]string{"version": version.Version})
 	})
 
@@ -170,10 +168,12 @@ func main() {
 		})
 	})
 
-	go agent.StartAgent(
+	shagent := agent.New(
 		application.GetPendingTask,
 		application.UpdateTask,
 	)
+
+	go shagent.StartAgent()
 
 	log.Fatal(e.Start(":1323"))
 }
