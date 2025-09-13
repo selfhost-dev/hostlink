@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"context"
+	"hostlink/app"
 	"testing"
 )
 
@@ -8,7 +10,14 @@ import (
 
 // TestAgentGetCurrentVersion - Verify agent can retrieve its current version
 func TestAgentGetCurrentVersion(t *testing.T) {
-	// TODO: Implement test to verify agent can retrieve its current version
+	tfFn := func(context.Context) (*app.Task, error) { return nil, nil }
+	tuFn := func(context.Context, app.Task) error { return nil }
+
+	newAgent := New(tfFn, tuFn)
+	currentVer := newAgent.GetCurrentVersion()
+	if currentVer != "dev" {
+		t.Fatalf("Expected version = \"dev\", got = %s", currentVer)
+	}
 }
 
 // TestAgentCompareVersions - Test semantic version comparison logic
@@ -150,3 +159,4 @@ func TestAgentConcurrentUpdateRequests(t *testing.T) {
 func TestAgentUpdatePermissionDenied(t *testing.T) {
 	// TODO: Implement test for handling file permission issues during update
 }
+

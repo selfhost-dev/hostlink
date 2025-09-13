@@ -21,7 +21,7 @@ builds:
     goos:
       - linux
     ldflags:
-      - -s -w -X main.Version={{.Version}}
+      - -s -w -X github.com/selfhost-dev/hostlink/version.Version={{.Version}}
 
 archives:
   - formats: [tar.gz]

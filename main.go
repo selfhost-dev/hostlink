@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"hostlink/app"
 	"hostlink/internal/agent"
+	"hostlink/version"
 	"log"
 	"net/http"
 	"time"
@@ -15,7 +16,6 @@ import (
 	"github.com/mattn/go-shellwords"
 )
 
-var Version = "dev"
 
 //go:embed static/index.html
 var indexHTML string
@@ -61,6 +61,7 @@ func main() {
 	// Version endpoint
 	e.GET("/version", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"version": Version})
+		return c.JSON(http.StatusOK, map[string]string{"version": version.Version})
 	})
 
 	// Subnet a new command
