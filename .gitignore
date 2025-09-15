@@ -119,6 +119,3 @@ __debug_bin
 
 # Keep the lock file - it should be committed!
 # .terraform.lock.hcl
-
-# The binary
-hostlink
