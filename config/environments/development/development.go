@@ -14,7 +14,7 @@ var (
 func init() {
 	APIServerHost = os.Getenv("SH_API_SERVER_HOST")
 	if strings.TrimSpace(APIServerHost) == "" {
-		APIServerHost = "localhost"
+		APIServerHost = "0.0.0.0"
 	}
 
 	APIServerPORT = os.Getenv("SH_API_SERVER_PORT")
