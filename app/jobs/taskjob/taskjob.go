@@ -4,14 +4,39 @@ package taskjob
 
 import (
 	"context"
+	"fmt"
 	"hostlink/db/schema/taskschema"
+	"os"
 	"os/exec"
 )
 
 func Register() {
 	go Trigger(func(tasks []taskschema.Task) error {
 		for _, task := range tasks {
-			execCmd := exec.Command("/bin/sh", "-c", task.Command)
+			tempFile, err := os.CreateTemp("", "*_script.sh")
+			if err != nil {
+				task.Error = fmt.Sprintf("failed to create temp file: %v", err)
+				task.Status = "failed"
+				task.Save(context.Background())
+				continue
+			}
+			defer os.Remove(tempFile.Name())
+
+			if _, err := tempFile.WriteString("#!/usr/bin/env bash\n" + task.Command); err != nil {
+				tempFile.Close()
+				task.Error = fmt.Sprintf("failed to write script: %v", err)
+				task.Status = "failed"
+				task.Save(context.Background())
+				continue
+			}
+
+			if err := os.Chmod(tempFile.Name(), 0755); err != nil {
+				task.Error = fmt.Sprintf("failed to chmod: %v", err)
+				task.Status = "failed"
+				task.Save(context.Background())
+				continue
+			}
+			execCmd := exec.Command("/bin/sh", tempFile.Name())
 			output, err := execCmd.CombinedOutput()
 			exitCode := 0
 			errMsg := ""
