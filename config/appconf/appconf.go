@@ -2,23 +2,35 @@
 package appconf
 
 import (
+	"hostlink/config"
+	devconf "hostlink/config/environments/development"
+	prodconf "hostlink/config/environments/production"
 	"os"
-	"strings"
 )
 
-var (
-	DBPath string
-	AppEnv string
-)
+var appconf config.AppConfiger
+
+func Port() string {
+	return appconf.GetPort()
+}
+
+func DBURL() string {
+	return appconf.GetDBURL()
+}
+
+func ControlPlaneURL() string {
+	return appconf.GetControlPlaneURL()
+}
 
 func init() {
-	DBPath = os.Getenv("SH_DB_PATH")
-	if strings.TrimSpace(DBPath) == "" {
-		DBPath = "file:hostlink.db"
-	}
+	env := os.Getenv("APP_ENV")
 
-	AppEnv = os.Getenv("APP_ENV")
-	if strings.TrimSpace(AppEnv) == "" {
-		AppEnv = "development"
+	switch env {
+	case "production":
+		appconf = prodconf.New()
+	case "development":
+		appconf = devconf.New()
+	default:
+		appconf = devconf.New()
 	}
 }

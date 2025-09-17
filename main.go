@@ -5,7 +5,6 @@ import (
 	"hostlink/app/jobs/taskjob"
 	"hostlink/config"
 	"hostlink/config/appconf"
-	"hostlink/config/environments/development"
 	"hostlink/db/schema/taskschema"
 	"hostlink/internal/dbconn"
 	"log"
@@ -16,7 +15,7 @@ import (
 
 func main() {
 	_, err := dbconn.GetConn(
-		dbconn.WithURL(appconf.DBPath),
+		dbconn.WithURL(appconf.DBURL()),
 	)
 	if err != nil {
 		log.Fatal("db connection failed", err)
@@ -37,7 +36,5 @@ func main() {
 	config.AddRoutes(e)
 	taskjob.Register()
 
-	log.Fatal(e.Start(
-		fmt.Sprintf("%s:%s", development.APIServerHost, development.APIServerPORT),
-	))
+	log.Fatal(e.Start(fmt.Sprintf(":%s", appconf.Port())))
 }
