@@ -3,10 +3,7 @@ package taskfetcher
 
 import (
 	"encoding/json"
-	"fmt"
 	"hostlink/config/appconf"
-	"hostlink/config/environments/development"
-	"hostlink/config/environments/production"
 	"hostlink/db/schema/taskschema"
 	"net/http"
 	"time"
@@ -29,13 +26,7 @@ func New() *taskfetcher {
 }
 
 func (tf taskfetcher) Fetch() ([]taskschema.Task, error) {
-	apiSvrURL := ""
-	if appconf.AppEnv == "development" {
-		apiSvrURL = fmt.Sprintf("http://%s:%s", development.APIServerHost, development.APIServerPORT)
-	} else {
-		apiSvrURL = production.APIServerHost
-	}
-
+	apiSvrURL := appconf.ControlPlaneURL()
 	apiSvrURL = apiSvrURL + "/api/v1/tasks"
 	resp, err := tf.client.Get(apiSvrURL)
 	if err != nil {
