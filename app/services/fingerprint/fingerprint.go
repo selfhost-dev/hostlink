@@ -7,6 +7,7 @@ import (
 	"hostlink/internal/sysinfo"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/google/uuid"
 )
@@ -16,6 +17,8 @@ type FingerprintData struct {
 	HardwareHash        *sysinfo.HardwareInfo `json:"hardwareHash"`
 	SimilarityThreshold int                   `json:"similarityThreshold"`
 }
+
+var fingerprintMutex sync.Mutex
 
 type Manager struct {
 	fingerprintPath string
@@ -30,6 +33,9 @@ func NewManager(fingerprintPath string) *Manager {
 }
 
 func (m *Manager) LoadOrGenerate() (*FingerprintData, bool, error) {
+	fingerprintMutex.Lock()
+	defer fingerprintMutex.Unlock()
+
 	currentHardware, err := sysinfo.GetHardwareInfo()
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to get hardware info: %w", err)
