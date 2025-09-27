@@ -1,15 +1,10 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# We are gonna do the installation/update of the agent with this file.
-# So any kind of script is written should be written to keep in mind that this
-# script in running state should do the both of the tasks
-
-# I guess the starting will happen with first check what is the latest version
-# of the agent or whether the version we got in the request is available itself
-# or not. If the version isn't available or already latest version is installed
-# then we can choose for a no-op. Do we need to notify this to the user it
-# doesn't seem necessary at this moment but we can include certainly as we see
-# any need for it.
+# Check if running as root
+if [[ $EUID -ne 0 ]]; then
+  echo "This script must be run as root (use sudo)"
+  exit 1
+fi
 
 latest_version() {
   local version=$(curl -s https://api.github.com/repos/selfhost-dev/hostlink/releases/latest | grep tag_name | cut -d'"' -f4)
@@ -32,6 +27,15 @@ move_bin() {
   sudo mv ./hostlink /usr/bin/hostlink
 }
 
+create_directories() {
+  echo "Creating hostlink directories..."
+  sudo mkdir -p /var/lib/hostlink
+  sudo mkdir -p /var/log/hostlink
+  sudo chmod 700 /var/lib/hostlink
+  sudo chmod 755 /var/log/hostlink
+  echo "Directories created."
+}
+
 install_service() {
   echo "Installing systemd service..."
   sudo cp ./scripts/hostlink.service /etc/systemd/system/
@@ -44,4 +48,5 @@ install_service() {
 download_tar
 extract_tar
 move_bin
+create_directories
 install_service
