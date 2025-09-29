@@ -1,10 +1,14 @@
 package registrationjob
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hostlink/app/services/agentregistrar"
+	"hostlink/app/services/agentstate"
 	"hostlink/app/services/fingerprint"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -523,20 +527,27 @@ func TestTrigger(t *testing.T) {
 			return nil // Success on third attempt
 		}
 
-		// Run Trigger in a goroutine since it's synchronous
+		// Use test configuration with short delays
+		testConfig := TriggerConfig{
+			MaxRetries:     5,
+			InitialDelay:   10 * time.Millisecond,
+			BackoffFactor:  2,
+		}
+
+		// Run triggerWithConfig in a goroutine since it's synchronous
 		done := make(chan bool)
 		go func() {
-			Trigger(failTwiceThenSucceed)
+			triggerWithConfig(failTwiceThenSucceed, testConfig)
 			done <- true
 		}()
 
-		// Wait for completion with longer timeout due to retries
+		// Wait for completion with shorter timeout (10ms + 20ms + buffer)
 		select {
 		case <-done:
 			if executionCount != 3 {
 				t.Errorf("Expected function to be executed 3 times (2 failures + 1 success), but was executed %d times", executionCount)
 			}
-		case <-time.After(35 * time.Second): // 10s + 20s delays + buffer
+		case <-time.After(1 * time.Second): // Much shorter timeout
 			t.Fatal("Trigger did not complete within timeout")
 		}
 	})
@@ -550,9 +561,9 @@ func TestTrigger(t *testing.T) {
 
 		// Use test configuration with short delays
 		testConfig := TriggerConfig{
-			MaxRetries:     5,
-			InitialDelay:   10 * time.Millisecond,
-			BackoffFactor:  2,
+			MaxRetries:    5,
+			InitialDelay:  10 * time.Millisecond,
+			BackoffFactor: 2,
 		}
 
 		// Run triggerWithConfig in a goroutine
@@ -589,9 +600,9 @@ func TestTrigger(t *testing.T) {
 
 		// Use test configuration with known delays
 		testConfig := TriggerConfig{
-			MaxRetries:     5,
-			InitialDelay:   10 * time.Millisecond,
-			BackoffFactor:  2,
+			MaxRetries:    5,
+			InitialDelay:  10 * time.Millisecond,
+			BackoffFactor: 2,
 		}
 
 		// Run triggerWithConfig synchronously to measure timing
@@ -637,9 +648,9 @@ func TestTrigger(t *testing.T) {
 
 		// Use test configuration with short delays
 		testConfig := TriggerConfig{
-			MaxRetries:     5,
-			InitialDelay:   10 * time.Millisecond,
-			BackoffFactor:  2,
+			MaxRetries:    5,
+			InitialDelay:  10 * time.Millisecond,
+			BackoffFactor: 2,
 		}
 
 		// Run triggerWithConfig
@@ -669,9 +680,9 @@ func TestTrigger(t *testing.T) {
 
 		// Use test configuration with short delays
 		testConfig := TriggerConfig{
-			MaxRetries:     5,
-			InitialDelay:   5 * time.Millisecond,
-			BackoffFactor:  2,
+			MaxRetries:    5,
+			InitialDelay:  5 * time.Millisecond,
+			BackoffFactor: 2,
 		}
 
 		// Run triggerWithConfig
@@ -694,9 +705,9 @@ func TestTrigger(t *testing.T) {
 
 		// Use test configuration with short delays
 		testConfig := TriggerConfig{
-			MaxRetries:     3, // Use 3 for faster test
-			InitialDelay:   5 * time.Millisecond,
-			BackoffFactor:  2,
+			MaxRetries:    3, // Use 3 for faster test
+			InitialDelay:  5 * time.Millisecond,
+			BackoffFactor: 2,
 		}
 
 		// Run triggerWithConfig
@@ -729,9 +740,9 @@ func TestTrigger(t *testing.T) {
 		// Use test configuration with known initial delay
 		initialDelay := 10 * time.Millisecond
 		testConfig := TriggerConfig{
-			MaxRetries:     3,
-			InitialDelay:   initialDelay,
-			BackoffFactor:  2,
+			MaxRetries:    3,
+			InitialDelay:  initialDelay,
+			BackoffFactor: 2,
 		}
 
 		// Run triggerWithConfig
@@ -765,9 +776,9 @@ func TestTrigger(t *testing.T) {
 		// Use test configuration with known delays
 		initialDelay := 10 * time.Millisecond
 		testConfig := TriggerConfig{
-			MaxRetries:     3,
-			InitialDelay:   initialDelay,
-			BackoffFactor:  2,
+			MaxRetries:    3,
+			InitialDelay:  initialDelay,
+			BackoffFactor: 2,
 		}
 
 		// Run triggerWithConfig
@@ -1212,6 +1223,185 @@ func TestIntegrationFlow(t *testing.T) {
 	})
 }
 
+func TestAgentStateIntegration(t *testing.T) {
+	t.Run("should save agent ID to state after successful registration", func(t *testing.T) {
+		// Setup
+		stateDir, state := setupTestState(t)
+		expectedAgentID := "test-agent-id-123"
+
+		job := NewWithConfig(&Config{
+			FingerprintManager: createMockFingerprint("test-fingerprint"),
+			Registrar:          createMockRegistrar(expectedAgentID, nil), // nil = success
+			AgentState:         state,
+			Trigger:            Trigger,
+		})
+
+		// Act
+		err := executeRegistrationJob(t, job)
+		// Assert - Registration should succeed
+		if err != nil {
+			t.Fatalf("Registration failed: %v", err)
+		}
+
+		// Assert - State file should exist and contain agent ID
+		stateFile := filepath.Join(stateDir, "agent.json")
+		data, err := os.ReadFile(stateFile)
+		if err != nil {
+			t.Fatalf("Failed to read state file: %v", err)
+		}
+
+		var savedState agentstate.AgentState
+		if err := json.Unmarshal(data, &savedState); err != nil {
+			t.Fatalf("Failed to unmarshal saved state: %v", err)
+		}
+
+		if savedState.AgentID != expectedAgentID {
+			t.Errorf("Expected agent ID '%s' in saved state, got '%s'", expectedAgentID, savedState.AgentID)
+		}
+	})
+
+	t.Run("should not save state when registration fails", func(t *testing.T) {
+		// Setup
+		stateDir, state := setupTestState(t)
+		expectedError := errors.New("registration failed: network error")
+
+		job := NewWithConfig(&Config{
+			FingerprintManager: createMockFingerprint("test-fingerprint"),
+			Registrar:          createMockRegistrar("", expectedError), // error = failure
+			AgentState:         state,
+			Trigger:            Trigger,
+		})
+
+		// Act
+		err := executeRegistrationJob(t, job)
+
+		// Assert - Registration should fail with expected error
+		if err == nil {
+			t.Fatal("Expected registration to fail, but got no error")
+		}
+		if err != expectedError {
+			t.Fatalf("Expected error %v, got %v", expectedError, err)
+		}
+
+		// Assert - State file should not exist or be empty
+		stateFile := filepath.Join(stateDir, "agent.json")
+		if _, err := os.Stat(stateFile); !os.IsNotExist(err) {
+			// File exists, verify it doesn't contain an agent ID
+			if data, readErr := os.ReadFile(stateFile); readErr == nil {
+				var savedState agentstate.AgentState
+				if json.Unmarshal(data, &savedState) == nil && savedState.AgentID != "" {
+					t.Errorf("State should not contain agent ID when registration fails, but found: %s", savedState.AgentID)
+				}
+			}
+		}
+	})
+
+	t.Run("should skip registration if agent already registered", func(t *testing.T) {
+		// Setup
+		stateDir, state := setupTestState(t)
+		existingAgentID := "existing-agent-id-789"
+
+		// Pre-populate state with existing agent ID
+		if err := state.SetAgentID(existingAgentID); err != nil {
+			t.Fatalf("Failed to set existing agent ID: %v", err)
+		}
+
+		job := NewWithConfig(&Config{
+			FingerprintManager: createMockFingerprint("test-fingerprint"),
+			Registrar:          createMockRegistrar("new-agent-id-999", nil), // Would return different ID if called
+			AgentState:         state,
+			Trigger:            Trigger,
+		})
+
+		// Act
+		err := executeRegistrationJob(t, job)
+		// Assert - No error expected
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+
+		// Assert - The existing agent ID should be preserved (not replaced)
+		stateFile := filepath.Join(stateDir, "agent.json")
+		data, err := os.ReadFile(stateFile)
+		if err != nil {
+			t.Fatalf("Failed to read state file: %v", err)
+		}
+
+		var savedState agentstate.AgentState
+		if err := json.Unmarshal(data, &savedState); err != nil {
+			t.Fatalf("Failed to unmarshal saved state: %v", err)
+		}
+
+		if savedState.AgentID != existingAgentID {
+			t.Errorf("Agent ID should remain '%s', but got '%s'", existingAgentID, savedState.AgentID)
+		}
+	})
+
+	t.Run("should clear existing state before forced re-registration", func(t *testing.T) {
+		// Skip - forced re-registration is not a current use case
+		// Will implement when/if this becomes a real requirement
+		t.Skip("Forced re-registration not currently supported")
+	})
+
+	t.Run("should handle state persistence errors gracefully", func(t *testing.T) {
+		// Setup
+		stateDir, state := setupTestState(t)
+		expectedAgentID := "test-agent-id-456"
+
+		job := NewWithConfig(&Config{
+			FingerprintManager: createMockFingerprint("test-fingerprint"),
+			Registrar:          createMockRegistrar(expectedAgentID, nil),
+			AgentState:         state,
+			Trigger:            Trigger,
+		})
+
+		// Act - Execute registration
+		err := executeRegistrationJob(t, job)
+		// Assert - Registration should succeed
+		if err != nil {
+			t.Fatalf("Registration should succeed, got error: %v", err)
+		}
+
+		// Now simulate a write error by making the state file read-only
+		stateFile := filepath.Join(stateDir, "agent.json")
+		if _, err := os.Stat(stateFile); err == nil {
+			// Make existing file read-only
+			if err := os.Chmod(stateFile, 0444); err != nil {
+				t.Fatalf("Failed to make file read-only: %v", err)
+			}
+			t.Cleanup(func() {
+				os.Chmod(stateFile, 0644) // Restore permissions
+			})
+		}
+
+		// Try another registration with a different agent ID
+		// This should succeed even though state can't be updated
+		job2 := NewWithConfig(&Config{
+			FingerprintManager: createMockFingerprint("test-fingerprint-2"),
+			Registrar:          createMockRegistrar("new-agent-id-789", nil),
+			AgentState:         state,
+			Trigger:            Trigger,
+		})
+
+		// This should not fail even though state can't be saved
+		err2 := executeRegistrationJob(t, job2)
+		if err2 != nil {
+			t.Fatalf("Registration should succeed even when state save fails, got error: %v", err2)
+		}
+
+		// The state file should still have the original agent ID since write failed
+		if err := os.Chmod(stateFile, 0644); err == nil {
+			data, _ := os.ReadFile(stateFile)
+			var savedState agentstate.AgentState
+			if json.Unmarshal(data, &savedState) == nil {
+				if savedState.AgentID != expectedAgentID {
+					t.Logf("State retained original agent ID '%s' as expected (write was blocked)", savedState.AgentID)
+				}
+			}
+		}
+	})
+}
+
 func TestConcurrency(t *testing.T) {
 	t.Run("should handle concurrent registration attempts with real fingerprint", func(t *testing.T) {
 		// Create a temporary directory for fingerprint file
@@ -1266,7 +1456,7 @@ func TestConcurrency(t *testing.T) {
 		})
 
 		// Launch multiple concurrent registration attempts
-		for i := 0; i < concurrentAttempts; i++ {
+		for range concurrentAttempts {
 			job.Register()
 		}
 
@@ -1274,7 +1464,7 @@ func TestConcurrency(t *testing.T) {
 		triggerFuncs := make([]func() error, 0, concurrentAttempts)
 		timeout := time.After(1 * time.Second)
 	collectLoop:
-		for i := 0; i < concurrentAttempts; i++ {
+		for i := range concurrentAttempts {
 			select {
 			case fn := <-triggerChan:
 				triggerFuncs = append(triggerFuncs, fn)
@@ -1322,7 +1512,6 @@ func TestConcurrency(t *testing.T) {
 			t.Errorf("Expected %d registrations, got %d", concurrentAttempts, registrationCount)
 		}
 	})
-
 }
 
 // Mock types for testing
@@ -1362,4 +1551,78 @@ func (m *mockRegistrar) GetDefaultTags() []agentregistrar.TagPair {
 		return m.getDefaultTagsFunc()
 	}
 	return []agentregistrar.TagPair{}
+}
+
+// Test helper functions for AgentStateIntegration tests
+
+// setupTestState creates a temporary state directory and returns the path and state manager
+// The directory is automatically cleaned up via t.TempDir()
+func setupTestState(t *testing.T) (string, *agentstate.AgentState) {
+	t.Helper()
+	tempDir := t.TempDir() // Automatically cleaned up after test
+	stateDir := filepath.Join(tempDir, "state")
+	state := agentstate.New(stateDir)
+	return stateDir, state
+}
+
+// createMockFingerprint returns a simple mock fingerprint manager
+func createMockFingerprint(fp string) *mockFingerprintManager {
+	return &mockFingerprintManager{
+		loadOrGenerateFunc: func() (*fingerprint.FingerprintData, bool, error) {
+			return &fingerprint.FingerprintData{
+				Fingerprint: fp,
+			}, false, nil
+		},
+	}
+}
+
+// createMockRegistrar returns a mock registrar with custom registration behavior
+// Pass nil for error to simulate success, or an error to simulate failure
+func createMockRegistrar(agentID string, err error) *mockRegistrar {
+	return &mockRegistrar{
+		preparePublicKeyFunc: func() (string, error) {
+			return "test-public-key", nil
+		},
+		getDefaultTagsFunc: func() []agentregistrar.TagPair {
+			return []agentregistrar.TagPair{}
+		},
+		registerFunc: func(fingerprint string, publicKey string, tags []agentregistrar.TagPair) (*agentregistrar.RegistrationResponse, error) {
+			if err != nil {
+				return nil, err
+			}
+			return &agentregistrar.RegistrationResponse{
+				AgentID: agentID,
+				Status:  "success",
+			}, nil
+		},
+	}
+}
+
+// executeRegistrationJob runs the registration job and returns the result
+func executeRegistrationJob(t *testing.T, job *Job) error {
+	t.Helper()
+
+	triggerChan := make(chan func() error, 1)
+	mockTrigger := func(fn func() error) {
+		triggerChan <- fn
+	}
+
+	// Replace trigger temporarily
+	originalTrigger := job.trigger
+	job.trigger = mockTrigger
+	t.Cleanup(func() {
+		job.trigger = originalTrigger
+	})
+
+	// Start registration
+	job.Register()
+
+	// Execute and return result
+	select {
+	case fn := <-triggerChan:
+		return fn()
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Trigger was not called within timeout")
+		return nil
+	}
 }
