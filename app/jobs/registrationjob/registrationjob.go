@@ -2,6 +2,7 @@ package registrationjob
 
 import (
 	"hostlink/app/services/agentregistrar"
+	"hostlink/app/services/agentstate"
 	"hostlink/app/services/fingerprint"
 	"hostlink/config/appconf"
 
@@ -24,12 +25,14 @@ type Job struct {
 	trigger        TriggerFunc
 	fingerprintMgr FingerprintManager
 	registrar      Registrar
+	agentState     *agentstate.AgentState
 }
 
 type Config struct {
 	FingerprintPath    string
 	FingerprintManager FingerprintManager
 	Registrar          Registrar
+	AgentState         *agentstate.AgentState
 	Trigger            TriggerFunc
 }
 
@@ -60,6 +63,7 @@ func NewWithConfig(cfg *Config) *Job {
 		trigger:        cfg.Trigger,
 		fingerprintMgr: fingerprintMgr,
 		registrar:      registrar,
+		agentState:     cfg.AgentState,
 	}
 }
 
@@ -77,6 +81,16 @@ func (j *Job) Register() {
 			log.Info("Using existing fingerprint:", fingerprintData.Fingerprint)
 		}
 
+		// Check if agent is already registered (after fingerprint is loaded)
+		if j.agentState != nil && !isNew {
+			// Only check for existing registration if fingerprint is not new
+			if err := j.agentState.Load(); err == nil && j.agentState.GetAgentID() != "" {
+				log.Infof("Agent already registered with ID: %s", j.agentState.GetAgentID())
+				return nil
+			}
+			// If load fails or no agent ID exists, proceed with registration
+		}
+
 		publicKey, err := j.registrar.PreparePublicKey()
 		if err != nil {
 			log.Errorf("Failed to prepare public key: %v", err)
@@ -92,6 +106,15 @@ func (j *Job) Register() {
 		}
 
 		log.Infof("Agent registered successfully: %s", response.AgentID)
+
+		// Save agent ID to state if state manager is configured
+		if j.agentState != nil {
+			if err := j.agentState.SetAgentID(response.AgentID); err != nil {
+				log.Errorf("Failed to save agent ID to state: %v", err)
+				// Don't fail the registration if state save fails
+			}
+		}
+
 		return nil
 	})
 }
