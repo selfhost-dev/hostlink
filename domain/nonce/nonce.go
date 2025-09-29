@@ -8,8 +8,8 @@ import (
 )
 
 type Nonce struct {
-	Value     string
-	CreatedAt time.Time
+	Value     string    `gorm:"primaryKey;size:100"`
+	CreatedAt time.Time `gorm:"not null"`
 }
 
 func NewNonce() *Nonce {
