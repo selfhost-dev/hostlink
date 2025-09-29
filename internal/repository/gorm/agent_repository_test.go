@@ -12,7 +12,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func setupTestDB(t *testing.T) *gorm.DB {
+func setupAgentTestDB(t *testing.T) *gorm.DB {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 
@@ -24,7 +24,7 @@ func setupTestDB(t *testing.T) *gorm.DB {
 
 func TestAgentRepository(t *testing.T) {
 	t.Run("Create", func(t *testing.T) {
-		db := setupTestDB(t)
+		db := setupAgentTestDB(t)
 		repo := NewAgentRepository(db)
 		ctx := context.Background()
 
@@ -44,7 +44,7 @@ func TestAgentRepository(t *testing.T) {
 	})
 
 	t.Run("Update", func(t *testing.T) {
-		db := setupTestDB(t)
+		db := setupAgentTestDB(t)
 		repo := NewAgentRepository(db)
 		ctx := context.Background()
 
@@ -68,7 +68,7 @@ func TestAgentRepository(t *testing.T) {
 	})
 
 	t.Run("FindByFingerprint", func(t *testing.T) {
-		db := setupTestDB(t)
+		db := setupAgentTestDB(t)
 		repo := NewAgentRepository(db)
 		ctx := context.Background()
 
@@ -92,7 +92,7 @@ func TestAgentRepository(t *testing.T) {
 	})
 
 	t.Run("FindByID", func(t *testing.T) {
-		db := setupTestDB(t)
+		db := setupAgentTestDB(t)
 		repo := NewAgentRepository(db)
 		ctx := context.Background()
 
@@ -116,7 +116,7 @@ func TestAgentRepository(t *testing.T) {
 	})
 
 	t.Run("AddTags", func(t *testing.T) {
-		db := setupTestDB(t)
+		db := setupAgentTestDB(t)
 		repo := NewAgentRepository(db)
 		ctx := context.Background()
 
@@ -142,7 +142,7 @@ func TestAgentRepository(t *testing.T) {
 	})
 
 	t.Run("UpdateTags", func(t *testing.T) {
-		db := setupTestDB(t)
+		db := setupAgentTestDB(t)
 		repo := NewAgentRepository(db)
 		ctx := context.Background()
 
@@ -182,7 +182,7 @@ func TestAgentRepository(t *testing.T) {
 	})
 
 	t.Run("AddRegistration", func(t *testing.T) {
-		db := setupTestDB(t)
+		db := setupAgentTestDB(t)
 		repo := NewAgentRepository(db)
 		ctx := context.Background()
 
@@ -207,7 +207,7 @@ func TestAgentRepository(t *testing.T) {
 	})
 
 	t.Run("Transaction", func(t *testing.T) {
-		db := setupTestDB(t)
+		db := setupAgentTestDB(t)
 		repo := NewAgentRepository(db)
 		ctx := context.Background()
 
@@ -238,7 +238,7 @@ func TestAgentRepository(t *testing.T) {
 	})
 
 	t.Run("TransactionRollback", func(t *testing.T) {
-		db := setupTestDB(t)
+		db := setupAgentTestDB(t)
 		repo := NewAgentRepository(db)
 		ctx := context.Background()
 
