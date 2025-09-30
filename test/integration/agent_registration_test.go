@@ -21,7 +21,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func setupTestEnvironment(t *testing.T) (*echo.Echo, *app.Container) {
+func setupAgnetTestEnvironment(t *testing.T) (*echo.Echo, *app.Container) {
 	// Use shared memory database for better concurrency support
 	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
 	if err != nil {
@@ -58,7 +58,7 @@ func (v *mockValidator) Validate(i interface{}) error {
 func TestAgentRegistrationIntegration(t *testing.T) {
 	t.Run("Full Registration Flow", func(t *testing.T) {
 		t.Run("should successfully register new agent and verify in database", func(t *testing.T) {
-			e, container := setupTestEnvironment(t)
+			e, container := setupAgnetTestEnvironment(t)
 
 			reqBody := map[string]interface{}{
 				"fingerprint":     "integration-test-fp-001",
@@ -107,7 +107,7 @@ func TestAgentRegistrationIntegration(t *testing.T) {
 		})
 
 		t.Run("should successfully handle agent re-registration", func(t *testing.T) {
-			e, container := setupTestEnvironment(t)
+			e, container := setupAgnetTestEnvironment(t)
 
 			// First registration
 			firstReq := map[string]interface{}{
@@ -172,7 +172,7 @@ func TestAgentRegistrationIntegration(t *testing.T) {
 		})
 
 		t.Run("should handle concurrent registrations without data corruption", func(t *testing.T) {
-			e, container := setupTestEnvironment(t)
+			e, container := setupAgnetTestEnvironment(t)
 
 			var wg sync.WaitGroup
 			results := make(chan bool, 5)
@@ -230,7 +230,7 @@ func TestAgentRegistrationIntegration(t *testing.T) {
 
 	t.Run("Validation Errors", func(t *testing.T) {
 		t.Run("should return 400 when fingerprint is missing", func(t *testing.T) {
-			e, _ := setupTestEnvironment(t)
+			e, _ := setupAgnetTestEnvironment(t)
 
 			reqBody := map[string]interface{}{
 				"token_id":        "token-123",
@@ -253,7 +253,7 @@ func TestAgentRegistrationIntegration(t *testing.T) {
 		})
 
 		t.Run("should return 401 when token is invalid", func(t *testing.T) {
-			e, _ := setupTestEnvironment(t)
+			e, _ := setupAgnetTestEnvironment(t)
 
 			reqBody := map[string]interface{}{
 				"fingerprint":     "test-fp",
@@ -274,7 +274,7 @@ func TestAgentRegistrationIntegration(t *testing.T) {
 		})
 
 		t.Run("should return 400 when request body is malformed JSON", func(t *testing.T) {
-			e, _ := setupTestEnvironment(t)
+			e, _ := setupAgnetTestEnvironment(t)
 
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/register", bytes.NewReader([]byte("malformed json")))
 			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
@@ -295,7 +295,7 @@ func TestAgentRegistrationIntegration(t *testing.T) {
 			// Since we're using a real database, we can simulate by checking
 			// that incomplete registrations don't leave orphaned records
 
-			e, container := setupTestEnvironment(t)
+			e, container := setupAgnetTestEnvironment(t)
 
 			// Count initial records
 			var initialAgentCount int64
@@ -345,3 +345,4 @@ func TestAgentRegistrationIntegration(t *testing.T) {
 		})
 	})
 }
+
