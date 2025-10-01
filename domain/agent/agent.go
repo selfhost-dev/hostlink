@@ -1,6 +1,11 @@
 package agent
 
-import "time"
+import (
+	"errors"
+	"time"
+)
+
+var ErrPublicKeyNotFound = errors.New("public key not found")
 
 type Agent struct {
 	ID            uint
