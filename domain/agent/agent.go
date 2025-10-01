@@ -5,7 +5,10 @@ import (
 	"time"
 )
 
-var ErrPublicKeyNotFound = errors.New("public key not found")
+var (
+	ErrPublicKeyNotFound = errors.New("public key not found")
+	ErrAgentNotFound     = errors.New("agent not found")
+)
 
 type Agent struct {
 	ID            uint
