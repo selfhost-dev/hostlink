@@ -149,14 +149,14 @@ func LoadPublicKey(keyPath string) (*rsa.PublicKey, error) {
 	return rsaPublicKey, nil
 }
 
-// ParsePublicKeyFromPEM parses an RSA public key from a PEM string
-func ParsePublicKeyFromPEM(pemString string) (*rsa.PublicKey, error) {
-	block, _ := pem.Decode([]byte(pemString))
-	if block == nil {
-		return nil, fmt.Errorf("failed to parse PEM block")
+// ParsePublicKey takes a decoder function that converts input string to bytes
+func ParsePublicKey(input string, decoder func(string) ([]byte, error)) (*rsa.PublicKey, error) {
+	keyBytes, err := decoder(input)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode input: %w", err)
 	}
 
-	publicKey, err := x509.ParsePKIXPublicKey(block.Bytes)
+	publicKey, err := x509.ParsePKIXPublicKey(keyBytes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse public key: %w", err)
 	}
@@ -167,6 +167,24 @@ func ParsePublicKeyFromPEM(pemString string) (*rsa.PublicKey, error) {
 	}
 
 	return rsaPublicKey, nil
+}
+
+// ParsePublicKeyFromBase64 parses an RSA public key from a Base64 string
+func ParsePublicKeyFromBase64(base64String string) (*rsa.PublicKey, error) {
+	return ParsePublicKey(base64String, func(s string) ([]byte, error) {
+		return base64.StdEncoding.DecodeString(s)
+	})
+}
+
+// ParsePublicKeyFromPEM parses an RSA public key from a PEM string
+func ParsePublicKeyFromPEM(pemString string) (*rsa.PublicKey, error) {
+	return ParsePublicKey(pemString, func(s string) ([]byte, error) {
+		block, _ := pem.Decode([]byte(s))
+		if block == nil {
+			return nil, fmt.Errorf("failed to parse PEM block")
+		}
+		return block.Bytes, nil
+	})
 }
 
 // LoadOrGenerateKeypair loads an existing keypair or generates a new one

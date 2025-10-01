@@ -1024,6 +1024,63 @@ func TestParsePublicKeyFromPEM(t *testing.T) {
 	})
 }
 
+func TestParsePublicKeyFromBase64(t *testing.T) {
+	t.Run("parses valid Base64 public key string", func(t *testing.T) {
+		privateKey, err := GenerateRSAKeypair(2048)
+		if err != nil {
+			t.Fatalf("Failed to generate RSA keypair: %v", err)
+		}
+
+		base64String, err := GetPublicKeyBase64(privateKey)
+		if err != nil {
+			t.Fatalf("Failed to get public key Base64: %v", err)
+		}
+
+		parsedKey, err := ParsePublicKeyFromBase64(base64String)
+		if err != nil {
+			t.Fatalf("Failed to parse public key from Base64: %v", err)
+		}
+
+		if parsedKey == nil {
+			t.Fatal("Parsed key is nil")
+		}
+
+		if parsedKey.N.Cmp(privateKey.PublicKey.N) != 0 {
+			t.Error("Parsed public key modulus doesn't match original")
+		}
+
+		if parsedKey.E != privateKey.PublicKey.E {
+			t.Error("Parsed public key exponent doesn't match original")
+		}
+	})
+
+	t.Run("returns error for invalid Base64 format", func(t *testing.T) {
+		invalidBase64 := "This is not valid Base64!@#$%"
+
+		parsedKey, err := ParsePublicKeyFromBase64(invalidBase64)
+		if err == nil {
+			t.Error("Expected error for invalid Base64 format, got nil")
+		}
+
+		if parsedKey != nil {
+			t.Error("Expected nil key for invalid Base64 format")
+		}
+	})
+
+	t.Run("returns error for empty string", func(t *testing.T) {
+		emptyString := ""
+
+		parsedKey, err := ParsePublicKeyFromBase64(emptyString)
+		if err == nil {
+			t.Error("Expected error for empty string, got nil")
+		}
+
+		if parsedKey != nil {
+			t.Error("Expected nil key for empty string")
+		}
+	})
+}
+
 func setupTempFile(t *testing.T) (string, func()) {
 	tmpFile, err := os.CreateTemp("", "test-key-*.pem")
 	if err != nil {
