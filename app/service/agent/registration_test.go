@@ -12,14 +12,15 @@ import (
 )
 
 type mockAgentRepository struct {
-	createFunc            func(ctx context.Context, agent *agent.Agent) error
-	updateFunc            func(ctx context.Context, agent *agent.Agent) error
-	findByFingerprintFunc func(ctx context.Context, fp string) (*agent.Agent, error)
-	findByIDFunc          func(ctx context.Context, id uint) (*agent.Agent, error)
-	addTagsFunc           func(ctx context.Context, agentID uint, tags []agent.AgentTag) error
-	updateTagsFunc        func(ctx context.Context, agentID uint, tags []agent.AgentTag) error
-	addRegistrationFunc   func(ctx context.Context, registration *agent.AgentRegistration) error
-	transactionFunc       func(ctx context.Context, fn func(agent.Repository) error) error
+	createFunc              func(ctx context.Context, agent *agent.Agent) error
+	updateFunc              func(ctx context.Context, agent *agent.Agent) error
+	findByFingerprintFunc   func(ctx context.Context, fp string) (*agent.Agent, error)
+	findByIDFunc            func(ctx context.Context, id uint) (*agent.Agent, error)
+	getPublicKeyByAgentID   func(ctx context.Context, agentID string) (string, error)
+	addTagsFunc             func(ctx context.Context, agentID uint, tags []agent.AgentTag) error
+	updateTagsFunc          func(ctx context.Context, agentID uint, tags []agent.AgentTag) error
+	addRegistrationFunc     func(ctx context.Context, registration *agent.AgentRegistration) error
+	transactionFunc         func(ctx context.Context, fn func(agent.Repository) error) error
 }
 
 func (m *mockAgentRepository) Create(ctx context.Context, a *agent.Agent) error {
@@ -50,6 +51,13 @@ func (m *mockAgentRepository) FindByID(ctx context.Context, id uint) (*agent.Age
 		return m.findByIDFunc(ctx, id)
 	}
 	return nil, nil
+}
+
+func (m *mockAgentRepository) GetPublicKeyByAgentID(ctx context.Context, agentID string) (string, error) {
+	if m.getPublicKeyByAgentID != nil {
+		return m.getPublicKeyByAgentID(ctx, agentID)
+	}
+	return "", nil
 }
 
 func (m *mockAgentRepository) AddTags(ctx context.Context, agentID uint, tags []agent.AgentTag) error {
@@ -320,3 +328,4 @@ func TestRegistrationService(t *testing.T) {
 		assert.Equal(t, uint(0), failedRegistration.AgentID) // No agent ID since creation failed
 	})
 }
+
