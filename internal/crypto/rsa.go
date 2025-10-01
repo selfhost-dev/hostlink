@@ -149,6 +149,26 @@ func LoadPublicKey(keyPath string) (*rsa.PublicKey, error) {
 	return rsaPublicKey, nil
 }
 
+// ParsePublicKeyFromPEM parses an RSA public key from a PEM string
+func ParsePublicKeyFromPEM(pemString string) (*rsa.PublicKey, error) {
+	block, _ := pem.Decode([]byte(pemString))
+	if block == nil {
+		return nil, fmt.Errorf("failed to parse PEM block")
+	}
+
+	publicKey, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse public key: %w", err)
+	}
+
+	rsaPublicKey, ok := publicKey.(*rsa.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("key is not an RSA public key")
+	}
+
+	return rsaPublicKey, nil
+}
+
 // LoadOrGenerateKeypair loads an existing keypair or generates a new one
 func LoadOrGenerateKeypair(keyPath string, bits int) (*rsa.PrivateKey, error) {
 	// Try to load existing key

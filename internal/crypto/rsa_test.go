@@ -967,6 +967,63 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	})
 }
 
+func TestParsePublicKeyFromPEM(t *testing.T) {
+	t.Run("parses valid PEM public key string", func(t *testing.T) {
+		privateKey, err := GenerateRSAKeypair(2048)
+		if err != nil {
+			t.Fatalf("Failed to generate RSA keypair: %v", err)
+		}
+
+		pemString, err := GetPublicKeyPEM(privateKey)
+		if err != nil {
+			t.Fatalf("Failed to get public key PEM: %v", err)
+		}
+
+		parsedKey, err := ParsePublicKeyFromPEM(pemString)
+		if err != nil {
+			t.Fatalf("Failed to parse public key from PEM: %v", err)
+		}
+
+		if parsedKey == nil {
+			t.Fatal("Parsed key is nil")
+		}
+
+		if parsedKey.N.Cmp(privateKey.PublicKey.N) != 0 {
+			t.Error("Parsed public key modulus doesn't match original")
+		}
+
+		if parsedKey.E != privateKey.PublicKey.E {
+			t.Error("Parsed public key exponent doesn't match original")
+		}
+	})
+
+	t.Run("returns error for invalid PEM format", func(t *testing.T) {
+		invalidPEM := "This is not a valid PEM format"
+
+		parsedKey, err := ParsePublicKeyFromPEM(invalidPEM)
+		if err == nil {
+			t.Error("Expected error for invalid PEM format, got nil")
+		}
+
+		if parsedKey != nil {
+			t.Error("Expected nil key for invalid PEM format")
+		}
+	})
+
+	t.Run("returns error for empty string", func(t *testing.T) {
+		emptyString := ""
+
+		parsedKey, err := ParsePublicKeyFromPEM(emptyString)
+		if err == nil {
+			t.Error("Expected error for empty string, got nil")
+		}
+
+		if parsedKey != nil {
+			t.Error("Expected nil key for empty string")
+		}
+	})
+}
+
 func setupTempFile(t *testing.T) (string, func()) {
 	tmpFile, err := os.CreateTemp("", "test-key-*.pem")
 	if err != nil {
