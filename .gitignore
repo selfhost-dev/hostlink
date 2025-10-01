@@ -32,6 +32,9 @@ tmp
 # Ignore .env files
 .env
 
+# Local development data
+.local/
+
 # Ignore Claude Code documentation file
 CLAUDE.md
 
