@@ -8,6 +8,7 @@ import (
 	"hostlink/config"
 	"hostlink/config/appconf"
 	"hostlink/internal/dbconn"
+	"hostlink/internal/validator"
 	"log"
 
 	"github.com/joho/godotenv"
@@ -33,6 +34,7 @@ func main() {
 	}
 
 	e := echo.New()
+	e.Validator = validator.New()
 
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
