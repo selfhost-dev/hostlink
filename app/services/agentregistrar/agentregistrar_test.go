@@ -89,8 +89,8 @@ func TestRegister(t *testing.T) {
 				t.Errorf("Expected POST method, got %s", r.Method)
 			}
 
-			if r.URL.Path != "/agent/v1/register" {
-				t.Errorf("Expected path /agent/v1/register, got %s", r.URL.Path)
+			if r.URL.Path != "/api/v1/agent/register" {
+				t.Errorf("Expected path /api/v1/agent/register, got %s", r.URL.Path)
 			}
 
 			// Verify Content-Type header
@@ -688,7 +688,7 @@ func TestRegister(t *testing.T) {
 			t.Fatalf("Register failed: %v", err)
 		}
 
-		expectedPath := "/agent/v1/register"
+		expectedPath := "/api/v1/agent/register"
 		if capturedPath != expectedPath {
 			t.Errorf("Expected endpoint path '%s', got '%s'", expectedPath, capturedPath)
 		}

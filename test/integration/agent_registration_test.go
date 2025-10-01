@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hostlink/app"
 	agentController "hostlink/app/controller/agent"
+	"hostlink/app/services/agentregistrar"
 	"hostlink/config"
 	"hostlink/domain/agent"
 	"net/http"
@@ -342,6 +343,44 @@ func TestAgentRegistrationIntegration(t *testing.T) {
 				assert.Equal(t, initialAgentCount, finalAgentCount, "Agent count should not change on failure")
 				assert.Equal(t, initialTagCount, finalTagCount, "Tag count should not change on failure")
 			}
+		})
+	})
+
+	t.Run("Agent Registrar Service Integration", func(t *testing.T) {
+		t.Run("should successfully register using registrar service with correct URL", func(t *testing.T) {
+			e, container := setupAgnetTestEnvironment(t)
+
+			server := httptest.NewServer(e)
+			defer server.Close()
+
+			registrar := agentregistrar.NewWithConfig(&agentregistrar.Config{
+				ControlPlaneURL: server.URL,
+				TokenID:         "test-token-id",
+				TokenKey:        "test-token-key",
+				PrivateKeyPath:  t.TempDir() + "/agent.key",
+			})
+
+			publicKey, err := registrar.PreparePublicKey()
+			require.NoError(t, err)
+			require.NotEmpty(t, publicKey)
+
+			tags := []agentregistrar.TagPair{
+				{Key: "env", Value: "integration"},
+				{Key: "service", Value: "registrar-test"},
+			}
+
+			response, err := registrar.Register("registrar-service-fp", publicKey, tags)
+			require.NoError(t, err)
+			require.NotNil(t, response)
+
+			assert.NotEmpty(t, response.AgentID)
+			assert.Equal(t, "registrar-service-fp", response.Fingerprint)
+			assert.Equal(t, "registered", response.Status)
+
+			dbAgent, err := container.AgentRepository.FindByFingerprint(nil, "registrar-service-fp")
+			require.NoError(t, err)
+			require.NotNil(t, dbAgent)
+			assert.Equal(t, publicKey, dbAgent.PublicKey)
 		})
 	})
 }
