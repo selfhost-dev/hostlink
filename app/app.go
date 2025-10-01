@@ -4,6 +4,7 @@ import (
 	agentService "hostlink/app/service/agent"
 	"hostlink/db/schema/taskschema"
 	"hostlink/domain/agent"
+	"hostlink/domain/nonce"
 	gormRepo "hostlink/internal/repository/gorm"
 
 	"gorm.io/gorm"
@@ -33,6 +34,7 @@ func (c *Container) Migrate() error {
 		&agent.Agent{},
 		&agent.AgentTag{},
 		&agent.AgentRegistration{},
+		&nonce.Nonce{},
 	); err != nil {
 		return err
 	}
@@ -46,4 +48,3 @@ func (c *Container) Migrate() error {
 
 	return nil
 }
-
