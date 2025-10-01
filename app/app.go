@@ -2,9 +2,9 @@ package app
 
 import (
 	agentService "hostlink/app/service/agent"
-	"hostlink/db/schema/taskschema"
 	"hostlink/domain/agent"
 	"hostlink/domain/nonce"
+	"hostlink/domain/task"
 	gormRepo "hostlink/internal/repository/gorm"
 
 	"gorm.io/gorm"
@@ -13,12 +13,14 @@ import (
 type Container struct {
 	DB                  *gorm.DB
 	AgentRepository     agent.Repository
+	TaskRepository      task.Repository
 	RegistrationService *agentService.RegistrationService
 }
 
 func NewContainer(db *gorm.DB) *Container {
 	// Initialize repositories
 	agentRepo := gormRepo.NewAgentRepository(db)
+	taskRepo := gormRepo.NewTaskRepository(db)
 
 	// Initialize services
 	registrationSvc := agentService.NewRegistrationService(agentRepo)
@@ -26,6 +28,7 @@ func NewContainer(db *gorm.DB) *Container {
 	return &Container{
 		DB:                  db,
 		AgentRepository:     agentRepo,
+		TaskRepository:      taskRepo,
 		RegistrationService: registrationSvc,
 	}
 }
@@ -37,13 +40,7 @@ func (c *Container) Migrate() error {
 		&agent.AgentTag{},
 		&agent.AgentRegistration{},
 		&nonce.Nonce{},
-	); err != nil {
-		return err
-	}
-
-	// Migrate task schema (still needed for tasks)
-	if err := c.DB.AutoMigrate(
-		&taskschema.Task{},
+		&task.Task{},
 	); err != nil {
 		return err
 	}
