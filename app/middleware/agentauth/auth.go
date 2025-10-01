@@ -14,6 +14,10 @@ type AgentRepository interface {
 	GetPublicKeyByAgentID(ctx context.Context, agentID string) (string, error)
 }
 
+func New(repo AgentRepository) echo.MiddlewareFunc {
+	return Middleware(repo)
+}
+
 func Middleware(repo AgentRepository) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {

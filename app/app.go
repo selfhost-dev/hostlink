@@ -12,6 +12,7 @@ import (
 
 type Container struct {
 	DB                  *gorm.DB
+	AgentRepository     agent.Repository
 	RegistrationService *agentService.RegistrationService
 }
 
@@ -24,6 +25,7 @@ func NewContainer(db *gorm.DB) *Container {
 
 	return &Container{
 		DB:                  db,
+		AgentRepository:     agentRepo,
 		RegistrationService: registrationSvc,
 	}
 }
