@@ -47,6 +47,18 @@ func (r *AgentRepository) FindByID(ctx context.Context, id uint) (*agent.Agent, 
 	return &a, nil
 }
 
+func (r *AgentRepository) GetPublicKeyByAgentID(ctx context.Context, agentID string) (string, error) {
+	var a agent.Agent
+	err := r.db.WithContext(ctx).Select("public_key").Where("a_id = ?", agentID).First(&a).Error
+	if err != nil {
+		return "", err
+	}
+	if a.PublicKey == "" {
+		return "", agent.ErrPublicKeyNotFound
+	}
+	return a.PublicKey, nil
+}
+
 func (r *AgentRepository) AddTags(ctx context.Context, agentID uint, tags []agent.AgentTag) error {
 	for i := range tags {
 		tags[i].AgentID = agentID

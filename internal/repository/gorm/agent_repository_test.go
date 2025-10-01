@@ -263,3 +263,56 @@ func TestAgentRepository(t *testing.T) {
 		assert.Nil(t, found)
 	})
 }
+
+func TestGetPublicKeyByAgentID(t *testing.T) {
+	t.Run("returns public key when agent exists", func(t *testing.T) {
+		db := setupAgentTestDB(t)
+		repo := NewAgentRepository(db)
+		ctx := context.Background()
+
+		a := &agent.Agent{
+			Fingerprint:   "test-fingerprint",
+			Hostname:      "test-host",
+			IPAddress:     "192.168.1.100",
+			MACAddress:    "00:11:22:33:44:55",
+			PublicKey:     "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC...",
+			PublicKeyType: "ssh-rsa",
+		}
+		err := repo.Create(ctx, a)
+		require.NoError(t, err)
+
+		publicKey, err := repo.GetPublicKeyByAgentID(ctx, a.AID)
+		assert.NoError(t, err)
+		assert.Equal(t, "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC...", publicKey)
+	})
+
+	t.Run("returns error when agent not found", func(t *testing.T) {
+		db := setupAgentTestDB(t)
+		repo := NewAgentRepository(db)
+		ctx := context.Background()
+
+		publicKey, err := repo.GetPublicKeyByAgentID(ctx, "agt_nonexistent")
+		assert.Error(t, err)
+		assert.Empty(t, publicKey)
+	})
+
+	t.Run("returns error when agent has empty public key", func(t *testing.T) {
+		db := setupAgentTestDB(t)
+		repo := NewAgentRepository(db)
+		ctx := context.Background()
+
+		a := &agent.Agent{
+			Fingerprint: "test-fingerprint",
+			Hostname:    "test-host",
+			IPAddress:   "192.168.1.100",
+			MACAddress:  "00:11:22:33:44:55",
+			PublicKey:   "",
+		}
+		err := repo.Create(ctx, a)
+		require.NoError(t, err)
+
+		publicKey, err := repo.GetPublicKeyByAgentID(ctx, a.AID)
+		assert.ErrorIs(t, err, agent.ErrPublicKeyNotFound)
+		assert.Empty(t, publicKey)
+	})
+}
