@@ -3,8 +3,6 @@ package taskjob
 import (
 	"hostlink/app/services/taskfetcher"
 	"hostlink/db/schema/taskschema"
-	"hostlink/internal/dbconn"
-	gormrepo "hostlink/internal/repository/gorm"
 	"time"
 
 	"github.com/labstack/gommon/log"
@@ -14,14 +12,7 @@ func Trigger(fn func(tsk []taskschema.Task) error) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
-	db, err := dbconn.GetConn()
-	if err != nil {
-		log.Error("failed to get database connection", err)
-		return
-	}
-
-	nonceRepo := gormrepo.NewNonceRepository(db)
-	tfetcher, err := taskfetcher.NewDefault(nonceRepo)
+	tfetcher, err := taskfetcher.NewDefault()
 	if err != nil {
 		log.Error("failed to initialize task fetcher", err)
 		return

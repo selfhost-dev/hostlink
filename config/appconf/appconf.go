@@ -51,12 +51,6 @@ func AgentStatePath() string {
 	return "/var/lib/hostlink"
 }
 
-func ServerPublicKeyPath() string {
-	if path := os.Getenv("HOSTLINK_SERVER_PUBLIC_KEY_PATH"); path != "" {
-		return path
-	}
-	return "/var/lib/hostlink/server-public.key"
-}
 
 func init() {
 	env := os.Getenv("APP_ENV")
