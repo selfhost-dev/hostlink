@@ -1,24 +1,18 @@
 package taskfetcher
 
 import (
-	"context"
-	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"hostlink/app/services/agentstate"
 	"hostlink/db/schema/taskschema"
-	"hostlink/domain/nonce"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -35,8 +29,6 @@ func TestTaskFetcher_New(t *testing.T) {
 			AgentState:      agentState,
 			PrivateKeyPath:  privateKeyPath,
 			ControlPlaneURL: "http://localhost:8080",
-			ServerPublicKey: keys.publicKey,
-			NonceRepo:       newMockNonceRepo(),
 			Timeout:         10 * time.Second,
 		})
 
@@ -48,9 +40,6 @@ func TestTaskFetcher_New(t *testing.T) {
 		}
 		if fetcher.signer == nil {
 			t.Error("expected signer to be initialized")
-		}
-		if fetcher.verifier == nil {
-			t.Error("expected verifier to be initialized")
 		}
 	})
 
@@ -66,8 +55,6 @@ func TestTaskFetcher_New(t *testing.T) {
 			AgentState:      agentState,
 			PrivateKeyPath:  privateKeyPath,
 			ControlPlaneURL: "http://localhost:8080",
-			ServerPublicKey: keys.publicKey,
-			NonceRepo:       newMockNonceRepo(),
 		})
 
 		if err == nil {
@@ -89,8 +76,6 @@ func TestTaskFetcher_New(t *testing.T) {
 			AgentState:      agentState,
 			PrivateKeyPath:  privateKeyPath,
 			ControlPlaneURL: "http://localhost:8080",
-			ServerPublicKey: keys.publicKey,
-			NonceRepo:       newMockNonceRepo(),
 			Timeout:         customTimeout,
 		})
 
@@ -110,25 +95,12 @@ func TestTaskFetcher_Fetch(t *testing.T) {
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			capturedRequest = r
-
-			serverID := "server-123"
-			timestamp := strconv.FormatInt(time.Now().Unix(), 10)
-			nonce := generateTestNonce(t)
-
-			message := fmt.Sprintf("%s|%s|%s", serverID, timestamp, nonce)
-			hashed := sha256.Sum256([]byte(message))
-			signature, _ := rsa.SignPSS(rand.Reader, keys.privateKey, crypto.SHA256, hashed[:], nil)
-
-			w.Header().Set("X-Server-ID", serverID)
-			w.Header().Set("X-Timestamp", timestamp)
-			w.Header().Set("X-Nonce", nonce)
-			w.Header().Set("X-Signature", base64.StdEncoding.EncodeToString(signature))
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode([]taskschema.Task{})
 		}))
 		defer server.Close()
 
-		fetcher := setupTestFetcherWithKeys(t, server.URL, newMockNonceRepo(), keys)
+		fetcher := setupTestFetcherWithKeys(t, server.URL, keys)
 		_, err := fetcher.Fetch()
 
 		if err != nil {
@@ -143,69 +115,13 @@ func TestTaskFetcher_Fetch(t *testing.T) {
 		}
 	})
 
-	t.Run("should reject tasks with duplicate nonces", func(t *testing.T) {
-		keys := setupTestKeys(t)
-		fixedNonce := generateTestNonce(t)
-
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			serverID := "server-123"
-			timestamp := strconv.FormatInt(time.Now().Unix(), 10)
-
-			message := fmt.Sprintf("%s|%s|%s", serverID, timestamp, fixedNonce)
-			hashed := sha256.Sum256([]byte(message))
-			signature, _ := rsa.SignPSS(rand.Reader, keys.privateKey, crypto.SHA256, hashed[:], nil)
-
-			w.Header().Set("X-Server-ID", serverID)
-			w.Header().Set("X-Timestamp", timestamp)
-			w.Header().Set("X-Nonce", fixedNonce)
-			w.Header().Set("X-Signature", base64.StdEncoding.EncodeToString(signature))
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(createTestTasks(1))
-		}))
-		defer server.Close()
-
-		nonceRepo := newMockNonceRepo()
-		fetcher := setupTestFetcherWithKeys(t, server.URL, nonceRepo, keys)
-
-		_, err := fetcher.Fetch()
-		if err != nil {
-			t.Fatalf("expected no error on first fetch, got %v", err)
-		}
-
-		_, err = fetcher.Fetch()
-		if err == nil {
-			t.Fatal("expected error for duplicate nonce")
-		}
-		if !strings.Contains(err.Error(), "duplicate nonce") {
-			t.Errorf("expected duplicate nonce error, got: %v", err)
-		}
-	})
-
-	t.Run("should store response nonces to prevent replay", func(t *testing.T) {
-		keys := setupTestKeys(t)
-		server := createSignedResponse(t, keys.privateKey, createTestTasks(2))
-		defer server.Close()
-
-		nonceRepo := newMockNonceRepo()
-		fetcher := setupTestFetcherWithKeys(t, server.URL, nonceRepo, keys)
-
-		_, err := fetcher.Fetch()
-
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
-		if len(nonceRepo.nonces) != 1 {
-			t.Errorf("expected 1 nonce stored, got %d", len(nonceRepo.nonces))
-		}
-	})
-
 	t.Run("should parse tasks from JSON response", func(t *testing.T) {
 		keys := setupTestKeys(t)
 		expectedTasks := createTestTasks(3)
-		server := createSignedResponse(t, keys.privateKey, expectedTasks)
+		server := createJSONResponse(t, expectedTasks)
 		defer server.Close()
 
-		fetcher := setupTestFetcherWithKeys(t, server.URL, newMockNonceRepo(), keys)
+		fetcher := setupTestFetcherWithKeys(t, server.URL, keys)
 		tasks, err := fetcher.Fetch()
 
 		if err != nil {
@@ -223,10 +139,10 @@ func TestTaskFetcher_Fetch(t *testing.T) {
 
 	t.Run("should handle empty task list", func(t *testing.T) {
 		keys := setupTestKeys(t)
-		server := createSignedResponse(t, keys.privateKey, []taskschema.Task{})
+		server := createJSONResponse(t, []taskschema.Task{})
 		defer server.Close()
 
-		fetcher := setupTestFetcherWithKeys(t, server.URL, newMockNonceRepo(), keys)
+		fetcher := setupTestFetcherWithKeys(t, server.URL, keys)
 		tasks, err := fetcher.Fetch()
 
 		if err != nil {
@@ -240,7 +156,7 @@ func TestTaskFetcher_Fetch(t *testing.T) {
 
 func TestTaskFetcher_HandleErrors(t *testing.T) {
 	t.Run("should handle network errors", func(t *testing.T) {
-		fetcher := setupTestFetcher(t, "http://invalid-host-does-not-exist:9999", newMockNonceRepo())
+		fetcher := setupTestFetcher(t, "http://invalid-host-does-not-exist:9999")
 
 		_, err := fetcher.Fetch()
 
@@ -267,8 +183,6 @@ func TestTaskFetcher_HandleErrors(t *testing.T) {
 			AgentState:      agentState,
 			PrivateKeyPath:  privateKeyPath,
 			ControlPlaneURL: server.URL,
-			ServerPublicKey: keys.publicKey,
-			NonceRepo:       newMockNonceRepo(),
 			Timeout:         100 * time.Millisecond,
 		})
 
@@ -284,10 +198,10 @@ func TestTaskFetcher_HandleErrors(t *testing.T) {
 
 	t.Run("should handle invalid JSON response", func(t *testing.T) {
 		keys := setupTestKeys(t)
-		server := createServerWithInvalidJSON(t, keys.privateKey)
+		server := createServerWithInvalidJSON(t)
 		defer server.Close()
 
-		fetcher := setupTestFetcherWithKeys(t, server.URL, newMockNonceRepo(), keys)
+		fetcher := setupTestFetcherWithKeys(t, server.URL, keys)
 		_, err := fetcher.Fetch()
 
 		if err == nil {
@@ -302,7 +216,7 @@ func TestTaskFetcher_HandleErrors(t *testing.T) {
 		server := createServerWithStatusCode(t, http.StatusInternalServerError)
 		defer server.Close()
 
-		fetcher := setupTestFetcher(t, server.URL, newMockNonceRepo())
+		fetcher := setupTestFetcher(t, server.URL)
 		_, err := fetcher.Fetch()
 
 		if err == nil {
@@ -317,7 +231,7 @@ func TestTaskFetcher_HandleErrors(t *testing.T) {
 		server := createServerWithStatusCode(t, http.StatusForbidden)
 		defer server.Close()
 
-		fetcher := setupTestFetcher(t, server.URL, newMockNonceRepo())
+		fetcher := setupTestFetcher(t, server.URL)
 		_, err := fetcher.Fetch()
 
 		if err == nil {
@@ -333,33 +247,6 @@ func TestTaskFetcher_HandleErrors(t *testing.T) {
 type testKeys struct {
 	privateKey *rsa.PrivateKey
 	publicKey  *rsa.PublicKey
-}
-
-type mockNonceRepo struct {
-	nonces map[string]bool
-	saveError bool
-	existsError bool
-}
-
-func (m *mockNonceRepo) Save(ctx context.Context, n *nonce.Nonce) error {
-	if m.saveError {
-		return fmt.Errorf("mock save error")
-	}
-	m.nonces[n.Value] = true
-	return nil
-}
-
-func (m *mockNonceRepo) Exists(ctx context.Context, value string) (bool, error) {
-	if m.existsError {
-		return false, fmt.Errorf("mock exists error")
-	}
-	return m.nonces[value], nil
-}
-
-func newMockNonceRepo() *mockNonceRepo {
-	return &mockNonceRepo{
-		nonces: make(map[string]bool),
-	}
 }
 
 func setupTestKeys(t *testing.T) *testKeys {
@@ -440,7 +327,7 @@ func saveTestPublicKey(t *testing.T, dir string, key *rsa.PublicKey) string {
 	return keyPath
 }
 
-func setupTestFetcherWithKeys(t *testing.T, serverURL string, nonceRepo NonceRepository, keys *testKeys) *taskfetcher {
+func setupTestFetcherWithKeys(t *testing.T, serverURL string, keys *testKeys) *taskfetcher {
 	t.Helper()
 
 	tempDir := t.TempDir()
@@ -451,8 +338,6 @@ func setupTestFetcherWithKeys(t *testing.T, serverURL string, nonceRepo NonceRep
 		AgentState:      agentState,
 		PrivateKeyPath:  privateKeyPath,
 		ControlPlaneURL: serverURL,
-		ServerPublicKey: keys.publicKey,
-		NonceRepo:       nonceRepo,
 		Timeout:         5 * time.Second,
 	})
 
@@ -463,33 +348,17 @@ func setupTestFetcherWithKeys(t *testing.T, serverURL string, nonceRepo NonceRep
 	return fetcher
 }
 
-func setupTestFetcher(t *testing.T, serverURL string, nonceRepo NonceRepository) *taskfetcher {
+func setupTestFetcher(t *testing.T, serverURL string) *taskfetcher {
 	t.Helper()
 	keys := setupTestKeys(t)
-	return setupTestFetcherWithKeys(t, serverURL, nonceRepo, keys)
+	return setupTestFetcherWithKeys(t, serverURL, keys)
 }
 
-func createSignedResponse(t *testing.T, privateKey *rsa.PrivateKey, tasks []taskschema.Task) *httptest.Server {
+func createJSONResponse(t *testing.T, tasks []taskschema.Task) *httptest.Server {
 	t.Helper()
 
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		serverID := "server-123"
-		timestamp := strconv.FormatInt(time.Now().Unix(), 10)
-		nonce := generateTestNonce(t)
-
-		message := fmt.Sprintf("%s|%s|%s", serverID, timestamp, nonce)
-		hashed := sha256.Sum256([]byte(message))
-		signature, err := rsa.SignPSS(rand.Reader, privateKey, crypto.SHA256, hashed[:], nil)
-		if err != nil {
-			t.Fatalf("failed to sign response: %v", err)
-		}
-
-		w.Header().Set("X-Server-ID", serverID)
-		w.Header().Set("X-Timestamp", timestamp)
-		w.Header().Set("X-Nonce", nonce)
-		w.Header().Set("X-Signature", base64.StdEncoding.EncodeToString(signature))
 		w.WriteHeader(http.StatusOK)
-
 		json.NewEncoder(w).Encode(tasks)
 	}))
 }
@@ -502,39 +371,13 @@ func createServerWithStatusCode(t *testing.T, statusCode int) *httptest.Server {
 	}))
 }
 
-func createServerWithInvalidJSON(t *testing.T, privateKey *rsa.PrivateKey) *httptest.Server {
+func createServerWithInvalidJSON(t *testing.T) *httptest.Server {
 	t.Helper()
 
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		serverID := "server-123"
-		timestamp := strconv.FormatInt(time.Now().Unix(), 10)
-		nonce := generateTestNonce(t)
-
-		message := fmt.Sprintf("%s|%s|%s", serverID, timestamp, nonce)
-		hashed := sha256.Sum256([]byte(message))
-		signature, err := rsa.SignPSS(rand.Reader, privateKey, crypto.SHA256, hashed[:], nil)
-		if err != nil {
-			t.Fatalf("failed to sign response: %v", err)
-		}
-
-		w.Header().Set("X-Server-ID", serverID)
-		w.Header().Set("X-Timestamp", timestamp)
-		w.Header().Set("X-Nonce", nonce)
-		w.Header().Set("X-Signature", base64.StdEncoding.EncodeToString(signature))
 		w.WriteHeader(http.StatusOK)
-
 		w.Write([]byte("invalid json"))
 	}))
-}
-
-func generateTestNonce(t *testing.T) string {
-	t.Helper()
-	bytes := make([]byte, 16)
-	_, err := rand.Read(bytes)
-	if err != nil {
-		t.Fatalf("failed to generate nonce: %v", err)
-	}
-	return base64.StdEncoding.EncodeToString(bytes)
 }
 
 func createTestTasks(count int) []taskschema.Task {
