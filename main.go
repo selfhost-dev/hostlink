@@ -10,12 +10,13 @@ import (
 	"hostlink/internal/dbconn"
 	"log"
 
-	_ "github.com/joho/godotenv/autoload"
+	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 )
 
 func main() {
+	_ = godotenv.Load()
 	db, err := dbconn.GetConn(
 		dbconn.WithURL(appconf.DBURL()),
 	)
