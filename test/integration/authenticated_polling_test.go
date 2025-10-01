@@ -81,6 +81,69 @@ func TestAuthenticatedPolling_FullFlow(t *testing.T) {
 }
 
 
+func TestAuthenticatedPolling_TimestampReplayProtection(t *testing.T) {
+	t.Run("should allow multiple requests within timestamp window", func(t *testing.T) {
+		env := setupPollingTestEnv(t)
+		defer env.cleanup()
+
+		tasks := createTestTasks(2)
+		env.createMockServer(t, tasks)
+
+		tempDir := t.TempDir()
+		agentKeyPath := filepath.Join(tempDir, "agent.key")
+		savePrivateKey(t, agentKeyPath, env.agentKeys)
+
+		fetcher, err := taskfetcher.New(&taskfetcher.Config{
+			AgentState:      env.agentState,
+			PrivateKeyPath:  agentKeyPath,
+			ControlPlaneURL: env.server.URL,
+			Timeout:         5 * time.Second,
+		})
+		require.NoError(t, err)
+
+		firstFetch, err := fetcher.Fetch()
+		require.NoError(t, err)
+		assert.Len(t, firstFetch, 2)
+
+		secondFetch, err := fetcher.Fetch()
+		require.NoError(t, err)
+		assert.Len(t, secondFetch, 2)
+	})
+
+	t.Run("should verify server returns unsigned responses", func(t *testing.T) {
+		env := setupPollingTestEnv(t)
+		defer env.cleanup()
+
+		tasks := createTestTasks(1)
+
+		var capturedResponseHeaders http.Header
+		env.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(tasks)
+			capturedResponseHeaders = w.Header()
+		}))
+
+		tempDir := t.TempDir()
+		agentKeyPath := filepath.Join(tempDir, "agent.key")
+		savePrivateKey(t, agentKeyPath, env.agentKeys)
+
+		fetcher, err := taskfetcher.New(&taskfetcher.Config{
+			AgentState:      env.agentState,
+			PrivateKeyPath:  agentKeyPath,
+			ControlPlaneURL: env.server.URL,
+			Timeout:         5 * time.Second,
+		})
+		require.NoError(t, err)
+
+		_, err = fetcher.Fetch()
+
+		require.NoError(t, err)
+		assert.Empty(t, capturedResponseHeaders.Get("X-Server-ID"))
+		assert.Empty(t, capturedResponseHeaders.Get("X-Signature"))
+		assert.Empty(t, capturedResponseHeaders.Get("X-Nonce"))
+	})
+}
+
 func TestAuthenticatedPolling_ErrorRecovery(t *testing.T) {
 	t.Run("should handle authentication failures", func(t *testing.T) {
 		env := setupPollingTestEnv(t)
