@@ -2,12 +2,14 @@
 package tasks
 
 import (
+	"errors"
 	"fmt"
 	"hostlink/domain/task"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
 	"github.com/mattn/go-shellwords"
+	"gorm.io/gorm"
 )
 
 type (
@@ -87,21 +89,33 @@ func (h Handler) Index(c echo.Context) error {
 	return c.JSON(http.StatusOK, tasks)
 }
 
-func (h Handler) Show(c echo.Context) error {
+func (h Handler) Get(c echo.Context) error {
 	ctx := c.Request().Context()
+	taskID := c.Param("id")
 
-	tasks, err := h.repo.FindByStatus(ctx, "pending")
+	task, err := h.repo.FindByID(ctx, taskID)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return c.JSON(http.StatusNotFound, map[string]string{
+				"error": "Task not found",
+			})
+		}
 		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to fetch pending task: " + err.Error(),
+			"error": "Failed to fetch task: " + err.Error(),
 		})
 	}
 
-	return c.JSON(http.StatusOK, tasks)
+	if task == nil {
+		return c.JSON(http.StatusNotFound, map[string]string{
+			"error": "Task not found",
+		})
+	}
+
+	return c.JSON(http.StatusOK, task)
 }
 
 func (h *Handler) RegisterRoutes(g *echo.Group) {
 	g.POST("", h.Create)
 	g.GET("", h.Index)
-	g.GET("/:id", h.Show)
+	g.GET("/:id", h.Get)
 }
