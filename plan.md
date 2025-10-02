@@ -143,7 +143,7 @@
  **API Spec:**
 
  ```
- GET /api/v1/tasks?status=pending&agent_id=agent-123
+ GET /api/v2/tasks?status=pending&agent_id=agent-123
  Response: [
    {
      "id": "task-123",
@@ -193,7 +193,7 @@
  **API Spec:**
 
  ```
- GET /api/v1/tasks/:id
+ GET /api/v2/tasks/:id
  Response: {
    "id": "task-123",
    "command": "ls -la",
@@ -626,7 +626,7 @@
 - [ ] Agent captures stderr from command execution
 - [ ] Agent sends output to control plane when completing task
 - [ ] Control plane stores output in task record
-- [ ] Output retrievable via GET /api/v1/tasks/:id
+- [ ] Output retrievable via GET /api/v2/tasks/:id
 - [ ] Output retrievable via `hlctl task get`
 
  **Tests:**
