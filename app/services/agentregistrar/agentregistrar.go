@@ -42,7 +42,7 @@ type TagPair struct {
 }
 
 type RegistrationResponse struct {
-	AgentID      string    `json:"agent_id"`
+	ID           string    `json:"id"`
 	Fingerprint  string    `json:"fingerprint"`
 	Status       string    `json:"status"`
 	Message      string    `json:"message"`

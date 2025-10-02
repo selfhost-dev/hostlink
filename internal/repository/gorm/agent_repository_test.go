@@ -37,7 +37,7 @@ func TestAgentRepository(t *testing.T) {
 
 		err := repo.Create(ctx, a)
 		assert.NoError(t, err)
-		assert.NotEmpty(t, a.AID)
+		assert.NotEmpty(t, a.ID)
 		assert.Equal(t, "active", a.Status)
 		assert.NotZero(t, a.RegisteredAt)
 		assert.NotZero(t, a.LastSeen)
@@ -110,7 +110,7 @@ func TestAgentRepository(t *testing.T) {
 		assert.Equal(t, a.ID, found.ID)
 		assert.Equal(t, a.Fingerprint, found.Fingerprint)
 
-		notFound, err := repo.FindByID(ctx, 99999)
+		notFound, err := repo.FindByID(ctx, "agt_nonexisting")
 		assert.Error(t, err)
 		assert.Nil(t, notFound)
 	})
@@ -202,8 +202,7 @@ func TestAgentRepository(t *testing.T) {
 		}
 		err = repo.AddRegistration(ctx, reg)
 		assert.NoError(t, err)
-		assert.NotZero(t, reg.ID)
-		assert.NotEmpty(t, reg.ARID)
+		assert.NotEmpty(t, reg.ID)
 	})
 
 	t.Run("Transaction", func(t *testing.T) {
@@ -281,7 +280,7 @@ func TestGetPublicKeyByAgentID(t *testing.T) {
 		err := repo.Create(ctx, a)
 		require.NoError(t, err)
 
-		publicKey, err := repo.GetPublicKeyByAgentID(ctx, a.AID)
+		publicKey, err := repo.GetPublicKeyByAgentID(ctx, a.ID)
 		assert.NoError(t, err)
 		assert.Equal(t, "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC...", publicKey)
 	})
@@ -311,7 +310,7 @@ func TestGetPublicKeyByAgentID(t *testing.T) {
 		err := repo.Create(ctx, a)
 		require.NoError(t, err)
 
-		publicKey, err := repo.GetPublicKeyByAgentID(ctx, a.AID)
+		publicKey, err := repo.GetPublicKeyByAgentID(ctx, a.ID)
 		assert.ErrorIs(t, err, agent.ErrPublicKeyNotFound)
 		assert.Empty(t, publicKey)
 	})

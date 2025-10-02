@@ -212,7 +212,7 @@ func TestRegister(t *testing.T) {
 				actualPublicKey = publicKey
 				actualTags = tags
 				return &agentregistrar.RegistrationResponse{
-					AgentID: "test-agent-id",
+					ID: "test-agent-id",
 				}, nil
 			},
 		}
@@ -283,8 +283,8 @@ func TestRegister(t *testing.T) {
 			},
 			registerFunc: func(fingerprint string, publicKey string, tags []agentregistrar.TagPair) (*agentregistrar.RegistrationResponse, error) {
 				return &agentregistrar.RegistrationResponse{
-					AgentID: expectedAgentID,
-					Status:  "success",
+					ID:     expectedAgentID,
+					Status: "success",
 				}, nil
 			},
 		}
@@ -402,7 +402,7 @@ func TestRegister(t *testing.T) {
 			},
 			registerFunc: func(fingerprint string, publicKey string, tags []agentregistrar.TagPair) (*agentregistrar.RegistrationResponse, error) {
 				return &agentregistrar.RegistrationResponse{
-					AgentID: "test-agent-id",
+					ID: "test-agent-id",
 				}, nil
 			},
 		}
@@ -456,7 +456,7 @@ func TestRegister(t *testing.T) {
 			},
 			registerFunc: func(fingerprint string, publicKey string, tags []agentregistrar.TagPair) (*agentregistrar.RegistrationResponse, error) {
 				return &agentregistrar.RegistrationResponse{
-					AgentID: "test-agent-id",
+					ID: "test-agent-id",
 				}, nil
 			},
 		}
@@ -529,9 +529,9 @@ func TestTrigger(t *testing.T) {
 
 		// Use test configuration with short delays
 		testConfig := TriggerConfig{
-			MaxRetries:     5,
-			InitialDelay:   10 * time.Millisecond,
-			BackoffFactor:  2,
+			MaxRetries:    5,
+			InitialDelay:  10 * time.Millisecond,
+			BackoffFactor: 2,
 		}
 
 		// Run triggerWithConfig in a goroutine since it's synchronous
@@ -854,8 +854,8 @@ func TestIntegrationFlow(t *testing.T) {
 				}
 
 				return &agentregistrar.RegistrationResponse{
-					AgentID: "integration-test-agent-id",
-					Status:  "registered",
+					ID:     "integration-test-agent-id",
+					Status: "registered",
 				}, nil
 			},
 		}
@@ -1436,7 +1436,7 @@ func TestConcurrency(t *testing.T) {
 				time.Sleep(5 * time.Millisecond)
 
 				return &agentregistrar.RegistrationResponse{
-					AgentID: fmt.Sprintf("agent-%d", currentCount),
+					ID: fmt.Sprintf("agent-%d", currentCount),
 				}, nil
 			},
 		}
@@ -1543,7 +1543,7 @@ func (m *mockRegistrar) Register(fingerprint string, publicKey string, tags []ag
 	if m.registerFunc != nil {
 		return m.registerFunc(fingerprint, publicKey, tags)
 	}
-	return &agentregistrar.RegistrationResponse{AgentID: "mock-agent-id"}, nil
+	return &agentregistrar.RegistrationResponse{ID: "mock-agent-id"}, nil
 }
 
 func (m *mockRegistrar) GetDefaultTags() []agentregistrar.TagPair {
@@ -1591,8 +1591,8 @@ func createMockRegistrar(agentID string, err error) *mockRegistrar {
 				return nil, err
 			}
 			return &agentregistrar.RegistrationResponse{
-				AgentID: agentID,
-				Status:  "success",
+				ID:     agentID,
+				Status: "success",
 			}, nil
 		},
 	}

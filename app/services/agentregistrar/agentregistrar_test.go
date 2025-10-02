@@ -110,7 +110,7 @@ func TestRegister(t *testing.T) {
 
 			// Send success response
 			response := RegistrationResponse{
-				AgentID:      "agt_test123",
+				ID:           "agt_test123",
 				Fingerprint:  capturedRequest.Fingerprint,
 				Status:       "registered",
 				Message:      "Success",
@@ -169,8 +169,8 @@ func TestRegister(t *testing.T) {
 		}
 
 		// Verify response
-		if resp.AgentID != "agt_test123" {
-			t.Errorf("Expected agent ID agt_test123, got %s", resp.AgentID)
+		if resp.ID != "agt_test123" {
+			t.Errorf("Expected agent ID agt_test123, got %s", resp.ID)
 		}
 	})
 
@@ -204,7 +204,7 @@ func TestRegister(t *testing.T) {
 
 			// Send success response
 			response := RegistrationResponse{
-				AgentID:      "agt_test",
+				ID:           "agt_test",
 				Fingerprint:  "test",
 				Status:       "registered",
 				Message:      "Success",
@@ -239,7 +239,7 @@ func TestRegister(t *testing.T) {
 
 	t.Run("should return success response on 200 OK", func(t *testing.T) {
 		expectedResponse := RegistrationResponse{
-			AgentID:      "agt_success_123",
+			ID:           "agt_success_123",
 			Fingerprint:  "fp_test_456",
 			Status:       "registered",
 			Message:      "Agent successfully registered",
@@ -271,8 +271,8 @@ func TestRegister(t *testing.T) {
 			t.Fatal("Expected response, got nil")
 		}
 
-		if resp.AgentID != expectedResponse.AgentID {
-			t.Errorf("Expected AgentID %s, got %s", expectedResponse.AgentID, resp.AgentID)
+		if resp.ID != expectedResponse.ID {
+			t.Errorf("Expected AgentID %s, got %s", expectedResponse.ID, resp.ID)
 		}
 
 		if resp.Fingerprint != expectedResponse.Fingerprint {
@@ -625,7 +625,7 @@ func TestRegister(t *testing.T) {
 			capturedContentType = r.Header.Get("Content-Type")
 
 			response := RegistrationResponse{
-				AgentID:      "agt_test",
+				ID:           "agt_test",
 				Fingerprint:  "test",
 				Status:       "registered",
 				Message:      "Success",
@@ -663,7 +663,7 @@ func TestRegister(t *testing.T) {
 			capturedPath = r.URL.Path
 
 			response := RegistrationResponse{
-				AgentID:      "agt_test",
+				ID:           "agt_test",
 				Fingerprint:  "test",
 				Status:       "registered",
 				Message:      "Success",
@@ -708,7 +708,7 @@ func TestRegister(t *testing.T) {
 			}
 
 			response := RegistrationResponse{
-				AgentID:      "agt_test",
+				ID:           "agt_test",
 				Fingerprint:  "test",
 				Status:       "registered",
 				Message:      "Success",
@@ -1198,7 +1198,7 @@ func TestRegistrationResponseDeserialization(t *testing.T) {
 	t.Run("should parse valid registration response", func(t *testing.T) {
 		now := time.Now().UTC()
 		jsonResponse := fmt.Sprintf(`{
-			"agent_id": "agt_123456",
+			"id": "agt_123456",
 			"fingerprint": "fp_abcdef",
 			"status": "registered",
 			"message": "Successfully registered",
@@ -1212,8 +1212,8 @@ func TestRegistrationResponseDeserialization(t *testing.T) {
 		}
 
 		// Verify all fields were parsed correctly
-		if response.AgentID != "agt_123456" {
-			t.Errorf("Expected AgentID 'agt_123456', got '%s'", response.AgentID)
+		if response.ID != "agt_123456" {
+			t.Errorf("Expected AgentID 'agt_123456', got '%s'", response.ID)
 		}
 
 		if response.Fingerprint != "fp_abcdef" {
@@ -1266,7 +1266,7 @@ func TestRegistrationResponseDeserialization(t *testing.T) {
 
 		for _, tc := range testCases {
 			jsonResponse := fmt.Sprintf(`{
-				"agent_id": "agt_test",
+				"id": "agt_test",
 				"fingerprint": "fp_test",
 				"status": "registered",
 				"message": "Test",
@@ -1301,7 +1301,7 @@ func TestRegistrationResponseDeserialization(t *testing.T) {
 		// Test with specific known timestamp
 		knownTime := time.Date(2024, 3, 15, 14, 30, 0, 0, time.UTC)
 		jsonResponse := fmt.Sprintf(`{
-			"agent_id": "agt_test",
+			"id": "agt_test",
 			"fingerprint": "fp_test",
 			"status": "registered",
 			"message": "Test",
@@ -1329,7 +1329,7 @@ func TestHTTPTimeout(t *testing.T) {
 			time.Sleep(2 * time.Second)
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(RegistrationResponse{
-				AgentID: "agt_delayed",
+				ID: "agt_delayed",
 			})
 		}))
 		defer server.Close()
@@ -1371,4 +1371,3 @@ func TestHTTPTimeout(t *testing.T) {
 		}
 	})
 }
-

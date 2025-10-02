@@ -12,24 +12,23 @@ import (
 )
 
 type mockAgentRepository struct {
-	createFunc              func(ctx context.Context, agent *agent.Agent) error
-	updateFunc              func(ctx context.Context, agent *agent.Agent) error
-	findByFingerprintFunc   func(ctx context.Context, fp string) (*agent.Agent, error)
-	findByIDFunc            func(ctx context.Context, id uint) (*agent.Agent, error)
-	findAllFunc             func(ctx context.Context, filters agent.AgentFilters) ([]agent.Agent, error)
-	getPublicKeyByAgentID   func(ctx context.Context, agentID string) (string, error)
-	addTagsFunc             func(ctx context.Context, agentID uint, tags []agent.AgentTag) error
-	updateTagsFunc          func(ctx context.Context, agentID uint, tags []agent.AgentTag) error
-	addRegistrationFunc     func(ctx context.Context, registration *agent.AgentRegistration) error
-	transactionFunc         func(ctx context.Context, fn func(agent.Repository) error) error
+	createFunc            func(ctx context.Context, agent *agent.Agent) error
+	updateFunc            func(ctx context.Context, agent *agent.Agent) error
+	findByFingerprintFunc func(ctx context.Context, fp string) (*agent.Agent, error)
+	findByIDFunc          func(ctx context.Context, id string) (*agent.Agent, error)
+	findAllFunc           func(ctx context.Context, filters agent.AgentFilters) ([]agent.Agent, error)
+	getPublicKeyByAgentID func(ctx context.Context, agentID string) (string, error)
+	addTagsFunc           func(ctx context.Context, agentID string, tags []agent.AgentTag) error
+	updateTagsFunc        func(ctx context.Context, agentID string, tags []agent.AgentTag) error
+	addRegistrationFunc   func(ctx context.Context, registration *agent.AgentRegistration) error
+	transactionFunc       func(ctx context.Context, fn func(agent.Repository) error) error
 }
 
 func (m *mockAgentRepository) Create(ctx context.Context, a *agent.Agent) error {
 	if m.createFunc != nil {
 		return m.createFunc(ctx, a)
 	}
-	a.ID = 1
-	a.AID = "agt_test123"
+	a.ID = "agt_test123"
 	return nil
 }
 
@@ -47,7 +46,7 @@ func (m *mockAgentRepository) FindByFingerprint(ctx context.Context, fp string) 
 	return nil, nil
 }
 
-func (m *mockAgentRepository) FindByID(ctx context.Context, id uint) (*agent.Agent, error) {
+func (m *mockAgentRepository) FindByID(ctx context.Context, id string) (*agent.Agent, error) {
 	if m.findByIDFunc != nil {
 		return m.findByIDFunc(ctx, id)
 	}
@@ -68,14 +67,14 @@ func (m *mockAgentRepository) GetPublicKeyByAgentID(ctx context.Context, agentID
 	return "", nil
 }
 
-func (m *mockAgentRepository) AddTags(ctx context.Context, agentID uint, tags []agent.AgentTag) error {
+func (m *mockAgentRepository) AddTags(ctx context.Context, agentID string, tags []agent.AgentTag) error {
 	if m.addTagsFunc != nil {
 		return m.addTagsFunc(ctx, agentID, tags)
 	}
 	return nil
 }
 
-func (m *mockAgentRepository) UpdateTags(ctx context.Context, agentID uint, tags []agent.AgentTag) error {
+func (m *mockAgentRepository) UpdateTags(ctx context.Context, agentID string, tags []agent.AgentTag) error {
 	if m.updateTagsFunc != nil {
 		return m.updateTagsFunc(ctx, agentID, tags)
 	}
@@ -142,12 +141,11 @@ func TestRegistrationService(t *testing.T) {
 				return nil, errors.New("not found")
 			},
 			createFunc: func(ctx context.Context, a *agent.Agent) error {
-				a.ID = 10
-				a.AID = "agt_new123"
+				a.ID = "agt_new123"
 				return nil
 			},
-			addTagsFunc: func(ctx context.Context, agentID uint, tags []agent.AgentTag) error {
-				assert.Equal(t, uint(10), agentID)
+			addTagsFunc: func(ctx context.Context, agentID string, tags []agent.AgentTag) error {
+				assert.Equal(t, "agt_new123", agentID)
 				addedTags = tags
 				return nil
 			},
@@ -181,8 +179,7 @@ func TestRegistrationService(t *testing.T) {
 		require.NotNil(t, result)
 
 		// Verify agent was created correctly
-		assert.Equal(t, uint(10), result.ID)
-		assert.Equal(t, "agt_new123", result.AID)
+		assert.Equal(t, "agt_new123", result.ID)
 		assert.Equal(t, "new-fingerprint", result.Fingerprint)
 		assert.Equal(t, "ssh-rsa AAAAB3...", result.PublicKey)
 		assert.Equal(t, "test-host", result.Hostname)
@@ -197,7 +194,7 @@ func TestRegistrationService(t *testing.T) {
 
 		// Verify registration record
 		assert.NotNil(t, registrationRecord)
-		assert.Equal(t, uint(10), registrationRecord.AgentID)
+		assert.Equal(t, "agt_new123", registrationRecord.AgentID)
 		assert.Equal(t, "new-fingerprint", registrationRecord.Fingerprint)
 		assert.Equal(t, "register", registrationRecord.Event)
 		assert.True(t, registrationRecord.Success)
@@ -208,8 +205,7 @@ func TestRegistrationService(t *testing.T) {
 		ctx := context.Background()
 
 		existingAgent := &agent.Agent{
-			ID:          5,
-			AID:         "agt_existing",
+			ID:          "agt_existing",
 			Fingerprint: "existing-fingerprint",
 			PublicKey:   "old-key",
 			Hostname:    "old-host",
@@ -231,8 +227,8 @@ func TestRegistrationService(t *testing.T) {
 			updateFunc: func(ctx context.Context, a *agent.Agent) error {
 				return nil
 			},
-			updateTagsFunc: func(ctx context.Context, agentID uint, tags []agent.AgentTag) error {
-				assert.Equal(t, uint(5), agentID)
+			updateTagsFunc: func(ctx context.Context, agentID string, tags []agent.AgentTag) error {
+				assert.Equal(t, "agt_existing", agentID)
 				updatedTags = tags
 				return nil
 			},
@@ -266,7 +262,7 @@ func TestRegistrationService(t *testing.T) {
 		require.NotNil(t, result)
 
 		// Verify agent was updated
-		assert.Equal(t, uint(5), result.ID)
+		assert.Equal(t, "agt_existing", result.ID)
 		assert.Equal(t, "ssh-rsa NEWKEY...", result.PublicKey)
 		assert.Equal(t, "new-host", result.Hostname)
 		assert.Equal(t, "192.168.2.200", result.IPAddress)
@@ -283,7 +279,7 @@ func TestRegistrationService(t *testing.T) {
 
 		// Verify re-registration record
 		assert.NotNil(t, registrationRecord)
-		assert.Equal(t, uint(5), registrationRecord.AgentID)
+		assert.Equal(t, "agt_existing", registrationRecord.AgentID)
 		assert.Equal(t, "existing-fingerprint", registrationRecord.Fingerprint)
 		assert.Equal(t, "re-register", registrationRecord.Event)
 		assert.True(t, registrationRecord.Success)
@@ -333,7 +329,6 @@ func TestRegistrationService(t *testing.T) {
 		assert.Equal(t, "register", failedRegistration.Event)
 		assert.False(t, failedRegistration.Success)
 		assert.Equal(t, "database connection failed", failedRegistration.Error)
-		assert.Equal(t, uint(0), failedRegistration.AgentID) // No agent ID since creation failed
+		assert.Equal(t, "", failedRegistration.AgentID) // No agent ID since creation failed
 	})
 }
-

@@ -18,7 +18,7 @@ func NewAgentRepository(db *gorm.DB) agent.Repository {
 }
 
 func (r *AgentRepository) Create(ctx context.Context, a *agent.Agent) error {
-	a.AID = "agt_" + ulid.Make().String()
+	a.ID = "agt_" + ulid.Make().String()
 	a.Status = "active"
 	a.RegisteredAt = time.Now()
 	a.LastSeen = time.Now()
@@ -38,9 +38,9 @@ func (r *AgentRepository) FindByFingerprint(ctx context.Context, fingerprint str
 	return &a, nil
 }
 
-func (r *AgentRepository) FindByID(ctx context.Context, id uint) (*agent.Agent, error) {
+func (r *AgentRepository) FindByID(ctx context.Context, id string) (*agent.Agent, error) {
 	var a agent.Agent
-	err := r.db.WithContext(ctx).Preload("Tags").First(&a, id).Error
+	err := r.db.WithContext(ctx).Preload("Tags").Where("id = ?", id).First(&a).Error
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +49,7 @@ func (r *AgentRepository) FindByID(ctx context.Context, id uint) (*agent.Agent, 
 
 func (r *AgentRepository) GetPublicKeyByAgentID(ctx context.Context, agentID string) (string, error) {
 	var a agent.Agent
-	err := r.db.WithContext(ctx).Select("public_key").Where("a_id = ?", agentID).First(&a).Error
+	err := r.db.WithContext(ctx).Select("public_key").Where("id = ?", agentID).First(&a).Error
 	if err != nil {
 		return "", err
 	}
@@ -59,14 +59,14 @@ func (r *AgentRepository) GetPublicKeyByAgentID(ctx context.Context, agentID str
 	return a.PublicKey, nil
 }
 
-func (r *AgentRepository) AddTags(ctx context.Context, agentID uint, tags []agent.AgentTag) error {
+func (r *AgentRepository) AddTags(ctx context.Context, agentID string, tags []agent.AgentTag) error {
 	for i := range tags {
 		tags[i].AgentID = agentID
 	}
 	return r.db.WithContext(ctx).Create(&tags).Error
 }
 
-func (r *AgentRepository) UpdateTags(ctx context.Context, agentID uint, tags []agent.AgentTag) error {
+func (r *AgentRepository) UpdateTags(ctx context.Context, agentID string, tags []agent.AgentTag) error {
 	// Delete existing tags
 	if err := r.db.WithContext(ctx).Where("agent_id = ?", agentID).Delete(&agent.AgentTag{}).Error; err != nil {
 		return err
@@ -76,7 +76,7 @@ func (r *AgentRepository) UpdateTags(ctx context.Context, agentID uint, tags []a
 }
 
 func (r *AgentRepository) AddRegistration(ctx context.Context, reg *agent.AgentRegistration) error {
-	reg.ARID = "agr_" + ulid.Make().String()
+	reg.ID = "agr_" + ulid.Make().String()
 	return r.db.WithContext(ctx).Create(reg).Error
 }
 

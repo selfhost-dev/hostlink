@@ -9,15 +9,14 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"fmt"
+	"hostlink/app"
+	"hostlink/config"
+	"hostlink/domain/agent"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"testing"
 	"time"
-
-	"hostlink/app"
-	"hostlink/config"
-	"hostlink/domain/agent"
 
 	"github.com/glebarez/sqlite"
 	"github.com/labstack/echo/v4"
@@ -118,7 +117,7 @@ func TestServerAuthentication_InvalidSignature(t *testing.T) {
 		err := env.container.AgentRepository.Create(context.Background(), testAgent)
 		require.NoError(t, err)
 
-		agentID := testAgent.AID
+		agentID := testAgent.ID
 		timestamp := time.Now().Unix()
 		nonce := generateNonce(t)
 
@@ -150,7 +149,7 @@ func TestServerAuthentication_InvalidSignature(t *testing.T) {
 		err := env.container.AgentRepository.Create(context.Background(), testAgent)
 		require.NoError(t, err)
 
-		agentID := testAgent.AID
+		agentID := testAgent.ID
 		timestamp := time.Now().Unix()
 		nonce := generateNonce(t)
 
@@ -188,7 +187,7 @@ func TestServerAuthentication_ValidSignature(t *testing.T) {
 		err := env.container.AgentRepository.Create(context.Background(), testAgent)
 		require.NoError(t, err)
 
-		req := createSignedRequest(t, http.MethodGet, "/api/v1/tasks", testAgent.AID, privateKey, time.Now())
+		req := createSignedRequest(t, http.MethodGet, "/api/v1/tasks", testAgent.ID, privateKey, time.Now())
 		rec := httptest.NewRecorder()
 
 		env.echo.ServeHTTP(rec, req)
@@ -214,7 +213,7 @@ func TestServerAuthentication_TimestampValidation(t *testing.T) {
 		require.NoError(t, err)
 
 		oldTimestamp := time.Now().Add(-6 * time.Minute)
-		req := createSignedRequest(t, http.MethodGet, "/api/v1/tasks", testAgent.AID, privateKey, oldTimestamp)
+		req := createSignedRequest(t, http.MethodGet, "/api/v1/tasks", testAgent.ID, privateKey, oldTimestamp)
 		rec := httptest.NewRecorder()
 
 		env.echo.ServeHTTP(rec, req)
@@ -238,7 +237,7 @@ func TestServerAuthentication_TimestampValidation(t *testing.T) {
 		require.NoError(t, err)
 
 		futureTimestamp := time.Now().Add(6 * time.Minute)
-		req := createSignedRequest(t, http.MethodGet, "/api/v1/tasks", testAgent.AID, privateKey, futureTimestamp)
+		req := createSignedRequest(t, http.MethodGet, "/api/v1/tasks", testAgent.ID, privateKey, futureTimestamp)
 		rec := httptest.NewRecorder()
 
 		env.echo.ServeHTTP(rec, req)
@@ -262,7 +261,7 @@ func TestServerAuthentication_TimestampValidation(t *testing.T) {
 		require.NoError(t, err)
 
 		recentTimestamp := time.Now().Add(-4 * time.Minute)
-		req := createSignedRequest(t, http.MethodGet, "/api/v1/tasks", testAgent.AID, privateKey, recentTimestamp)
+		req := createSignedRequest(t, http.MethodGet, "/api/v1/tasks", testAgent.ID, privateKey, recentTimestamp)
 		rec := httptest.NewRecorder()
 
 		env.echo.ServeHTTP(rec, req)

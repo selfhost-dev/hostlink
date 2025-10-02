@@ -11,11 +11,10 @@ var (
 )
 
 type Agent struct {
-	ID            uint
+	ID            string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 	DeletedAt     *time.Time
-	AID           string
 	Fingerprint   string
 	PublicKey     string
 	PublicKeyType string
@@ -43,18 +42,17 @@ type AgentTag struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	DeletedAt *time.Time
-	AgentID   uint
+	AgentID   string
 	Key       string
 	Value     string
 }
 
 type AgentRegistration struct {
-	ID               uint
+	ID               string
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 	DeletedAt        *time.Time
-	ARID             string
-	AgentID          uint
+	AgentID          string
 	Fingerprint      string
 	Event            string
 	Success          bool
@@ -68,4 +66,3 @@ type AgentFilters struct {
 	Status      *string
 	Fingerprint *string
 }
-
