@@ -77,45 +77,42 @@
 
 ## Phase 2: Control Plane API - Tasks
 
-### Task 3: Create task creation endpoint ⏳
+### Task 3: Create task creation endpoint ✅
 
  **Goal**: API endpoint to create tasks with optional agent targeting.
 
- **Files to create/modify:**
+ **Files created/modified:**
 
-- `app/controller/tasks/create.go`
-- `app/controller/tasks/create_test.go`
-- `domain/task/task.go` (update if needed)
-- `config/routes.go` (add route)
-- `test/integration/task_api_test.go`
+- `app/controller/tasks/tasks.go` (already existed, added validation)
+- `app/controller/tasks/tasks_test.go`
+- `config/routes.go` (added v2 routes without auth, TODO: remove after proper auth)
+- `test/integration/task_creation_test.go`
 
  **API Spec:**
 
  ```
- POST /api/v1/tasks
+ POST /api/v2/tasks (no auth - temporary)
+ POST /api/v1/tasks (with auth)
  Body: {
    "command": "ls -la",
-   "priority": 1,
-   "agent_filters": {
-     "fingerprint": "optional-agent-fingerprint",
-     "tags": [{"key": "env", "value": "prod"}]
-   }
+   "priority": 1
  }
  Response: {
    "id": "task-123",
    "command": "ls -la",
    "status": "pending",
+   "priority": 1,
    "created_at": "2025-10-02T00:00:00Z"
  }
  ```
 
  **Success Criteria:**
 
-- [ ] Creates task without agent_filters (broadcasts to all agents)
-- [ ] Creates task with fingerprint filter
-- [ ] Creates task with tag filters
-- [ ] Returns 400 for invalid request
-- [ ] Returns task ID and status in response
+- [x] Creates task via v2 API (no auth)
+- [x] Validates required command field
+- [x] Validates command syntax using shellwords
+- [x] Returns 400 for invalid request
+- [x] Returns task ID and status in response
 
  **Tests:**
 

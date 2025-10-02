@@ -17,7 +17,7 @@ type (
 		Command string `json:"command"`
 	}
 	TaskRequest struct {
-		Command  string `json:"command"`
+		Command  string `json:"command" validate:"required"`
 		Priority int    `json:"priority"`
 	}
 )
@@ -30,6 +30,10 @@ func (h Handler) Create(c echo.Context) error {
 	var req TaskRequest
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request"})
+	}
+
+	if err := c.Validate(&req); err != nil {
+		return err
 	}
 
 	_, err := shellwords.Parse(req.Command)
@@ -83,7 +87,7 @@ func (h Handler) Show(c echo.Context) error {
 }
 
 func (h *Handler) RegisterRoutes(g *echo.Group) {
-	g.GET("", h.Index)
-	g.GET("/:pid", h.Show)
 	g.POST("", h.Create)
+	g.GET("", h.Index)
+	g.GET("/:id", h.Show)
 }
