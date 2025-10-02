@@ -3,6 +3,7 @@ package agent
 
 import (
 	agentService "hostlink/app/service/agent"
+	"hostlink/domain/agent"
 	"net/http"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 type (
 	Handler struct {
 		registrationSvc agentService.Registrar
+		agentRepo       agent.Repository
 	}
 
 	// RegistrationRequest represents the incoming registration request from agent
@@ -42,6 +44,13 @@ type (
 
 func NewHandler(svc agentService.Registrar) *Handler {
 	return &Handler{registrationSvc: svc}
+}
+
+func NewHandlerWithRepo(svc agentService.Registrar, repo agent.Repository) *Handler {
+	return &Handler{
+		registrationSvc: svc,
+		agentRepo:       repo,
+	}
 }
 
 // RegisterAgent handles agent registration at /hostlink/v1/register
@@ -112,36 +121,26 @@ func (h *Handler) RegisterAgent(c echo.Context) error {
 
 // List returns all registered agents
 func (h *Handler) List(c echo.Context) error {
-	// TODO: Implement List through service layer
-	// Steps for implementation:
-	// 1. Add ListAgents method to the Registrar interface in app/service/agent/registration.go:
-	//    ListAgents(ctx context.Context) ([]*agent.Agent, error)
-	//
-	// 2. Implement ListAgents in RegistrationService:
-	//    func (s *RegistrationService) ListAgents(ctx context.Context) ([]*agent.Agent, error) {
-	//        // Call repository to fetch all agents
-	//        // Consider adding pagination parameters (limit, offset)
-	//    }
-	//
-	// 3. Add List method to agent.Repository interface in domain/agent/repository.go:
-	//    List(ctx context.Context) ([]*Agent, error)
-	//
-	// 4. Implement List in internal/repository/gorm/agent_repository.go:
-	//    func (r *AgentRepository) List(ctx context.Context) ([]*agent.Agent, error) {
-	//        var agents []*agent.Agent
-	//        err := r.db.WithContext(ctx).Preload("Tags").Find(&agents).Error
-	//        return agents, err
-	//    }
-	//
-	// 5. Update this controller method to use the service:
-	//    agents, err := h.registrationSvc.ListAgents(ctx)
-
 	ctx := c.Request().Context()
-	_ = ctx // Remove when implementing
 
-	return c.JSON(http.StatusNotImplemented, map[string]string{
-		"error": "List endpoint not yet implemented",
-	})
+	var filters agent.AgentFilters
+
+	if status := c.QueryParam("status"); status != "" {
+		filters.Status = &status
+	}
+
+	if fingerprint := c.QueryParam("fingerprint"); fingerprint != "" {
+		filters.Fingerprint = &fingerprint
+	}
+
+	agents, err := h.agentRepo.FindAll(ctx, filters)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to fetch agents: " + err.Error(),
+		})
+	}
+
+	return c.JSON(http.StatusOK, agents)
 }
 
 // Show returns details of a specific agent

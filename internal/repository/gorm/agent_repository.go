@@ -80,6 +80,27 @@ func (r *AgentRepository) AddRegistration(ctx context.Context, reg *agent.AgentR
 	return r.db.WithContext(ctx).Create(reg).Error
 }
 
+func (r *AgentRepository) FindAll(ctx context.Context, filters agent.AgentFilters) ([]agent.Agent, error) {
+	var agents []agent.Agent
+
+	query := r.db.WithContext(ctx).Preload("Tags")
+
+	if filters.Status != nil {
+		query = query.Where("status = ?", *filters.Status)
+	}
+
+	if filters.Fingerprint != nil {
+		query = query.Where("fingerprint = ?", *filters.Fingerprint)
+	}
+
+	err := query.Order("last_seen DESC").Find(&agents).Error
+	if err != nil {
+		return nil, err
+	}
+
+	return agents, nil
+}
+
 func (r *AgentRepository) Transaction(ctx context.Context, fn func(agent.Repository) error) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		txRepo := &AgentRepository{db: tx}

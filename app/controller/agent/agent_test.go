@@ -29,6 +29,53 @@ func (m *mockRegistrationService) RegisterAgent(ctx context.Context, req agentSe
 	return &agent.Agent{}, nil
 }
 
+type mockAgentRepository struct {
+	findAllFunc func(ctx context.Context, filters agent.AgentFilters) ([]agent.Agent, error)
+}
+
+func (m *mockAgentRepository) Create(ctx context.Context, a *agent.Agent) error {
+	return nil
+}
+
+func (m *mockAgentRepository) Update(ctx context.Context, a *agent.Agent) error {
+	return nil
+}
+
+func (m *mockAgentRepository) FindByFingerprint(ctx context.Context, fingerprint string) (*agent.Agent, error) {
+	return nil, nil
+}
+
+func (m *mockAgentRepository) FindByID(ctx context.Context, id uint) (*agent.Agent, error) {
+	return nil, nil
+}
+
+func (m *mockAgentRepository) FindAll(ctx context.Context, filters agent.AgentFilters) ([]agent.Agent, error) {
+	if m.findAllFunc != nil {
+		return m.findAllFunc(ctx, filters)
+	}
+	return []agent.Agent{}, nil
+}
+
+func (m *mockAgentRepository) GetPublicKeyByAgentID(ctx context.Context, agentID string) (string, error) {
+	return "", nil
+}
+
+func (m *mockAgentRepository) AddTags(ctx context.Context, agentID uint, tags []agent.AgentTag) error {
+	return nil
+}
+
+func (m *mockAgentRepository) UpdateTags(ctx context.Context, agentID uint, tags []agent.AgentTag) error {
+	return nil
+}
+
+func (m *mockAgentRepository) AddRegistration(ctx context.Context, registration *agent.AgentRegistration) error {
+	return nil
+}
+
+func (m *mockAgentRepository) Transaction(ctx context.Context, fn func(agent.Repository) error) error {
+	return fn(m)
+}
+
 func setupEcho() *echo.Echo {
 	e := echo.New()
 	e.Validator = &mockValidator{}
@@ -391,16 +438,156 @@ func TestAgentController(t *testing.T) {
 	})
 
 	t.Run("GET /agents", func(t *testing.T) {
-		t.Run("should return all agents when successful", func(t *testing.T) {
-			t.Skip("TODO: Implement when List is moved to service layer")
+		t.Run("should return all agents without filters", func(t *testing.T) {
+			mockRepo := &mockAgentRepository{
+				findAllFunc: func(ctx context.Context, filters agent.AgentFilters) ([]agent.Agent, error) {
+					return []agent.Agent{
+						{AID: "agt_001", Fingerprint: "fp-001", Status: "active"},
+						{AID: "agt_002", Fingerprint: "fp-002", Status: "active"},
+					}, nil
+				},
+			}
+
+			handler := NewHandlerWithRepo(nil, mockRepo)
+			e := setupEcho()
+
+			req := httptest.NewRequest(http.MethodGet, "/agents", nil)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+
+			err := handler.List(c)
+			require.NoError(t, err)
+			assert.Equal(t, http.StatusOK, rec.Code)
+
+			var resp []agent.Agent
+			err = json.Unmarshal(rec.Body.Bytes(), &resp)
+			require.NoError(t, err)
+			assert.Len(t, resp, 2)
+		})
+
+		t.Run("should filter agents by status", func(t *testing.T) {
+			var capturedFilters agent.AgentFilters
+			mockRepo := &mockAgentRepository{
+				findAllFunc: func(ctx context.Context, filters agent.AgentFilters) ([]agent.Agent, error) {
+					capturedFilters = filters
+					return []agent.Agent{
+						{AID: "agt_001", Fingerprint: "fp-001", Status: "active"},
+					}, nil
+				},
+			}
+
+			handler := NewHandlerWithRepo(nil, mockRepo)
+			e := setupEcho()
+
+			req := httptest.NewRequest(http.MethodGet, "/agents?status=active", nil)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+
+			err := handler.List(c)
+			require.NoError(t, err)
+			assert.Equal(t, http.StatusOK, rec.Code)
+			assert.NotNil(t, capturedFilters.Status)
+			assert.Equal(t, "active", *capturedFilters.Status)
+		})
+
+		t.Run("should filter agents by fingerprint", func(t *testing.T) {
+			var capturedFilters agent.AgentFilters
+			mockRepo := &mockAgentRepository{
+				findAllFunc: func(ctx context.Context, filters agent.AgentFilters) ([]agent.Agent, error) {
+					capturedFilters = filters
+					return []agent.Agent{
+						{AID: "agt_001", Fingerprint: "fp-001", Status: "active"},
+					}, nil
+				},
+			}
+
+			handler := NewHandlerWithRepo(nil, mockRepo)
+			e := setupEcho()
+
+			req := httptest.NewRequest(http.MethodGet, "/agents?fingerprint=fp-001", nil)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+
+			err := handler.List(c)
+			require.NoError(t, err)
+			assert.Equal(t, http.StatusOK, rec.Code)
+			assert.NotNil(t, capturedFilters.Fingerprint)
+			assert.Equal(t, "fp-001", *capturedFilters.Fingerprint)
+		})
+
+		t.Run("should combine multiple filters", func(t *testing.T) {
+			var capturedFilters agent.AgentFilters
+			mockRepo := &mockAgentRepository{
+				findAllFunc: func(ctx context.Context, filters agent.AgentFilters) ([]agent.Agent, error) {
+					capturedFilters = filters
+					return []agent.Agent{
+						{AID: "agt_001", Fingerprint: "fp-001", Status: "active"},
+					}, nil
+				},
+			}
+
+			handler := NewHandlerWithRepo(nil, mockRepo)
+			e := setupEcho()
+
+			req := httptest.NewRequest(http.MethodGet, "/agents?status=active&fingerprint=fp-001", nil)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+
+			err := handler.List(c)
+			require.NoError(t, err)
+			assert.Equal(t, http.StatusOK, rec.Code)
+			assert.NotNil(t, capturedFilters.Status)
+			assert.Equal(t, "active", *capturedFilters.Status)
+			assert.NotNil(t, capturedFilters.Fingerprint)
+			assert.Equal(t, "fp-001", *capturedFilters.Fingerprint)
 		})
 
 		t.Run("should return empty array when no agents exist", func(t *testing.T) {
-			t.Skip("TODO: Implement when List is moved to service layer")
+			mockRepo := &mockAgentRepository{
+				findAllFunc: func(ctx context.Context, filters agent.AgentFilters) ([]agent.Agent, error) {
+					return []agent.Agent{}, nil
+				},
+			}
+
+			handler := NewHandlerWithRepo(nil, mockRepo)
+			e := setupEcho()
+
+			req := httptest.NewRequest(http.MethodGet, "/agents", nil)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+
+			err := handler.List(c)
+			require.NoError(t, err)
+			assert.Equal(t, http.StatusOK, rec.Code)
+
+			var resp []agent.Agent
+			err = json.Unmarshal(rec.Body.Bytes(), &resp)
+			require.NoError(t, err)
+			assert.Len(t, resp, 0)
 		})
 
-		t.Run("should return 500 when database error occurs", func(t *testing.T) {
-			t.Skip("TODO: Implement when List is moved to service layer")
+		t.Run("should return 500 when repository fails", func(t *testing.T) {
+			mockRepo := &mockAgentRepository{
+				findAllFunc: func(ctx context.Context, filters agent.AgentFilters) ([]agent.Agent, error) {
+					return nil, errors.New("database connection failed")
+				},
+			}
+
+			handler := NewHandlerWithRepo(nil, mockRepo)
+			e := setupEcho()
+
+			req := httptest.NewRequest(http.MethodGet, "/agents", nil)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+
+			err := handler.List(c)
+			require.NoError(t, err)
+			assert.Equal(t, http.StatusInternalServerError, rec.Code)
+
+			var resp map[string]string
+			err = json.Unmarshal(rec.Body.Bytes(), &resp)
+			require.NoError(t, err)
+			assert.Contains(t, resp["error"], "Failed to fetch agents")
 		})
 	})
 

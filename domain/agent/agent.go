@@ -64,3 +64,8 @@ type AgentRegistration struct {
 	SimilarityScore  int
 }
 
+type AgentFilters struct {
+	Status      *string
+	Fingerprint *string
+}
+

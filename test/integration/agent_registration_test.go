@@ -74,7 +74,7 @@ func TestAgentRegistrationIntegration(t *testing.T) {
 			}
 
 			body, _ := json.Marshal(reqBody)
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/register", bytes.NewReader(body))
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/register", bytes.NewReader(body))
 			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 			rec := httptest.NewRecorder()
 
@@ -120,7 +120,7 @@ func TestAgentRegistrationIntegration(t *testing.T) {
 			}
 
 			body, _ := json.Marshal(firstReq)
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/register", bytes.NewReader(body))
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/register", bytes.NewReader(body))
 			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 			rec := httptest.NewRecorder()
 			e.ServeHTTP(rec, req)
@@ -139,7 +139,7 @@ func TestAgentRegistrationIntegration(t *testing.T) {
 			}
 
 			body, _ = json.Marshal(secondReq)
-			req = httptest.NewRequest(http.MethodPost, "/api/v1/agent/register", bytes.NewReader(body))
+			req = httptest.NewRequest(http.MethodPost, "/api/v1/agents/register", bytes.NewReader(body))
 			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 			rec = httptest.NewRecorder()
 			e.ServeHTTP(rec, req)
@@ -193,7 +193,7 @@ func TestAgentRegistrationIntegration(t *testing.T) {
 					}
 
 					body, _ := json.Marshal(reqBody)
-					req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/register", bytes.NewReader(body))
+					req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/register", bytes.NewReader(body))
 					req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 					rec := httptest.NewRecorder()
 
@@ -241,7 +241,7 @@ func TestAgentRegistrationIntegration(t *testing.T) {
 			}
 
 			body, _ := json.Marshal(reqBody)
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/register", bytes.NewReader(body))
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/register", bytes.NewReader(body))
 			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 			rec := httptest.NewRecorder()
 
@@ -265,7 +265,7 @@ func TestAgentRegistrationIntegration(t *testing.T) {
 			}
 
 			body, _ := json.Marshal(reqBody)
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/register", bytes.NewReader(body))
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/register", bytes.NewReader(body))
 			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 			rec := httptest.NewRecorder()
 
@@ -277,7 +277,7 @@ func TestAgentRegistrationIntegration(t *testing.T) {
 		t.Run("should return 400 when request body is malformed JSON", func(t *testing.T) {
 			e, _ := setupAgnetTestEnvironment(t)
 
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/register", bytes.NewReader([]byte("malformed json")))
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/register", bytes.NewReader([]byte("malformed json")))
 			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 			rec := httptest.NewRecorder()
 
@@ -318,7 +318,7 @@ func TestAgentRegistrationIntegration(t *testing.T) {
 			}
 
 			body, _ := json.Marshal(reqBody)
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/register", bytes.NewReader(body))
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/register", bytes.NewReader(body))
 			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 			rec := httptest.NewRecorder()
 
