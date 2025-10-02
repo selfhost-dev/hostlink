@@ -68,7 +68,7 @@ func TestTaskRepository_FindAll(t *testing.T) {
 		repo.Create(context.Background(), task2)
 		repo.Create(context.Background(), task3)
 
-		tasks, err := repo.FindAll(context.Background())
+		tasks, err := repo.FindAll(context.Background(), task.TaskFilters{})
 		if err != nil {
 			t.Fatalf("Expected no error, got: %v", err)
 		}
@@ -86,7 +86,115 @@ func TestTaskRepository_FindAll(t *testing.T) {
 		db := setupTaskTestDB(t)
 		repo := NewTaskRepository(db)
 
-		tasks, err := repo.FindAll(context.Background())
+		tasks, err := repo.FindAll(context.Background(), task.TaskFilters{})
+		if err != nil {
+			t.Fatalf("Expected no error, got: %v", err)
+		}
+
+		if len(tasks) != 0 {
+			t.Errorf("Expected 0 tasks, got: %d", len(tasks))
+		}
+	})
+
+	t.Run("filters tasks by status", func(t *testing.T) {
+		db := setupTaskTestDB(t)
+		repo := NewTaskRepository(db)
+
+		task1 := &task.Task{Command: "task1", Priority: 1}
+		task2 := &task.Task{Command: "task2", Priority: 2}
+		task3 := &task.Task{Command: "task3", Priority: 3}
+
+		repo.Create(context.Background(), task1)
+		repo.Create(context.Background(), task2)
+		repo.Create(context.Background(), task3)
+
+		task1.Status = "completed"
+		repo.Update(context.Background(), task1)
+		task2.Status = "failed"
+		repo.Update(context.Background(), task2)
+
+		pendingStatus := "pending"
+		filters := task.TaskFilters{Status: &pendingStatus}
+		tasks, err := repo.FindAll(context.Background(), filters)
+		if err != nil {
+			t.Fatalf("Expected no error, got: %v", err)
+		}
+
+		if len(tasks) != 1 {
+			t.Errorf("Expected 1 pending task, got: %d", len(tasks))
+		}
+
+		if len(tasks) > 0 && tasks[0].Command != "task3" {
+			t.Errorf("Expected task3, got: %s", tasks[0].Command)
+		}
+	})
+
+	t.Run("filters tasks by priority", func(t *testing.T) {
+		db := setupTaskTestDB(t)
+		repo := NewTaskRepository(db)
+
+		task1 := &task.Task{Command: "task1", Priority: 1}
+		task2 := &task.Task{Command: "task2", Priority: 2}
+		task3 := &task.Task{Command: "task3", Priority: 2}
+
+		repo.Create(context.Background(), task1)
+		repo.Create(context.Background(), task2)
+		repo.Create(context.Background(), task3)
+
+		priority := 2
+		filters := task.TaskFilters{Priority: &priority}
+		tasks, err := repo.FindAll(context.Background(), filters)
+		if err != nil {
+			t.Fatalf("Expected no error, got: %v", err)
+		}
+
+		if len(tasks) != 2 {
+			t.Errorf("Expected 2 tasks with priority 2, got: %d", len(tasks))
+		}
+	})
+
+	t.Run("combines multiple filters", func(t *testing.T) {
+		db := setupTaskTestDB(t)
+		repo := NewTaskRepository(db)
+
+		task1 := &task.Task{Command: "task1", Priority: 1}
+		task2 := &task.Task{Command: "task2", Priority: 2}
+		task3 := &task.Task{Command: "task3", Priority: 2}
+
+		repo.Create(context.Background(), task1)
+		repo.Create(context.Background(), task2)
+		repo.Create(context.Background(), task3)
+
+		task2.Status = "completed"
+		repo.Update(context.Background(), task2)
+
+		pendingStatus := "pending"
+		priority := 2
+		filters := task.TaskFilters{Status: &pendingStatus, Priority: &priority}
+		tasks, err := repo.FindAll(context.Background(), filters)
+		if err != nil {
+			t.Fatalf("Expected no error, got: %v", err)
+		}
+
+		if len(tasks) != 1 {
+			t.Errorf("Expected 1 task (pending + priority 2), got: %d", len(tasks))
+		}
+
+		if len(tasks) > 0 && tasks[0].Command != "task3" {
+			t.Errorf("Expected task3, got: %s", tasks[0].Command)
+		}
+	})
+
+	t.Run("returns empty slice when no tasks match filters", func(t *testing.T) {
+		db := setupTaskTestDB(t)
+		repo := NewTaskRepository(db)
+
+		task1 := &task.Task{Command: "task1", Priority: 1}
+		repo.Create(context.Background(), task1)
+
+		status := "completed"
+		filters := task.TaskFilters{Status: &status}
+		tasks, err := repo.FindAll(context.Background(), filters)
 		if err != nil {
 			t.Fatalf("Expected no error, got: %v", err)
 		}

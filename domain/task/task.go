@@ -16,3 +16,8 @@ type Task struct {
 	Error     string
 	ExitCode  int
 }
+
+type TaskFilters struct {
+	Status   *string
+	Priority *int
+}

@@ -2,6 +2,7 @@
 package tasks
 
 import (
+	"fmt"
 	"hostlink/domain/task"
 	"net/http"
 
@@ -63,7 +64,20 @@ func (h Handler) Create(c echo.Context) error {
 func (h Handler) Index(c echo.Context) error {
 	ctx := c.Request().Context()
 
-	tasks, err := h.repo.FindAll(ctx)
+	var filters task.TaskFilters
+
+	if status := c.QueryParam("status"); status != "" {
+		filters.Status = &status
+	}
+
+	if priorityStr := c.QueryParam("priority"); priorityStr != "" {
+		var priority int
+		if _, err := fmt.Sscanf(priorityStr, "%d", &priority); err == nil {
+			filters.Priority = &priority
+		}
+	}
+
+	tasks, err := h.repo.FindAll(ctx, filters)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to fetch tasks: " + err.Error(),
