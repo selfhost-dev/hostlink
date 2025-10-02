@@ -16,6 +16,7 @@ type mockAgentRepository struct {
 	updateFunc              func(ctx context.Context, agent *agent.Agent) error
 	findByFingerprintFunc   func(ctx context.Context, fp string) (*agent.Agent, error)
 	findByIDFunc            func(ctx context.Context, id uint) (*agent.Agent, error)
+	findAllFunc             func(ctx context.Context, filters agent.AgentFilters) ([]agent.Agent, error)
 	getPublicKeyByAgentID   func(ctx context.Context, agentID string) (string, error)
 	addTagsFunc             func(ctx context.Context, agentID uint, tags []agent.AgentTag) error
 	updateTagsFunc          func(ctx context.Context, agentID uint, tags []agent.AgentTag) error
@@ -51,6 +52,13 @@ func (m *mockAgentRepository) FindByID(ctx context.Context, id uint) (*agent.Age
 		return m.findByIDFunc(ctx, id)
 	}
 	return nil, nil
+}
+
+func (m *mockAgentRepository) FindAll(ctx context.Context, filters agent.AgentFilters) ([]agent.Agent, error) {
+	if m.findAllFunc != nil {
+		return m.findAllFunc(ctx, filters)
+	}
+	return []agent.Agent{}, nil
 }
 
 func (m *mockAgentRepository) GetPublicKeyByAgentID(ctx context.Context, agentID string) (string, error) {

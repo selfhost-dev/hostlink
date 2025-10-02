@@ -388,7 +388,7 @@ func createRegistrationRequest(t *testing.T, fingerprint, publicKey string) *htt
 	t.Helper()
 
 	body := fmt.Sprintf(`{"fingerprint":"%s","token_id":"test-token-id","token_key":"test-token-key","public_key":"%s","public_key_type":"rsa"}`, fingerprint, publicKey)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/register", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/register", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 
 	return req

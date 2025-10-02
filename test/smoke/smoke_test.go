@@ -15,7 +15,6 @@ import (
 )
 
 func TestApplicationSmoke(t *testing.T) {
-
 	baseURL := "http://localhost:8080"
 
 	t.Run("health endpoint should respond", func(t *testing.T) {
@@ -38,7 +37,7 @@ func TestApplicationSmoke(t *testing.T) {
 		body, err := json.Marshal(reqBody)
 		require.NoError(t, err)
 
-		resp, err := http.Post(baseURL+"/api/v1/agent/register", "application/json", bytes.NewReader(body))
+		resp, err := http.Post(baseURL+"/api/v1/agents/register", "application/json", bytes.NewReader(body))
 		require.NoError(t, err)
 		defer resp.Body.Close()
 
@@ -53,7 +52,7 @@ func TestApplicationSmoke(t *testing.T) {
 		body, err := json.Marshal(reqBody)
 		require.NoError(t, err)
 
-		resp, err := http.Post(baseURL+"/api/v1/agent/register", "application/json", bytes.NewReader(body))
+		resp, err := http.Post(baseURL+"/api/v1/agents/register", "application/json", bytes.NewReader(body))
 		require.NoError(t, err)
 		defer resp.Body.Close()
 

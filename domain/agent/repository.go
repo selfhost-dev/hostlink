@@ -7,6 +7,7 @@ type Repository interface {
 	Update(ctx context.Context, agent *Agent) error
 	FindByFingerprint(ctx context.Context, fingerprint string) (*Agent, error)
 	FindByID(ctx context.Context, id uint) (*Agent, error)
+	FindAll(ctx context.Context, filters AgentFilters) ([]Agent, error)
 	GetPublicKeyByAgentID(ctx context.Context, agentID string) (string, error)
 	AddTags(ctx context.Context, agentID uint, tags []AgentTag) error
 	UpdateTags(ctx context.Context, agentID uint, tags []AgentTag) error

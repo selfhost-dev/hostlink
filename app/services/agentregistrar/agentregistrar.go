@@ -94,7 +94,7 @@ func (r *Registrar) Register(fingerprint string, publicKeyBase64 string, tags []
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := r.controlPlaneURL + "/api/v1/agent/register"
+	url := r.controlPlaneURL + "/api/v1/agents/register"
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)

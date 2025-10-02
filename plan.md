@@ -246,16 +246,17 @@ All filtering options are the options present on that particular tables fields.
 
 ## Phase 3: Control Plane API - Agents
 
-### Task 6: Create agent listing endpoint ⏳
+### Task 6: Create agent listing endpoint ✅
 
  **Goal**: API endpoint to list all registered agents.
 
  **Files to create/modify:**
 
-- `app/controller/agents/list.go`
-- `app/controller/agents/list_test.go`
+- `app/controller/agents/agent.go`
+- `app/controller/agents/agent_test.go`
 - `config/routes.go` (add route)
 - `test/integration/agent_api_test.go`
+- `test/smoke/agent_api_test.go`
 
  **API Spec:**
 
@@ -278,21 +279,29 @@ All filtering options are the options present on that particular tables fields.
 
  **Success Criteria:**
 
-- [ ] Lists all registered agents
-- [ ] Includes agent metadata (fingerprint, tags, status)
-- [ ] Shows last_seen timestamp
-- [ ] Returns empty array if no agents registered
-- [ ] Returns agents sorted by last_seen DESC
+- [x] Lists all registered agents
+- [x] Includes agent metadata (fingerprint, tags, status)
+- [x] Shows last_seen timestamp
+- [x] Returns empty array if no agents registered
+- [x] Returns agents sorted by last_seen DESC
+- [x] Filters by status query parameter
+- [x] Filters by fingerprint query parameter
 
  **Tests:**
 
-- **Unit (30%)**: Test agent listing logic
-- **Integration (50%)**: Test agent listing scenarios
+- **Unit (30%)**: Test agent listing logic ✅
+  - Repository: 7/7 tests passing (FindAll method)
+  - Controller: 6/6 tests passing (List endpoint)
+- **Integration (50%)**: Test agent listing scenarios ✅ 7/7 tests passing
   - List all agents
   - List when no agents exist
   - Verify tags are included
   - Verify sorting by last_seen
-- **Smoke (20%)**: Test via curl against running server
+  - Filter by status
+  - Filter by fingerprint
+  - Combined filters
+- **Smoke (20%)**: Golang test with build tag ✅ 3/3 tests created
+  - Run with: `go test -tags=smoke ./test/smoke -run TestAgentListSmoke`
 
  **Dependencies:** Task 5
 
