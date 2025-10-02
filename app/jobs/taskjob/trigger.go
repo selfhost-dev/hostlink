@@ -2,13 +2,13 @@ package taskjob
 
 import (
 	"hostlink/app/services/taskfetcher"
-	"hostlink/db/schema/taskschema"
+	"hostlink/domain/task"
 	"time"
 
 	"github.com/labstack/gommon/log"
 )
 
-func Trigger(fn func(tsk []taskschema.Task) error) {
+func Trigger(fn func(tsk []task.Task) error) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
@@ -23,7 +23,7 @@ func Trigger(fn func(tsk []taskschema.Task) error) {
 		if err != nil {
 			continue
 		}
-		incompleteTasks := []taskschema.Task{}
+		incompleteTasks := []task.Task{}
 		for _, task := range allTasks {
 			if task.Status != "completed" {
 				incompleteTasks = append(incompleteTasks, task)

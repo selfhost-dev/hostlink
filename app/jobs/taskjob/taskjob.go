@@ -5,35 +5,35 @@ package taskjob
 import (
 	"context"
 	"fmt"
-	"hostlink/db/schema/taskschema"
+	"hostlink/domain/task"
 	"os"
 	"os/exec"
 )
 
-func Register() {
-	go Trigger(func(tasks []taskschema.Task) error {
-		for _, task := range tasks {
+func Register(repo task.Repository) {
+	go Trigger(func(tasks []task.Task) error {
+		for _, t := range tasks {
 			tempFile, err := os.CreateTemp("", "*_script.sh")
 			if err != nil {
-				task.Error = fmt.Sprintf("failed to create temp file: %v", err)
-				task.Status = "failed"
-				task.Save(context.Background())
+				t.Error = fmt.Sprintf("failed to create temp file: %v", err)
+				t.Status = "failed"
+				repo.Update(context.Background(), &t)
 				continue
 			}
 			defer os.Remove(tempFile.Name())
 
-			if _, err := tempFile.WriteString("#!/usr/bin/env bash\n" + task.Command); err != nil {
+			if _, err := tempFile.WriteString("#!/usr/bin/env bash\n" + t.Command); err != nil {
 				tempFile.Close()
-				task.Error = fmt.Sprintf("failed to write script: %v", err)
-				task.Status = "failed"
-				task.Save(context.Background())
+				t.Error = fmt.Sprintf("failed to write script: %v", err)
+				t.Status = "failed"
+				repo.Update(context.Background(), &t)
 				continue
 			}
 
 			if err := os.Chmod(tempFile.Name(), 0755); err != nil {
-				task.Error = fmt.Sprintf("failed to chmod: %v", err)
-				task.Status = "failed"
-				task.Save(context.Background())
+				t.Error = fmt.Sprintf("failed to chmod: %v", err)
+				t.Status = "failed"
+				repo.Update(context.Background(), &t)
 				continue
 			}
 			execCmd := exec.Command("/bin/sh", tempFile.Name())
@@ -43,14 +43,14 @@ func Register() {
 			if err != nil {
 				if exitError, ok := err.(*exec.ExitError); ok {
 					exitCode = exitError.ExitCode()
-					task.ExitCode = exitCode
+					t.ExitCode = exitCode
 				}
 				errMsg = err.Error()
 			}
-			task.Error = errMsg
-			task.Output = string(output)
-			task.Status = "completed"
-			if err := task.Save(context.Background()); err != nil {
+			t.Error = errMsg
+			t.Output = string(output)
+			t.Status = "completed"
+			if err := repo.Update(context.Background(), &t); err != nil {
 				return err
 			}
 		}

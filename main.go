@@ -17,7 +17,6 @@ import (
 )
 
 func main() {
-	_ = godotenv.Load()
 	db, err := dbconn.GetConn(
 		dbconn.WithURL(appconf.DBURL()),
 	)
@@ -42,9 +41,13 @@ func main() {
 	config.AddRoutesV2(e, container)
 
 	// TODO(iAziz786): check if we can move this cron in app
-	taskjob.Register()
+	taskjob.Register(container.TaskRepository)
 	registrationJob := registrationjob.New()
 	registrationJob.Register()
 
 	log.Fatal(e.Start(fmt.Sprintf(":%s", appconf.Port())))
+}
+
+func init() {
+	_ = godotenv.Load()
 }

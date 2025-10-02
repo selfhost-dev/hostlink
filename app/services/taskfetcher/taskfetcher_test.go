@@ -8,7 +8,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"hostlink/app/services/agentstate"
-	"hostlink/db/schema/taskschema"
+	"hostlink/domain/task"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -96,7 +96,7 @@ func TestTaskFetcher_Fetch(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			capturedRequest = r
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode([]taskschema.Task{})
+			json.NewEncoder(w).Encode([]task.Task{})
 		}))
 		defer server.Close()
 
@@ -139,7 +139,7 @@ func TestTaskFetcher_Fetch(t *testing.T) {
 
 	t.Run("should handle empty task list", func(t *testing.T) {
 		keys := setupTestKeys(t)
-		server := createJSONResponse(t, []taskschema.Task{})
+		server := createJSONResponse(t, []task.Task{})
 		defer server.Close()
 
 		fetcher := setupTestFetcherWithKeys(t, server.URL, keys)
@@ -354,7 +354,7 @@ func setupTestFetcher(t *testing.T, serverURL string) *taskfetcher {
 	return setupTestFetcherWithKeys(t, serverURL, keys)
 }
 
-func createJSONResponse(t *testing.T, tasks []taskschema.Task) *httptest.Server {
+func createJSONResponse(t *testing.T, tasks []task.Task) *httptest.Server {
 	t.Helper()
 
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -380,11 +380,11 @@ func createServerWithInvalidJSON(t *testing.T) *httptest.Server {
 	}))
 }
 
-func createTestTasks(count int) []taskschema.Task {
-	tasks := make([]taskschema.Task, count)
+func createTestTasks(count int) []task.Task {
+	tasks := make([]task.Task, count)
 	for i := range count {
-		tasks[i] = taskschema.Task{
-			PID:      fmt.Sprintf("tsk_%d", i+1),
+		tasks[i] = task.Task{
+			ID:       fmt.Sprintf("tsk_%d", i+1),
 			Command:  fmt.Sprintf("echo 'test %d'", i+1),
 			Status:   "pending",
 			Priority: i + 1,

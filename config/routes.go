@@ -4,7 +4,6 @@ import (
 	"hostlink/app"
 	"hostlink/app/controller/agent"
 	"hostlink/app/controller/health"
-	"hostlink/app/controller/hostlinkcontroller"
 	"hostlink/app/controller/static"
 	"hostlink/app/controller/tasks"
 	"hostlink/app/middleware/agentauth"
@@ -12,23 +11,11 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-func AddRoutes(e *echo.Echo) {
-	root := e.Group("")
-	apiRoute := e.Group("/api")
-
-	v1Route := apiRoute.Group("/v1")
-
-	static.Register(root)
-	health.Register(root)
-	hostlinkcontroller.Register(v1Route.Group("/hostlink"))
-	// agent routes and tasks routes moved to AddRoutesV2
-}
-
 // AddRoutesV2 uses dependency injection pattern for new controllers
 func AddRoutesV2(e *echo.Echo, container *app.Container) {
-	// Call old routes for backward compatibility
-	AddRoutes(e)
-
+	root := e.Group("")
+	static.Register(root)
+	health.Register(root)
 	// Initialize middleware
 	authMiddleware := agentauth.New(container.AgentRepository)
 
@@ -39,7 +26,10 @@ func AddRoutesV2(e *echo.Echo, container *app.Container) {
 	// Register routes using the new pattern
 	agentHandler.RegisterRoutes(e.Group("/api/v1/agent"))
 
-	// Register tasks routes with authentication
+	// TODO: Remove v2 routes once proper auth is in place
+	tasksHandler.RegisterRoutes(e.Group("/api/v2/tasks"))
+
+	// Register authenticated task routes
 	tasksGroup := e.Group("/api/v1/tasks")
 	tasksGroup.Use(authMiddleware)
 	tasksHandler.RegisterRoutes(tasksGroup)

@@ -7,13 +7,13 @@ import (
 	"hostlink/app/services/agentstate"
 	"hostlink/app/services/requestsigner"
 	"hostlink/config/appconf"
-	"hostlink/db/schema/taskschema"
+	"hostlink/domain/task"
 	"net/http"
 	"time"
 )
 
 type TaskFetcher interface {
-	Fetch() ([]taskschema.Task, error)
+	Fetch() ([]task.Task, error)
 }
 
 type taskfetcher struct {
@@ -66,7 +66,7 @@ func NewDefault() (*taskfetcher, error) {
 	})
 }
 
-func (tf *taskfetcher) Fetch() ([]taskschema.Task, error) {
+func (tf *taskfetcher) Fetch() ([]task.Task, error) {
 	url := tf.controlPlaneURL + "/api/v1/tasks"
 
 	req, err := http.NewRequest("GET", url, nil)
@@ -88,7 +88,7 @@ func (tf *taskfetcher) Fetch() ([]taskschema.Task, error) {
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	var tasks []taskschema.Task
+	var tasks []task.Task
 	if err := json.NewDecoder(resp.Body).Decode(&tasks); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
