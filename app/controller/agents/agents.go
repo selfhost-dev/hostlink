@@ -1,5 +1,5 @@
 // Package agent handles agent registration and management
-package agent
+package agents
 
 import (
 	agentService "hostlink/app/service/agent"
@@ -213,4 +213,3 @@ func (h *Handler) RegisterRoutes(g *echo.Group) {
 	g.GET("", h.List)
 	g.GET("/:aid", h.Show)
 }
-

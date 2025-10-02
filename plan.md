@@ -3,8 +3,15 @@
 ## Testing Strategy
 
 - **50% Integration Tests**: End-to-end flows testing CLI → API → Agent → Response
-- **20% Smoke Tests**: Basic functionality tests against running server
+- **20% Smoke Tests**: Basic functionality tests against running server (golang tests with `//go:build smoke` tag)
 - **30% Unit Tests**: Individual function/component tests
+
+## File Structure Guidelines
+
+- **Controllers**: Add methods to existing files (e.g., `agents.go`, `tasks.go`) - don't create new files like `get.go`, `list.go`
+- **Tests**: Add tests to existing `*_test.go` files - don't create separate test files per method
+- **Smoke Tests**: Create golang tests in `test/smoke/` with `//go:build smoke` tag
+  - Run with: `go test -tags=smoke ./test/smoke`
 
 ## Overview
 
@@ -313,14 +320,15 @@ All filtering options are the options present on that particular tables fields.
 
  **Files to create/modify:**
 
-- `app/controller/agents/get.go`
-- `app/controller/agents/get_test.go`
-- `test/integration/agent_api_test.go` (add get tests)
+- `app/controller/agents/agents.go` (add Show method to existing file - don't create new files)
+- `app/controller/agents/agents_test.go` (add Show tests to existing file - don't create new files)
+- `test/integration/agent_details_test.go`
+- `test/smoke/agent_details_test.go` (golang test with `//go:build smoke` tag)
 
  **API Spec:**
 
  ```
- GET /api/v1/agents/:id
+ GET /api/v1/agents/:aid
  Response: {
    "id": "agent-123",
    "fingerprint": "fp-abc-123",
@@ -341,20 +349,24 @@ All filtering options are the options present on that particular tables fields.
 
  **Success Criteria:**
 
-- [ ] Returns full agent details for valid agent ID
-- [ ] Returns 404 for non-existent agent ID
+- [ ] Returns full agent details for valid agent AID
+- [ ] Returns 404 for non-existent agent AID
 - [ ] Includes recent tasks (last 10)
 - [ ] Shows empty array if agent has no tasks
 
  **Tests:**
 
 - **Unit (30%)**: Test agent retrieval logic
+  - Repository: Test finding agent by AID with tasks
+  - Controller: Test Show method (add to existing agents_test.go - don't create separate files)
 - **Integration (50%)**: Test agent details scenarios
   - Get existing agent
   - Get non-existent agent (404)
   - Get agent with recent tasks
   - Get agent without tasks
-- **Smoke (20%)**: Test via curl against running server
+- **Smoke (20%)**: Golang test with `//go:build smoke` tag
+  - Create test/smoke/agent_details_test.go with build tag
+  - Run with: `go test -tags=smoke ./test/smoke -run TestAgentDetailsSmoke`
 
  **Dependencies:** Task 6
 
