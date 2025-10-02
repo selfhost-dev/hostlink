@@ -6,6 +6,7 @@ package integration
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"hostlink/app"
 	"hostlink/app/controller/tasks"
 	"hostlink/config"
@@ -23,7 +24,8 @@ import (
 )
 
 func setupTaskTestEnvironment(t *testing.T) (*echo.Echo, *app.Container) {
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	dbName := fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())
+	db, err := gorm.Open(sqlite.Open(dbName), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("Failed to setup test DB: %v", err)
 	}
@@ -131,7 +133,7 @@ func TestTaskCreation(t *testing.T) {
 
 		assert.Len(t, taskIDs, 3)
 
-		allTasks, err := container.TaskRepository.FindAll(nil)
+		allTasks, err := container.TaskRepository.FindAll(nil, task.TaskFilters{})
 		require.NoError(t, err)
 		assert.GreaterOrEqual(t, len(allTasks), 3)
 	})

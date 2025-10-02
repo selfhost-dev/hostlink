@@ -37,6 +37,7 @@ tmp
 
 # Ignore Claude Code documentation file
 CLAUDE.md
+.claude/agents/*
 
 # Terraform files
 **/.terraform/*

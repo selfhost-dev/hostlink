@@ -23,9 +23,20 @@ func (r *TaskRepository) Create(ctx context.Context, t *task.Task) error {
 	return r.db.WithContext(ctx).Create(t).Error
 }
 
-func (r *TaskRepository) FindAll(ctx context.Context) ([]task.Task, error) {
+func (r *TaskRepository) FindAll(ctx context.Context, filters task.TaskFilters) ([]task.Task, error) {
 	var tasks []task.Task
-	err := r.db.WithContext(ctx).Order("created_at desc").Find(&tasks).Error
+
+	query := r.db.WithContext(ctx)
+
+	if filters.Status != nil {
+		query = query.Where("status = ?", *filters.Status)
+	}
+
+	if filters.Priority != nil {
+		query = query.Where("priority = ?", *filters.Priority)
+	}
+
+	err := query.Order("created_at desc").Find(&tasks).Error
 	return tasks, err
 }
 

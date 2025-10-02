@@ -17,8 +17,8 @@ import (
 )
 
 type mockTaskRepository struct {
-	createFunc  func(ctx context.Context, t *task.Task) error
-	findAllFunc func(ctx context.Context) ([]task.Task, error)
+	createFunc   func(ctx context.Context, t *task.Task) error
+	findAllFunc  func(ctx context.Context, tf task.TaskFilters) ([]task.Task, error)
 	findByIDFunc func(ctx context.Context, id string) (*task.Task, error)
 }
 
@@ -29,9 +29,9 @@ func (m *mockTaskRepository) Create(ctx context.Context, t *task.Task) error {
 	return nil
 }
 
-func (m *mockTaskRepository) FindAll(ctx context.Context) ([]task.Task, error) {
+func (m *mockTaskRepository) FindAll(ctx context.Context, tf task.TaskFilters) ([]task.Task, error) {
 	if m.findAllFunc != nil {
-		return m.findAllFunc(ctx)
+		return m.findAllFunc(ctx, tf)
 	}
 	return []task.Task{}, nil
 }
