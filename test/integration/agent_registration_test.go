@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hostlink/app"
-	agentController "hostlink/app/controller/agent"
+	agentController "hostlink/app/controller/agents"
 	"hostlink/app/services/agentregistrar"
 	"hostlink/config"
 	"hostlink/domain/agent"
