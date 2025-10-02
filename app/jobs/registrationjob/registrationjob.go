@@ -105,11 +105,11 @@ func (j *Job) Register() {
 			return err
 		}
 
-		log.Infof("Agent registered successfully: %s", response.AgentID)
+		log.Infof("Agent registered successfully: %s", response.ID)
 
 		// Save agent ID to state if state manager is configured
 		if j.agentState != nil {
-			if err := j.agentState.SetAgentID(response.AgentID); err != nil {
+			if err := j.agentState.SetAgentID(response.ID); err != nil {
 				log.Errorf("Failed to save agent ID to state: %v", err)
 				// Don't fail the registration if state save fails
 			}
@@ -118,4 +118,3 @@ func (j *Job) Register() {
 		return nil
 	})
 }
-

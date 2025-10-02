@@ -34,7 +34,7 @@ type (
 
 	// RegistrationResponse returned after successful registration
 	RegistrationResponse struct {
-		AgentID      string    `json:"agent_id"`
+		ID           string    `json:"id"`
 		Fingerprint  string    `json:"fingerprint"`
 		Status       string    `json:"status"`
 		Message      string    `json:"message"`
@@ -111,7 +111,7 @@ func (h *Handler) RegisterAgent(c echo.Context) error {
 
 	// Return success response
 	return c.JSON(http.StatusOK, RegistrationResponse{
-		AgentID:      agent.AID,
+		ID:           agent.ID,
 		Fingerprint:  agent.Fingerprint,
 		Status:       "registered",
 		Message:      determineMessage(isNewRegistration),
@@ -143,51 +143,54 @@ func (h *Handler) List(c echo.Context) error {
 	return c.JSON(http.StatusOK, agents)
 }
 
-// Show returns details of a specific agent
+type AgentDetailsResponse struct {
+	ID           string        `json:"id"`
+	Fingerprint  string        `json:"fingerprint"`
+	Status       string        `json:"status"`
+	LastSeen     time.Time     `json:"last_seen"`
+	Tags         []TagResponse `json:"tags"`
+	RegisteredAt time.Time     `json:"registered_at"`
+}
+
+type TagResponse struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
 func (h *Handler) Show(c echo.Context) error {
-	// TODO: Implement Show through service layer
-	// Steps for implementation:
-	// 1. Add GetAgentByAID method to the Registrar interface in app/service/agent/registration.go:
-	//    GetAgentByAID(ctx context.Context, aid string) (*agent.Agent, error)
-	//
-	// 2. Implement GetAgentByAID in RegistrationService:
-	//    func (s *RegistrationService) GetAgentByAID(ctx context.Context, aid string) (*agent.Agent, error) {
-	//        agent, err := s.agentRepo.FindByAID(ctx, aid)
-	//        if err != nil {
-	//            // Return domain-specific error for not found
-	//            return nil, err
-	//        }
-	//        return agent, nil
-	//    }
-	//
-	// 3. Add FindByAID method to agent.Repository interface in domain/agent/repository.go:
-	//    FindByAID(ctx context.Context, aid string) (*Agent, error)
-	//
-	// 4. Implement FindByAID in internal/repository/gorm/agent_repository.go:
-	//    func (r *AgentRepository) FindByAID(ctx context.Context, aid string) (*agent.Agent, error) {
-	//        var a agent.Agent
-	//        err := r.db.WithContext(ctx).Preload("Tags").Where("a_id = ?", aid).First(&a).Error
-	//        if err != nil {
-	//            return nil, err
-	//        }
-	//        return &a, nil
-	//    }
-	//
-	// 5. Update this controller method to use the service:
-	//    aid := c.Param("aid")
-	//    agent, err := h.registrationSvc.GetAgentByAID(ctx, aid)
-	//    if err == gorm.ErrRecordNotFound {
-	//        return c.JSON(http.StatusNotFound, map[string]string{"error": "Agent not found"})
-	//    }
-
-	aid := c.Param("aid")
+	id := c.Param("id")
 	ctx := c.Request().Context()
-	_ = ctx // Remove when implementing
-	_ = aid // Remove when implementing
 
-	return c.JSON(http.StatusNotImplemented, map[string]string{
-		"error": "Show endpoint not yet implemented",
-	})
+	agent, err := h.agentRepo.FindByID(ctx, id)
+	if err != nil {
+		if err.Error() == "record not found" {
+			return c.JSON(http.StatusNotFound, map[string]string{
+				"error": "Agent not found",
+			})
+		}
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to fetch agent: " + err.Error(),
+		})
+	}
+
+	tags := make([]TagResponse, len(agent.Tags))
+	for i, tag := range agent.Tags {
+		tags[i] = TagResponse{
+			Key:   tag.Key,
+			Value: tag.Value,
+		}
+	}
+
+	response := AgentDetailsResponse{
+		ID:           agent.ID,
+		Fingerprint:  agent.Fingerprint,
+		Status:       agent.Status,
+		LastSeen:     agent.LastSeen,
+		Tags:         tags,
+		RegisteredAt: agent.RegisteredAt,
+	}
+
+	return c.JSON(http.StatusOK, response)
 }
 
 func determineEvent(isNew bool) string {
@@ -211,5 +214,5 @@ func (h *Handler) RegisterRoutes(g *echo.Group) {
 
 	// Additional endpoints for management
 	g.GET("", h.List)
-	g.GET("/:aid", h.Show)
+	g.GET("/:id", h.Show)
 }

@@ -10,6 +10,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"hostlink/app"
+	"hostlink/config"
+	"hostlink/domain/agent"
+	"hostlink/domain/task"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -17,11 +21,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"hostlink/app"
-	"hostlink/config"
-	"hostlink/domain/agent"
-	"hostlink/domain/task"
 
 	"github.com/glebarez/sqlite"
 	"github.com/labstack/echo/v4"
@@ -50,7 +49,7 @@ func TestEndToEndAuth_CompleteFlow(t *testing.T) {
 		var regResponse map[string]interface{}
 		err := json.Unmarshal(rec.Body.Bytes(), &regResponse)
 		require.NoError(t, err)
-		agentID := regResponse["agent_id"].(string)
+		agentID := regResponse["id"].(string)
 		require.NotEmpty(t, agentID)
 
 		newTask := &task.Task{
@@ -89,7 +88,7 @@ func TestEndToEndAuth_SignAndVerify(t *testing.T) {
 		err := env.container.AgentRepository.Create(context.Background(), testAgent)
 		require.NoError(t, err)
 
-		agentID := testAgent.AID
+		agentID := testAgent.ID
 		timestamp := time.Now().Unix()
 		nonce := generateE2ENonce(t)
 
@@ -125,7 +124,7 @@ func TestEndToEndAuth_SignAndVerify(t *testing.T) {
 		err := env.container.AgentRepository.Create(context.Background(), testAgent)
 		require.NoError(t, err)
 
-		agentID := testAgent.AID
+		agentID := testAgent.ID
 		timestamp := time.Now().Unix()
 		nonce := generateE2ENonce(t)
 
@@ -162,7 +161,7 @@ func TestEndToEndAuth_MultipleRequestsWithDifferentTimestamps(t *testing.T) {
 		err := env.container.AgentRepository.Create(context.Background(), testAgent)
 		require.NoError(t, err)
 
-		agentID := testAgent.AID
+		agentID := testAgent.ID
 
 		for i := range 5 {
 			timestamp := time.Now().Add(time.Duration(i) * time.Second)
@@ -189,7 +188,7 @@ func TestEndToEndAuth_MultipleRequestsWithDifferentTimestamps(t *testing.T) {
 		err := env.container.AgentRepository.Create(context.Background(), testAgent)
 		require.NoError(t, err)
 
-		agentID := testAgent.AID
+		agentID := testAgent.ID
 
 		timestamps := []time.Time{
 			time.Now().Add(-4 * time.Minute),
@@ -230,7 +229,7 @@ func TestEndToEndAuth_ConcurrentAuthenticatedRequests(t *testing.T) {
 			require.NoError(t, err)
 
 			agents[i] = &testAgentInfo{
-				agentID:    testAgent.AID,
+				agentID:    testAgent.ID,
 				privateKey: privateKey,
 			}
 		}
@@ -273,7 +272,7 @@ func TestEndToEndAuth_ConcurrentAuthenticatedRequests(t *testing.T) {
 		err := env.container.AgentRepository.Create(context.Background(), testAgent)
 		require.NoError(t, err)
 
-		agentID := testAgent.AID
+		agentID := testAgent.ID
 		numRequests := 20
 
 		var wg sync.WaitGroup

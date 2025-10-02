@@ -373,7 +373,7 @@ func TestAgentRegistrationIntegration(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, response)
 
-			assert.NotEmpty(t, response.AgentID)
+			assert.NotEmpty(t, response.ID)
 			assert.Equal(t, "registrar-service-fp", response.Fingerprint)
 			assert.Equal(t, "registered", response.Status)
 
@@ -384,4 +384,3 @@ func TestAgentRegistrationIntegration(t *testing.T) {
 		})
 	})
 }
-
