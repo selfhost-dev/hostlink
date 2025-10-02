@@ -179,3 +179,83 @@ func TestHandler_Create(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
 	})
 }
+
+func TestHandler_Get(t *testing.T) {
+	t.Run("should return task successfully", func(t *testing.T) {
+		expectedTask := &task.Task{
+			ID:       "tsk_123",
+			Command:  "ls -la",
+			Status:   "completed",
+			Priority: 1,
+			Output:   "total 48\ndrwxr-xr-x",
+			ExitCode: 0,
+		}
+
+		repo := &mockTaskRepository{
+			findByIDFunc: func(ctx context.Context, id string) (*task.Task, error) {
+				return expectedTask, nil
+			},
+		}
+		handler := NewHandler(repo)
+
+		e := echo.New()
+		req := httptest.NewRequest(http.MethodGet, "/tasks/tsk_123", nil)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.SetParamNames("id")
+		c.SetParamValues("tsk_123")
+
+		err := handler.Get(c)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		var response task.Task
+		json.Unmarshal(rec.Body.Bytes(), &response)
+		assert.Equal(t, "tsk_123", response.ID)
+		assert.Equal(t, "ls -la", response.Command)
+		assert.Equal(t, "completed", response.Status)
+		assert.Equal(t, 1, response.Priority)
+		assert.Equal(t, "total 48\ndrwxr-xr-x", response.Output)
+		assert.Equal(t, 0, response.ExitCode)
+	})
+
+	t.Run("should return 404 when task not found", func(t *testing.T) {
+		repo := &mockTaskRepository{
+			findByIDFunc: func(ctx context.Context, id string) (*task.Task, error) {
+				return nil, nil
+			},
+		}
+		handler := NewHandler(repo)
+
+		e := echo.New()
+		req := httptest.NewRequest(http.MethodGet, "/tasks/nonexistent", nil)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.SetParamNames("id")
+		c.SetParamValues("nonexistent")
+
+		err := handler.Get(c)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+	})
+
+	t.Run("should return 500 when repository fails", func(t *testing.T) {
+		repo := &mockTaskRepository{
+			findByIDFunc: func(ctx context.Context, id string) (*task.Task, error) {
+				return nil, errors.New("database error")
+			},
+		}
+		handler := NewHandler(repo)
+
+		e := echo.New()
+		req := httptest.NewRequest(http.MethodGet, "/tasks/tsk_123", nil)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.SetParamNames("id")
+		c.SetParamValues("tsk_123")
+
+		err := handler.Get(c)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	})
+}
