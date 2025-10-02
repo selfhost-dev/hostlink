@@ -1,111 +1,124 @@
 # hlctl MVP Implementation Plan
 
 ## Testing Strategy
+
 - **50% Integration Tests**: End-to-end flows testing CLI → API → Agent → Response
 - **20% Smoke Tests**: Basic functionality tests against running server
 - **30% Unit Tests**: Individual function/component tests
 
 ## Overview
-Build a command-line tool (hlctl) to interact with the Hostlink control plane for task and agent management.
 
-**Key Features:**
+ Build a command-line tool (hlctl) to interact with the Hostlink control plane for task and agent management.
+
+ **Key Features:**
+
 - No authentication (MVP - open API)
 - JSON output (modular design for future formats)
 - Agent targeting: broadcast to all agents OR filter by fingerprint/tags
 - Task creation: inline commands OR script files
 - Task and agent management commands
 
----
+ ---
 
 ## Phase 1: Foundation
 
 ### Task 1: Set up hlctl project structure ✅
 
-**Goal**: Create basic CLI application with help and version commands.
+ **Goal**: Create basic CLI application with help and version commands.
 
-**Files to create:**
+ **Files to create:**
+
 - `cmd/hlctl/main.go`
 - `cmd/hlctl/commands/root.go`
 - `go.mod` updates (add urfave/cli dependency)
 
-**Success Criteria:**
+ **Success Criteria:**
+
 - [x] `hlctl --help` shows available commands
 - [x] `hlctl --version` shows version number
 - [x] Project builds successfully: `go build -o hlctl cmd/hlctl/main.go`
 
-**Tests:**
+ **Tests:**
+
 - **Unit (30%)**: Test command registration and flag parsing ✅ 3/3 passing
 - **Integration (50%)**: Test CLI binary execution with --help and --version ✅ 3/3 passing
 - **Smoke (20%)**: Manual verification of help output ✅ 1/1 passing
 
-**Dependencies:** None
+ **Dependencies:** None
 
----
+ ---
 
-### Task 2: Configuration management ⏳
+### Task 2: Configuration management ✅
 
-**Goal**: Support server URL configuration via file and environment variable.
+ **Goal**: Support server URL configuration via file and environment variable.
 
-**Files to create:**
+ **Files to create:**
+
 - `cmd/hlctl/config/config.go`
 - `cmd/hlctl/config/config_test.go`
 
-**Success Criteria:**
-- [ ] Reads `~/.hostlink/config.yml` if exists
-- [ ] Reads `HOSTLINK_SERVER_URL` environment variable
-- [ ] Environment variable overrides config file
-- [ ] Defaults to `http://localhost:8080` if neither set
-- [ ] Config file format: `server: http://example.com`
+ **Success Criteria:**
 
-**Tests:**
+- [x] Reads `~/.hostlink/config.yml` if exists
+- [x] Reads `HOSTLINK_SERVER_URL` environment variable
+- [x] Environment variable overrides config file
+- [x] Defaults to `http://localhost:8080` if neither set
+- [x] Config file format: `server: http://example.com`
+
+ **Tests:**
+
 - **Unit (30%)**: Test config loading logic with mocked filesystem
 - **Integration (50%)**: Test config file creation and reading
 - **Smoke (20%)**: Manual test with different config sources
 
-**Dependencies:** Task 1
+ **Dependencies:** Task 1
 
----
+ ---
 
 ## Phase 2: Control Plane API - Tasks
 
 ### Task 3: Create task creation endpoint ⏳
 
-**Goal**: API endpoint to create tasks with optional agent targeting.
+ **Goal**: API endpoint to create tasks with optional agent targeting.
 
-**Files to create/modify:**
+ **Files to create/modify:**
+
 - `app/controller/tasks/create.go`
 - `app/controller/tasks/create_test.go`
 - `domain/task/task.go` (update if needed)
 - `config/routes.go` (add route)
 - `test/integration/task_api_test.go`
 
-**API Spec:**
-```
-POST /api/v1/tasks
-Body: {
-  "command": "ls -la",
-  "priority": 1,
-  "agent_filters": {
-    "fingerprint": "optional-agent-fingerprint",
-    "tags": [{"key": "env", "value": "prod"}]
-  }
-}
-Response: {
-  "id": "task-123",
-  "command": "ls -la",
-  "status": "pending",
-  "created_at": "2025-10-02T00:00:00Z"
-}
-```
+ **API Spec:**
 
-**Success Criteria:**
+ ```
+ POST /api/v1/tasks
+ Body: {
+   "command": "ls -la",
+   "priority": 1,
+   "agent_filters": {
+     "fingerprint": "optional-agent-fingerprint",
+     "tags": [{"key": "env", "value": "prod"}]
+   }
+ }
+ Response: {
+   "id": "task-123",
+   "command": "ls -la",
+   "status": "pending",
+   "created_at": "2025-10-02T00:00:00Z"
+ }
+ ```
+
+ **Success Criteria:**
+
 - [ ] Creates task without agent_filters (broadcasts to all agents)
 - [ ] Creates task with fingerprint filter
 - [ ] Creates task with tag filters
 - [ ] Returns 400 for invalid request
 - [ ] Returns task ID and status in response
 
-**Tests:**
+ **Tests:**
+
 - **Unit (30%)**: Test request validation, task creation logic
 - **Integration (50%)**: Test full HTTP request/response cycle
   - Create task without filters
@@ -115,36 +128,39 @@ Response: {
   - Invalid request handling
 - **Smoke (20%)**: Test via curl against running server
 
-**Dependencies:** Task 1, 2
+ **Dependencies:** Task 1, 2
 
----
+ ---
 
 ### Task 4: Create task listing endpoint ⏳
 
-**Goal**: API endpoint to list tasks with optional filtering.
+ **Goal**: API endpoint to list tasks with optional filtering.
 
-**Files to create/modify:**
+ **Files to create/modify:**
+
 - `app/controller/tasks/list.go`
 - `app/controller/tasks/list_test.go`
 - `domain/task/repository.go` (add List method with filters)
 - `test/integration/task_api_test.go` (add list tests)
 
-**API Spec:**
-```
-GET /api/v1/tasks?status=pending&agent_id=agent-123
-Response: [
-  {
-    "id": "task-123",
-    "command": "ls -la",
-    "status": "pending",
-    "priority": 1,
-    "created_at": "2025-10-02T00:00:00Z",
-    "agent_id": null
-  }
-]
-```
+ **API Spec:**
 
-**Success Criteria:**
+ ```
+ GET /api/v1/tasks?status=pending&agent_id=agent-123
+ Response: [
+   {
+     "id": "task-123",
+     "command": "ls -la",
+     "status": "pending",
+     "priority": 1,
+     "created_at": "2025-10-02T00:00:00Z",
+     "agent_id": null
+   }
+ ]
+ ```
+
+ **Success Criteria:**
+
 - [ ] Lists all tasks without filters
 - [ ] Filters by status: `?status=pending`
 - [ ] Filters by agent_id: `?agent_id=xxx`
@@ -152,7 +168,8 @@ Response: [
 - [ ] Returns empty array if no tasks match
 - [ ] Returns tasks sorted by created_at DESC
 
-**Tests:**
+ **Tests:**
+
 - **Unit (30%)**: Test filter logic, query building
 - **Integration (50%)**: Test full listing scenarios
   - List all tasks
@@ -162,43 +179,47 @@ Response: [
   - Empty results
 - **Smoke (20%)**: Test via curl against running server
 
-**Dependencies:** Task 3
+ **Dependencies:** Task 3
 
----
+ ---
 
 ### Task 5: Create task details endpoint ⏳
 
-**Goal**: API endpoint to get full task details including output.
+ **Goal**: API endpoint to get full task details including output.
 
-**Files to create/modify:**
+ **Files to create/modify:**
+
 - `app/controller/tasks/get.go`
 - `app/controller/tasks/get_test.go`
 - `test/integration/task_api_test.go` (add get tests)
 
-**API Spec:**
-```
-GET /api/v1/tasks/:id
-Response: {
-  "id": "task-123",
-  "command": "ls -la",
-  "status": "completed",
-  "priority": 1,
-  "agent_id": "agent-456",
-  "output": "total 48\ndrwxr-xr-x...",
-  "exit_code": 0,
-  "created_at": "2025-10-02T00:00:00Z",
-  "started_at": "2025-10-02T00:00:05Z",
-  "completed_at": "2025-10-02T00:00:10Z"
-}
-```
+ **API Spec:**
 
-**Success Criteria:**
+ ```
+ GET /api/v1/tasks/:id
+ Response: {
+   "id": "task-123",
+   "command": "ls -la",
+   "status": "completed",
+   "priority": 1,
+   "agent_id": "agent-456",
+   "output": "total 48\ndrwxr-xr-x...",
+   "exit_code": 0,
+   "created_at": "2025-10-02T00:00:00Z",
+   "started_at": "2025-10-02T00:00:05Z",
+   "completed_at": "2025-10-02T00:00:10Z"
+ }
+ ```
+
+ **Success Criteria:**
+
 - [ ] Returns full task details for valid task ID
 - [ ] Returns 404 for non-existent task ID
 - [ ] Includes output and exit_code when available
 - [ ] Shows null for pending/running tasks without output
 
-**Tests:**
+ **Tests:**
+
 - **Unit (30%)**: Test task retrieval logic
 - **Integration (50%)**: Test task details scenarios
   - Get existing task
@@ -207,48 +228,52 @@ Response: {
   - Get task without output (pending)
 - **Smoke (20%)**: Test via curl against running server
 
-**Dependencies:** Task 4
+ **Dependencies:** Task 4
 
----
+ ---
 
 ## Phase 3: Control Plane API - Agents
 
 ### Task 6: Create agent listing endpoint ⏳
 
-**Goal**: API endpoint to list all registered agents.
+ **Goal**: API endpoint to list all registered agents.
 
-**Files to create/modify:**
+ **Files to create/modify:**
+
 - `app/controller/agents/list.go`
 - `app/controller/agents/list_test.go`
 - `config/routes.go` (add route)
 - `test/integration/agent_api_test.go`
 
-**API Spec:**
-```
-GET /api/v1/agents
-Response: [
-  {
-    "id": "agent-123",
-    "fingerprint": "fp-abc-123",
-    "status": "active",
-    "last_seen": "2025-10-02T00:05:00Z",
-    "tags": [
-      {"key": "env", "value": "prod"},
-      {"key": "region", "value": "us-east-1"}
-    ],
-    "registered_at": "2025-10-01T00:00:00Z"
-  }
-]
-```
+ **API Spec:**
 
-**Success Criteria:**
+ ```
+ GET /api/v1/agents
+ Response: [
+   {
+     "id": "agent-123",
+     "fingerprint": "fp-abc-123",
+     "status": "active",
+     "last_seen": "2025-10-02T00:05:00Z",
+     "tags": [
+       {"key": "env", "value": "prod"},
+       {"key": "region", "value": "us-east-1"}
+     ],
+     "registered_at": "2025-10-01T00:00:00Z"
+   }
+ ]
+ ```
+
+ **Success Criteria:**
+
 - [ ] Lists all registered agents
 - [ ] Includes agent metadata (fingerprint, tags, status)
 - [ ] Shows last_seen timestamp
 - [ ] Returns empty array if no agents registered
 - [ ] Returns agents sorted by last_seen DESC
 
-**Tests:**
+ **Tests:**
+
 - **Unit (30%)**: Test agent listing logic
 - **Integration (50%)**: Test agent listing scenarios
   - List all agents
@@ -257,47 +282,51 @@ Response: [
   - Verify sorting by last_seen
 - **Smoke (20%)**: Test via curl against running server
 
-**Dependencies:** Task 5
+ **Dependencies:** Task 5
 
----
+ ---
 
 ### Task 7: Create agent details endpoint ⏳
 
-**Goal**: API endpoint to get agent details with recent tasks.
+ **Goal**: API endpoint to get agent details with recent tasks.
 
-**Files to create/modify:**
+ **Files to create/modify:**
+
 - `app/controller/agents/get.go`
 - `app/controller/agents/get_test.go`
 - `test/integration/agent_api_test.go` (add get tests)
 
-**API Spec:**
-```
-GET /api/v1/agents/:id
-Response: {
-  "id": "agent-123",
-  "fingerprint": "fp-abc-123",
-  "status": "active",
-  "last_seen": "2025-10-02T00:05:00Z",
-  "tags": [{"key": "env", "value": "prod"}],
-  "registered_at": "2025-10-01T00:00:00Z",
-  "recent_tasks": [
-    {
-      "id": "task-456",
-      "command": "ls -la",
-      "status": "completed",
-      "completed_at": "2025-10-02T00:04:00Z"
-    }
-  ]
-}
-```
+ **API Spec:**
 
-**Success Criteria:**
+ ```
+ GET /api/v1/agents/:id
+ Response: {
+   "id": "agent-123",
+   "fingerprint": "fp-abc-123",
+   "status": "active",
+   "last_seen": "2025-10-02T00:05:00Z",
+   "tags": [{"key": "env", "value": "prod"}],
+   "registered_at": "2025-10-01T00:00:00Z",
+   "recent_tasks": [
+     {
+       "id": "task-456",
+       "command": "ls -la",
+       "status": "completed",
+       "completed_at": "2025-10-02T00:04:00Z"
+     }
+   ]
+ }
+ ```
+
+ **Success Criteria:**
+
 - [ ] Returns full agent details for valid agent ID
 - [ ] Returns 404 for non-existent agent ID
 - [ ] Includes recent tasks (last 10)
 - [ ] Shows empty array if agent has no tasks
 
-**Tests:**
+ **Tests:**
+
 - **Unit (30%)**: Test agent retrieval logic
 - **Integration (50%)**: Test agent details scenarios
   - Get existing agent
@@ -306,17 +335,18 @@ Response: {
   - Get agent without tasks
 - **Smoke (20%)**: Test via curl against running server
 
-**Dependencies:** Task 6
+ **Dependencies:** Task 6
 
----
+ ---
 
 ## Phase 4: CLI - Task Commands
 
 ### Task 8: Implement `hlctl task create` ⏳
 
-**Goal**: CLI command to create tasks via control plane API.
+ **Goal**: CLI command to create tasks via control plane API.
 
-**Files to create:**
+ **Files to create:**
+
 - `cmd/hlctl/commands/task.go`
 - `cmd/hlctl/commands/task_test.go`
 - `cmd/hlctl/client/client.go` (HTTP client)
@@ -324,27 +354,29 @@ Response: {
 - `cmd/hlctl/output/formatter.go` (JSON output formatter)
 - `test/integration/hlctl_task_test.go`
 
-**Command Spec:**
-```bash
-# Inline command
-hlctl task create --command "ls -la"
+ **Command Spec:**
 
-# From file
-hlctl task create --file script.sh
+ ```bash
+ # Inline command
+ hlctl task create --command "ls -la"
+ 
+ # From file
+ hlctl task create --file script.sh
+ 
+ # With agent filters
+ hlctl task create --command "ls" --fingerprint fp-123
+ hlctl task create --command "ls" --tag env=prod
+ hlctl task create --command "ls" --tag env=prod --tag region=us
+ 
+ # With priority
+ hlctl task create --command "ls" --priority 5
+ 
+ # Output
+ {"id":"task-123","status":"pending","created_at":"2025-10-02T00:00:00Z"}
+ ```
 
-# With agent filters
-hlctl task create --command "ls" --fingerprint fp-123
-hlctl task create --command "ls" --tag env=prod
-hlctl task create --command "ls" --tag env=prod --tag region=us
+ **Success Criteria:**
 
-# With priority
-hlctl task create --command "ls" --priority 5
-
-# Output
-{"id":"task-123","status":"pending","created_at":"2025-10-02T00:00:00Z"}
-```
-
-**Success Criteria:**
 - [ ] `--command` flag creates task with inline command
 - [ ] `--file` flag reads file and creates task
 - [ ] Cannot use both `--command` and `--file` (validation error)
@@ -356,7 +388,8 @@ hlctl task create --command "ls" --priority 5
 - [ ] Outputs JSON with task ID
 - [ ] Shows error message on API failure
 
-**Tests:**
+ **Tests:**
+
 - **Unit (30%)**: Test flag parsing, file reading, request building
 - **Integration (50%)**: Test full CLI → API flow
   - Create task with --command
@@ -370,40 +403,43 @@ hlctl task create --command "ls" --priority 5
   - Error: API unreachable
 - **Smoke (20%)**: Manual test against running server
 
-**Dependencies:** Task 3
+ **Dependencies:** Task 3
 
----
+ ---
 
 ### Task 9: Implement `hlctl task list` ⏳
 
-**Goal**: CLI command to list tasks with optional filters.
+ **Goal**: CLI command to list tasks with optional filters.
 
-**Files to create/modify:**
+ **Files to create/modify:**
+
 - `cmd/hlctl/commands/task.go` (add list subcommand)
 - `cmd/hlctl/commands/task_test.go`
 - `test/integration/hlctl_task_test.go` (add list tests)
 
-**Command Spec:**
-```bash
-# List all tasks
-hlctl task list
+ **Command Spec:**
 
-# Filter by status
-hlctl task list --status pending
+ ```bash
+ # List all tasks
+ hlctl task list
+ 
+ # Filter by status
+ hlctl task list --status pending
+ 
+ # Filter by agent
+ hlctl task list --agent agent-123
+ 
+ # Multiple filters
+ hlctl task list --status completed --agent agent-123
+ 
+ # Output
+ [
+   {"id":"task-123","command":"ls -la","status":"pending","created_at":"..."}
+ ]
+ ```
 
-# Filter by agent
-hlctl task list --agent agent-123
+ **Success Criteria:**
 
-# Multiple filters
-hlctl task list --status completed --agent agent-123
-
-# Output
-[
-  {"id":"task-123","command":"ls -la","status":"pending","created_at":"..."}
-]
-```
-
-**Success Criteria:**
 - [ ] Lists all tasks without filters
 - [ ] `--status` flag filters by status
 - [ ] `--agent` flag filters by agent ID
@@ -411,7 +447,8 @@ hlctl task list --status completed --agent agent-123
 - [ ] Outputs JSON array
 - [ ] Shows empty array if no tasks match
 
-**Tests:**
+ **Tests:**
+
 - **Unit (30%)**: Test query parameter building
 - **Integration (50%)**: Test full CLI → API flow
   - List all tasks
@@ -421,43 +458,47 @@ hlctl task list --status completed --agent agent-123
   - Empty results
 - **Smoke (20%)**: Manual test against running server
 
-**Dependencies:** Task 4, 8
+ **Dependencies:** Task 4, 8
 
----
+ ---
 
 ### Task 10: Implement `hlctl task get` ⏳
 
-**Goal**: CLI command to get task details.
+ **Goal**: CLI command to get task details.
 
-**Files to create/modify:**
+ **Files to create/modify:**
+
 - `cmd/hlctl/commands/task.go` (add get subcommand)
 - `cmd/hlctl/commands/task_test.go`
 - `test/integration/hlctl_task_test.go` (add get tests)
 
-**Command Spec:**
-```bash
-# Get task details
-hlctl task get task-123
+ **Command Spec:**
 
-# Output
-{
-  "id":"task-123",
-  "command":"ls -la",
-  "status":"completed",
-  "output":"total 48\n...",
-  "exit_code":0,
-  "created_at":"...",
-  "completed_at":"..."
-}
-```
+ ```bash
+ # Get task details
+ hlctl task get task-123
+ 
+ # Output
+ {
+   "id":"task-123",
+   "command":"ls -la",
+   "status":"completed",
+   "output":"total 48\n...",
+   "exit_code":0,
+   "created_at":"...",
+   "completed_at":"..."
+ }
+ ```
 
-**Success Criteria:**
+ **Success Criteria:**
+
 - [ ] Gets task details for valid task ID
 - [ ] Shows error for non-existent task ID
 - [ ] Outputs JSON with full details
 - [ ] Includes output and exit_code when available
 
-**Tests:**
+ **Tests:**
+
 - **Unit (30%)**: Test task ID validation
 - **Integration (50%)**: Test full CLI → API flow
   - Get existing task
@@ -466,45 +507,49 @@ hlctl task get task-123
   - Get pending task without output
 - **Smoke (20%)**: Manual test against running server
 
-**Dependencies:** Task 5, 8
+ **Dependencies:** Task 5, 8
 
----
+ ---
 
 ## Phase 5: CLI - Agent Commands
 
 ### Task 11: Implement `hlctl agent list` ⏳
 
-**Goal**: CLI command to list agents.
+ **Goal**: CLI command to list agents.
 
-**Files to create:**
+ **Files to create:**
+
 - `cmd/hlctl/commands/agent.go`
 - `cmd/hlctl/commands/agent_test.go`
 - `test/integration/hlctl_agent_test.go`
 
-**Command Spec:**
-```bash
-# List all agents
-hlctl agent list
+ **Command Spec:**
 
-# Output
-[
-  {
-    "id":"agent-123",
-    "fingerprint":"fp-abc",
-    "status":"active",
-    "tags":[{"key":"env","value":"prod"}],
-    "last_seen":"..."
-  }
-]
-```
+ ```bash
+ # List all agents
+ hlctl agent list
+ 
+ # Output
+ [
+   {
+     "id":"agent-123",
+     "fingerprint":"fp-abc",
+     "status":"active",
+     "tags":[{"key":"env","value":"prod"}],
+     "last_seen":"..."
+   }
+ ]
+ ```
 
-**Success Criteria:**
+ **Success Criteria:**
+
 - [ ] Lists all registered agents
 - [ ] Outputs JSON array
 - [ ] Shows empty array if no agents registered
 - [ ] Includes tags in output
 
-**Tests:**
+ **Tests:**
+
 - **Unit (30%)**: Test request building
 - **Integration (50%)**: Test full CLI → API flow
   - List all agents
@@ -512,43 +557,47 @@ hlctl agent list
   - Verify tags included
 - **Smoke (20%)**: Manual test against running server
 
-**Dependencies:** Task 6, 8
+ **Dependencies:** Task 6, 8
 
----
+ ---
 
 ### Task 12: Implement `hlctl agent get` ⏳
 
-**Goal**: CLI command to get agent details.
+ **Goal**: CLI command to get agent details.
 
-**Files to create/modify:**
+ **Files to create/modify:**
+
 - `cmd/hlctl/commands/agent.go` (add get subcommand)
 - `cmd/hlctl/commands/agent_test.go`
 - `test/integration/hlctl_agent_test.go` (add get tests)
 
-**Command Spec:**
-```bash
-# Get agent details
-hlctl agent get agent-123
+ **Command Spec:**
 
-# Output
-{
-  "id":"agent-123",
-  "fingerprint":"fp-abc",
-  "status":"active",
-  "tags":[{"key":"env","value":"prod"}],
-  "recent_tasks":[
-    {"id":"task-456","command":"ls","status":"completed"}
-  ]
-}
-```
+ ```bash
+ # Get agent details
+ hlctl agent get agent-123
+ 
+ # Output
+ {
+   "id":"agent-123",
+   "fingerprint":"fp-abc",
+   "status":"active",
+   "tags":[{"key":"env","value":"prod"}],
+   "recent_tasks":[
+     {"id":"task-456","command":"ls","status":"completed"}
+   ]
+ }
+ ```
 
-**Success Criteria:**
+ **Success Criteria:**
+
 - [ ] Gets agent details for valid agent ID
 - [ ] Shows error for non-existent agent ID
 - [ ] Outputs JSON with full details
 - [ ] Includes recent tasks
 
-**Tests:**
+ **Tests:**
+
 - **Unit (30%)**: Test agent ID validation
 - **Integration (50%)**: Test full CLI → API flow
   - Get existing agent
@@ -557,23 +606,25 @@ hlctl agent get agent-123
   - Get agent without tasks
 - **Smoke (20%)**: Manual test against running server
 
-**Dependencies:** Task 7, 11
+ **Dependencies:** Task 7, 11
 
----
+ ---
 
 ## Phase 6: Agent Output Capture
 
 ### Task 13: Ensure agent captures and reports output ⏳
 
-**Goal**: Verify agents capture stdout/stderr and send to control plane.
+ **Goal**: Verify agents capture stdout/stderr and send to control plane.
 
-**Files to verify/modify:**
+ **Files to verify/modify:**
+
 - `app/services/taskfetcher/taskfetcher.go` (verify output capture)
 - Agent task execution code (verify stdout/stderr capture)
 - Task completion endpoint (verify accepts output)
 - `test/integration/agent_output_test.go`
 
-**Success Criteria:**
+ **Success Criteria:**
+
 - [ ] Agent captures stdout from command execution
 - [ ] Agent captures stderr from command execution
 - [ ] Agent sends output to control plane when completing task
@@ -581,7 +632,8 @@ hlctl agent get agent-123
 - [ ] Output retrievable via GET /api/v1/tasks/:id
 - [ ] Output retrievable via `hlctl task get`
 
-**Tests:**
+ **Tests:**
+
 - **Unit (30%)**: Test output capture logic in isolation
 - **Integration (50%)**: Test full flow
   - Create task with command that produces stdout
@@ -592,113 +644,122 @@ hlctl agent get agent-123
   - Verify output shown in hlctl
 - **Smoke (20%)**: Manual test with real commands
 
-**Dependencies:** Task 10
+ **Dependencies:** Task 10
 
----
+ ---
 
 ## Phase 7: Integration & Documentation
 
 ### Task 14: End-to-end integration tests ⏳
 
-**Goal**: Comprehensive integration tests for complete workflows.
+ **Goal**: Comprehensive integration tests for complete workflows.
 
-**Files to create:**
+ **Files to create:**
+
 - `test/integration/e2e_hlctl_test.go`
 
-**Test Scenarios:**
-1. **Full task lifecycle:**
-   - Create task via hlctl
-   - Agent polls and executes
-   - Verify output via hlctl task get
+ **Test Scenarios:**
 
-2. **Agent filtering:**
-   - Register 2 agents with different tags
-   - Create task targeting specific tag
-   - Verify only matching agent executes
+ 1. **Full task lifecycle:**
+    - Create task via hlctl
+    - Agent polls and executes
+    - Verify output via hlctl task get
 
-3. **Multiple tasks:**
-   - Create 5 tasks with different priorities
-   - Verify agents execute in priority order
+ 2. **Agent filtering:**
+    - Register 2 agents with different tags
+    - Create task targeting specific tag
+    - Verify only matching agent executes
 
-4. **Error scenarios:**
-   - Create task with failing command
-   - Verify exit_code captured
-   - Verify stderr captured
+ 3. **Multiple tasks:**
+    - Create 5 tasks with different priorities
+    - Verify agents execute in priority order
 
-5. **Agent management:**
-   - List agents shows registered agents
-   - Get agent shows recent tasks
+ 4. **Error scenarios:**
+    - Create task with failing command
+    - Verify exit_code captured
+    - Verify stderr captured
 
-6. **File-based task:**
-   - Create task from script file
-   - Verify full script executed
-   - Verify output captured
+ 5. **Agent management:**
+    - List agents shows registered agents
+    - Get agent shows recent tasks
 
-**Success Criteria:**
+ 6. **File-based task:**
+    - Create task from script file
+    - Verify full script executed
+    - Verify output captured
+
+ **Success Criteria:**
+
 - [ ] All 6 scenarios pass
 - [ ] Tests can run against fresh database
 - [ ] Tests clean up after themselves
 - [ ] Tests document expected behavior
 
-**Tests:**
+ **Tests:**
+
 - **Integration (100%)**: All tests are integration tests
 
-**Dependencies:** Task 13
+ **Dependencies:** Task 13
 
----
+ ---
 
 ### Task 15: Documentation ⏳
 
-**Goal**: Update documentation with hlctl usage and examples.
+ **Goal**: Update documentation with hlctl usage and examples.
 
-**Files to create/modify:**
+ **Files to create/modify:**
+
 - `README.md` (add hlctl section)
 - `CONTRIBUTING.md` (add hlctl development)
 - `docs/hlctl.md` (new - detailed guide)
 
-**Content to add:**
+ **Content to add:**
 
-1. **README.md:**
-   - Quick start with hlctl
-   - Installation instructions
-   - Basic usage examples
+ 1. **README.md:**
+    - Quick start with hlctl
+    - Installation instructions
+    - Basic usage examples
 
-2. **CONTRIBUTING.md:**
-   - Building hlctl: `go build -o hlctl cmd/hlctl/main.go`
-   - Running hlctl tests
-   - Adding new commands
+ 2. **CONTRIBUTING.md:**
+    - Building hlctl: `go build -o hlctl cmd/hlctl/main.go`
+    - Running hlctl tests
+    - Adding new commands
 
-3. **docs/hlctl.md:**
-   - Full command reference
-   - Examples for common workflows
-   - Configuration options
-   - Output format details
+ 3. **docs/hlctl.md:**
+    - Full command reference
+    - Examples for common workflows
+    - Configuration options
+    - Output format details
 
-**Success Criteria:**
+ **Success Criteria:**
+
 - [ ] README has hlctl quick start
 - [ ] CONTRIBUTING has hlctl dev guide
 - [ ] docs/hlctl.md has complete reference
 - [ ] All examples tested and working
 - [ ] Documentation covers all implemented features
 
-**Tests:**
+ **Tests:**
+
 - **Smoke (100%)**: Manual verification of all examples
 
-**Dependencies:** Task 14
+ **Dependencies:** Task 14
 
----
+ ---
 
 ## Summary
 
-**Total Tasks:** 15
-**Estimated Completion:** 15 tasks × focused sessions
+ **Total Tasks:** 15
+ **Estimated Completion:** 15 tasks × focused sessions
 
-**Testing Breakdown:**
+ **Testing Breakdown:**
+
 - Integration tests: ~50% (focused on full workflows)
 - Smoke tests: ~20% (manual verification against running server)
 - Unit tests: ~30% (individual components)
 
-**Key Milestones:**
+ **Key Milestones:**
+
 - After Task 7: Full REST API complete
 - After Task 12: Full CLI complete
 - After Task 13: Agent integration complete
