@@ -1,3 +1,5 @@
+//go:build smoke
+
 package smoke
 
 import (
@@ -13,9 +15,6 @@ import (
 )
 
 func TestApplicationSmoke(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping smoke test in short mode")
-	}
 
 	baseURL := "http://localhost:8080"
 

@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"hostlink/app/services/agentstate"
 	"hostlink/app/services/taskfetcher"
-	"hostlink/db/schema/taskschema"
+	"hostlink/domain/task"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -76,10 +76,9 @@ func TestAuthenticatedPolling_FullFlow(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, fetchedTasks, 3)
 		assert.Equal(t, "echo 'integration test 1'", fetchedTasks[0].Command)
-		assert.Contains(t, fetchedTasks[0].PID, "tsk_integration")
+		assert.Contains(t, fetchedTasks[0].ID, "tsk_integration")
 	})
 }
-
 
 func TestAuthenticatedPolling_TimestampReplayProtection(t *testing.T) {
 	t.Run("should allow multiple requests within timestamp window", func(t *testing.T) {
@@ -273,7 +272,7 @@ func setupPollingTestEnv(t *testing.T) *pollingTestEnv {
 	return env
 }
 
-func (env *pollingTestEnv) createMockServer(t *testing.T, tasks []taskschema.Task) {
+func (env *pollingTestEnv) createMockServer(t *testing.T, tasks []task.Task) {
 	t.Helper()
 
 	env.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -324,12 +323,11 @@ func savePrivateKey(t *testing.T, path string, key *rsa.PrivateKey) {
 	require.NoError(t, err)
 }
 
-
-func createTestTasks(count int) []taskschema.Task {
-	tasks := make([]taskschema.Task, count)
+func createTestTasks(count int) []task.Task {
+	tasks := make([]task.Task, count)
 	for i := range count {
-		tasks[i] = taskschema.Task{
-			PID:      fmt.Sprintf("tsk_integration_%d", i+1),
+		tasks[i] = task.Task{
+			ID:       fmt.Sprintf("tsk_integration_%d", i+1),
 			Command:  fmt.Sprintf("echo 'integration test %d'", i+1),
 			Status:   "pending",
 			Priority: i + 1,
