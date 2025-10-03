@@ -48,7 +48,16 @@ type CreateTaskResponse struct {
 
 // Agent represents an agent from the API
 type Agent struct {
-	ID string `json:"id"`
+	ID       string    `json:"id"`
+	Status   string    `json:"status"`
+	LastSeen time.Time `json:"last_seen"`
+	Tags     []Tag     `json:"tags"`
+}
+
+// Tag represents a tag key-value pair
+type Tag struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }
 
 // ListTasksRequest represents filters for listing tasks

@@ -20,6 +20,7 @@ func NewApp() *cli.Command {
 		},
 		Commands: []*cli.Command{
 			TaskCommand(),
+			AgentCommand(),
 		},
 	}
 }
