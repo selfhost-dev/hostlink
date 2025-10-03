@@ -236,6 +236,22 @@ func startTestAPI(t *testing.T) (baseURL string, cleanup func()) {
 	return server.URL, server.Close
 }
 
+func startTestAPIWithTasks(t *testing.T) (baseURL string, cleanup func()) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" && r.URL.Path == "/api/v2/tasks" {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode([]map[string]any{
+				{"id": "task-1", "command": "ls -la", "status": "pending", "priority": 1},
+				{"id": "task-2", "command": "echo test", "status": "completed", "priority": 2},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+
+	return server.URL, server.Close
+}
+
 func createTestScriptFile(t *testing.T, content string) (filePath string, cleanup func()) {
 	tmpDir := t.TempDir()
 	filePath = filepath.Join(tmpDir, "test-script.sh")
@@ -280,4 +296,121 @@ func buildHlctl(t *testing.T) string {
 	require.NoError(t, err, "Failed to build hlctl: %s", string(output))
 
 	return hlctlPath
+}
+
+func TestTaskList_WithoutFilters(t *testing.T) {
+	// Runs `hlctl task list` and verifies it returns JSON array with all tasks from the API
+	apiURL, cleanup := startTestAPIWithTasks(t)
+	defer cleanup()
+
+	stdout, stderr, exitCode := runHlctl(t, "task", "list", "--server", apiURL)
+
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+
+	var tasks []map[string]any
+	err := json.Unmarshal([]byte(stdout), &tasks)
+	require.NoError(t, err, "Output should be valid JSON array")
+	assert.Len(t, tasks, 2)
+}
+
+func TestTaskList_WithStatusFilter(t *testing.T) {
+	// Runs `hlctl task list --status pending` and verifies correct query param is sent to API
+	var capturedStatus string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" && r.URL.Path == "/api/v2/tasks" {
+			capturedStatus = r.URL.Query().Get("status")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode([]map[string]any{
+				{"id": "task-1", "command": "ls", "status": "pending", "priority": 1},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	stdout, stderr, exitCode := runHlctl(t, "task", "list", "--status", "pending", "--server", server.URL)
+
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+	assert.Equal(t, "pending", capturedStatus)
+
+	var tasks []map[string]any
+	json.Unmarshal([]byte(stdout), &tasks)
+	assert.Len(t, tasks, 1)
+}
+
+func TestTaskList_WithAgentFilter(t *testing.T) {
+	// Runs `hlctl task list --agent agt_123` and verifies correct query param is sent to API
+	var capturedAgent string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" && r.URL.Path == "/api/v2/tasks" {
+			capturedAgent = r.URL.Query().Get("agent")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode([]map[string]any{
+				{"id": "task-1", "command": "ls", "status": "pending", "priority": 1},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	stdout, stderr, exitCode := runHlctl(t, "task", "list", "--agent", "agt_123", "--server", server.URL)
+
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+	assert.Equal(t, "agt_123", capturedAgent)
+
+	var tasks []map[string]any
+	json.Unmarshal([]byte(stdout), &tasks)
+	assert.Len(t, tasks, 1)
+}
+
+func TestTaskList_WithMultipleFilters(t *testing.T) {
+	// Runs `hlctl task list --status completed --agent agt_123` and verifies both filters are applied
+	var capturedStatus, capturedAgent string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" && r.URL.Path == "/api/v2/tasks" {
+			capturedStatus = r.URL.Query().Get("status")
+			capturedAgent = r.URL.Query().Get("agent")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode([]map[string]any{
+				{"id": "task-1", "command": "ls", "status": "completed", "priority": 1},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	stdout, stderr, exitCode := runHlctl(t, "task", "list", "--status", "completed", "--agent", "agt_123", "--server", server.URL)
+
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+	assert.Equal(t, "completed", capturedStatus)
+	assert.Equal(t, "agt_123", capturedAgent)
+
+	var tasks []map[string]any
+	json.Unmarshal([]byte(stdout), &tasks)
+	assert.Len(t, tasks, 1)
+}
+
+func TestTaskList_EmptyResults(t *testing.T) {
+	// Runs `hlctl task list` against API returning empty array and verifies output is []
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" && r.URL.Path == "/api/v2/tasks" {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode([]map[string]any{})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	stdout, stderr, exitCode := runHlctl(t, "task", "list", "--server", server.URL)
+
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+
+	var tasks []map[string]any
+	err := json.Unmarshal([]byte(stdout), &tasks)
+	require.NoError(t, err)
+	assert.Len(t, tasks, 0)
 }

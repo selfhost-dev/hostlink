@@ -22,15 +22,15 @@ type TaskRequest struct {
 }
 
 type Task struct {
-	ID          string `json:"ID"`
-	Command     string `json:"Command"`
-	Status      string `json:"Status"`
-	Priority    int    `json:"Priority"`
-	Output      string `json:"Output"`
-	ExitCode    int    `json:"ExitCode"`
-	CreatedAt   string `json:"CreatedAt"`
-	StartedAt   string `json:"StartedAt"`
-	CompletedAt string `json:"CompletedAt"`
+	ID          string `json:"id"`
+	Command     string `json:"command"`
+	Status      string `json:"status"`
+	Priority    int    `json:"priority"`
+	Output      string `json:"output"`
+	ExitCode    int    `json:"exit_code"`
+	CreatedAt   string `json:"created_at"`
+	StartedAt   string `json:"started_at"`
+	CompletedAt string `json:"completed_at"`
 }
 
 type ErrorResponse struct {

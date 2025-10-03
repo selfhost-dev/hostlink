@@ -19,6 +19,7 @@ func TaskCommand() *cli.Command {
 		Usage: "Manage tasks",
 		Commands: []*cli.Command{
 			createTaskCommand(),
+			listTaskCommand(),
 		},
 	}
 }
@@ -137,4 +138,60 @@ func readScriptFile(filePath string) (string, error) {
 		return "", err
 	}
 	return string(content), nil
+}
+
+// listTaskCommand returns the list subcommand
+func listTaskCommand() *cli.Command {
+	return &cli.Command{
+		Name:  "list",
+		Usage: "List tasks",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:  "status",
+				Usage: "Filter by status",
+			},
+			&cli.StringFlag{
+				Name:  "agent",
+				Usage: "Filter by agent ID",
+			},
+		},
+		Action: listTaskAction,
+	}
+}
+
+// listTaskAction handles the list task command
+func listTaskAction(ctx context.Context, c *cli.Command) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	serverURL := cfg.GetServerURL()
+	if c.IsSet("server") {
+		serverURL = c.String("server")
+	}
+
+	httpClient := client.NewHTTPClient(serverURL)
+
+	filters := &client.ListTasksRequest{}
+	if c.IsSet("status") {
+		filters.Status = c.String("status")
+	}
+	if c.IsSet("agent") {
+		filters.AgentID = c.String("agent")
+	}
+
+	tasks, err := httpClient.ListTasks(filters)
+	if err != nil {
+		return fmt.Errorf("failed to list tasks: %w", err)
+	}
+
+	formatter := output.NewJSONFormatter()
+	jsonOutput, err := formatter.Format(tasks)
+	if err != nil {
+		return fmt.Errorf("failed to format output: %w", err)
+	}
+
+	fmt.Println(jsonOutput)
+	return nil
 }

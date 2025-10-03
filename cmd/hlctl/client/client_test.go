@@ -222,3 +222,151 @@ func TestListAgents_ParsesResponse(t *testing.T) {
 	assert.Equal(t, "agt_200", agents[1].ID)
 	assert.Equal(t, "agt_300", agents[2].ID)
 }
+
+func TestListTasks_WithoutFilters(t *testing.T) {
+	// Verifies that GET /api/v2/tasks is called with no query params when filters are nil
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v2/tasks", r.URL.Path)
+		assert.Equal(t, "GET", r.Method)
+		assert.Empty(t, r.URL.Query().Get("status"))
+		assert.Empty(t, r.URL.Query().Get("agent"))
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode([]Task{
+			{ID: "task-1", Command: "ls", Status: "pending", Priority: 1},
+		})
+	}))
+	defer server.Close()
+
+	client := NewHTTPClient(server.URL)
+
+	tasks, err := client.ListTasks(nil)
+
+	require.NoError(t, err)
+	assert.Len(t, tasks, 1)
+	assert.Equal(t, "task-1", tasks[0].ID)
+}
+
+func TestListTasks_WithStatusFilter(t *testing.T) {
+	// Verifies that GET /api/v2/tasks?status=pending is called when Status filter is provided
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v2/tasks", r.URL.Path)
+		assert.Equal(t, "pending", r.URL.Query().Get("status"))
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode([]Task{
+			{ID: "task-1", Command: "ls", Status: "pending", Priority: 1},
+		})
+	}))
+	defer server.Close()
+
+	client := NewHTTPClient(server.URL)
+	filters := &ListTasksRequest{Status: "pending"}
+
+	tasks, err := client.ListTasks(filters)
+
+	require.NoError(t, err)
+	assert.Len(t, tasks, 1)
+	assert.Equal(t, "pending", tasks[0].Status)
+}
+
+func TestListTasks_WithAgentFilter(t *testing.T) {
+	// Verifies that GET /api/v2/tasks?agent=agt_123 is called when AgentID filter is provided
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v2/tasks", r.URL.Path)
+		assert.Equal(t, "agt_123", r.URL.Query().Get("agent"))
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode([]Task{
+			{ID: "task-1", Command: "ls", Status: "pending", Priority: 1},
+		})
+	}))
+	defer server.Close()
+
+	client := NewHTTPClient(server.URL)
+	filters := &ListTasksRequest{AgentID: "agt_123"}
+
+	tasks, err := client.ListTasks(filters)
+
+	require.NoError(t, err)
+	assert.Len(t, tasks, 1)
+}
+
+func TestListTasks_WithMultipleFilters(t *testing.T) {
+	// Verifies that GET /api/v2/tasks?status=completed&agent=agt_123 is called with both filters
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v2/tasks", r.URL.Path)
+		assert.Equal(t, "completed", r.URL.Query().Get("status"))
+		assert.Equal(t, "agt_123", r.URL.Query().Get("agent"))
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode([]Task{
+			{ID: "task-1", Command: "ls", Status: "completed", Priority: 1},
+		})
+	}))
+	defer server.Close()
+
+	client := NewHTTPClient(server.URL)
+	filters := &ListTasksRequest{Status: "completed", AgentID: "agt_123"}
+
+	tasks, err := client.ListTasks(filters)
+
+	require.NoError(t, err)
+	assert.Len(t, tasks, 1)
+	assert.Equal(t, "completed", tasks[0].Status)
+}
+
+func TestListTasks_ParsesResponse(t *testing.T) {
+	// Verifies that JSON array response is correctly parsed into []Task struct with all fields
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode([]map[string]any{
+			{
+				"id":         "task-100",
+				"command":    "ls -la",
+				"status":     "pending",
+				"priority":   5,
+				"created_at": "2025-10-03T10:00:00Z",
+			},
+			{
+				"id":         "task-200",
+				"command":    "echo test",
+				"status":     "completed",
+				"priority":   1,
+				"created_at": "2025-10-03T11:00:00Z",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewHTTPClient(server.URL)
+
+	tasks, err := client.ListTasks(nil)
+
+	require.NoError(t, err)
+	require.Len(t, tasks, 2)
+	assert.Equal(t, "task-100", tasks[0].ID)
+	assert.Equal(t, "ls -la", tasks[0].Command)
+	assert.Equal(t, "pending", tasks[0].Status)
+	assert.Equal(t, 5, tasks[0].Priority)
+	assert.False(t, tasks[0].CreatedAt.IsZero())
+	assert.Equal(t, "task-200", tasks[1].ID)
+}
+
+func TestListTasks_HandlesAPIError(t *testing.T) {
+	// Verifies that non-200 status code returns an error with status code and body in error message
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": "database connection failed",
+		})
+	}))
+	defer server.Close()
+
+	client := NewHTTPClient(server.URL)
+
+	_, err := client.ListTasks(nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "500")
+}

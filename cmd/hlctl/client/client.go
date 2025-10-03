@@ -14,6 +14,7 @@ import (
 type Client interface {
 	CreateTask(req *CreateTaskRequest) (*CreateTaskResponse, error)
 	ListAgents(tags []string) ([]Agent, error)
+	ListTasks(filters *ListTasksRequest) ([]Task, error)
 }
 
 // HTTPClient implements the Client interface
@@ -47,6 +48,21 @@ type CreateTaskResponse struct {
 // Agent represents an agent from the API
 type Agent struct {
 	ID string `json:"id"`
+}
+
+// ListTasksRequest represents filters for listing tasks
+type ListTasksRequest struct {
+	Status  string
+	AgentID string
+}
+
+// Task represents a task from the API
+type Task struct {
+	ID        string    `json:"id"`
+	Command   string    `json:"command"`
+	Status    string    `json:"status"`
+	Priority  int       `json:"priority"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // CreateTask creates a new task via the API
@@ -112,4 +128,41 @@ func (c *HTTPClient) ListAgents(tags []string) ([]Agent, error) {
 	}
 
 	return agents, nil
+}
+
+// ListTasks lists tasks with optional filters
+func (c *HTTPClient) ListTasks(filters *ListTasksRequest) ([]Task, error) {
+	u, err := url.Parse(c.baseURL + "/api/v2/tasks")
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse URL: %w", err)
+	}
+
+	if filters != nil {
+		q := u.Query()
+		if filters.Status != "" {
+			q.Add("status", filters.Status)
+		}
+		if filters.AgentID != "" {
+			q.Add("agent", filters.AgentID)
+		}
+		u.RawQuery = q.Encode()
+	}
+
+	resp, err := c.client.Get(u.String())
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API error: status %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var tasks []Task
+	if err := json.NewDecoder(resp.Body).Decode(&tasks); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return tasks, nil
 }
