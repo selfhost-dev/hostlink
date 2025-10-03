@@ -58,9 +58,9 @@ func TestTaskCreation(t *testing.T) {
 		require.NoError(t, err)
 		defer resp.Body.Close()
 
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, http.StatusCreated, resp.StatusCode)
 
-		var response task.Task
+		var response tasks.TaskResponse
 		json.NewDecoder(resp.Body).Decode(&response)
 		assert.NotEmpty(t, response.ID)
 		assert.Equal(t, "echo hello", response.Command)

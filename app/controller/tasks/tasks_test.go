@@ -78,9 +78,9 @@ func TestHandler_Create(t *testing.T) {
 
 		err := handler.Create(c)
 		require.NoError(t, err)
-		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, http.StatusCreated, rec.Code)
 
-		var response task.Task
+		var response TaskResponse
 		json.Unmarshal(rec.Body.Bytes(), &response)
 		assert.Equal(t, "tsk_123", response.ID)
 		assert.Equal(t, "echo hello", response.Command)

@@ -12,5 +12,14 @@ func NewApp() *cli.Command {
 		Name:    "hlctl",
 		Usage:   "Hostlink CLI - manage tasks and agents",
 		Version: version.Version,
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:  "server",
+				Usage: "Hostlink server URL",
+			},
+		},
+		Commands: []*cli.Command{
+			TaskCommand(),
+		},
 	}
 }
