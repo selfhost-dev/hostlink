@@ -15,6 +15,7 @@ type Client interface {
 	CreateTask(req *CreateTaskRequest) (*CreateTaskResponse, error)
 	ListAgents(tags []string) ([]Agent, error)
 	ListTasks(filters *ListTasksRequest) ([]Task, error)
+	GetTask(taskID string) (*TaskDetails, error)
 }
 
 // HTTPClient implements the Client interface
@@ -63,6 +64,20 @@ type Task struct {
 	Status    string    `json:"status"`
 	Priority  int       `json:"priority"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// TaskDetails represents full task details from the API
+type TaskDetails struct {
+	ID          string     `json:"id"`
+	Command     string     `json:"command"`
+	Status      string     `json:"status"`
+	Priority    int        `json:"priority"`
+	AgentID     *string    `json:"agent_id"`
+	Output      *string    `json:"output"`
+	ExitCode    *int       `json:"exit_code"`
+	CreatedAt   time.Time  `json:"created_at"`
+	StartedAt   *time.Time `json:"started_at"`
+	CompletedAt *time.Time `json:"completed_at"`
 }
 
 // CreateTask creates a new task via the API
@@ -165,4 +180,27 @@ func (c *HTTPClient) ListTasks(filters *ListTasksRequest) ([]Task, error) {
 	}
 
 	return tasks, nil
+}
+
+// GetTask gets task details by ID
+func (c *HTTPClient) GetTask(taskID string) (*TaskDetails, error) {
+	url := fmt.Sprintf("%s/api/v2/tasks/%s", c.baseURL, taskID)
+
+	resp, err := c.client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API error: status %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var task TaskDetails
+	if err := json.NewDecoder(resp.Body).Decode(&task); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &task, nil
 }

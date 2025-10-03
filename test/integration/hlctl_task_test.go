@@ -414,3 +414,118 @@ func TestTaskList_EmptyResults(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, tasks, 0)
 }
+
+func TestTaskGet_WithExistingTask(t *testing.T) {
+	// Runs `hlctl task get task-123` and verifies JSON output with full task details
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" && r.URL.Path == "/api/v2/tasks/task-123" {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]any{
+				"id":         "task-123",
+				"command":    "ls -la",
+				"status":     "completed",
+				"priority":   2,
+				"created_at": "2025-10-03T00:00:00Z",
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	stdout, stderr, exitCode := runHlctl(t, "task", "get", "task-123", "--server", server.URL)
+
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+	assertJSONOutput(t, stdout, map[string]any{
+		"id":      "task-123",
+		"command": "ls -la",
+		"status":  "completed",
+	})
+}
+
+func TestTaskGet_WithNonExistentTask(t *testing.T) {
+	// Runs `hlctl task get invalid-id` and verifies 404 error is returned
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" && r.URL.Path == "/api/v2/tasks/invalid-id" {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error": "task not found",
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	_, stderr, exitCode := runHlctl(t, "task", "get", "invalid-id", "--server", server.URL)
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.NotEmpty(t, stderr)
+}
+
+func TestTaskGet_WithOutput(t *testing.T) {
+	// Runs `hlctl task get` on completed task and verifies output and exit_code are included
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" && r.URL.Path == "/api/v2/tasks/task-456" {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]any{
+				"id":         "task-456",
+				"command":    "echo hello",
+				"status":     "completed",
+				"priority":   1,
+				"output":     "hello\n",
+				"exit_code":  0,
+				"created_at": "2025-10-03T00:00:00Z",
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	stdout, stderr, exitCode := runHlctl(t, "task", "get", "task-456", "--server", server.URL)
+
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+
+	var result map[string]any
+	err := json.Unmarshal([]byte(stdout), &result)
+	require.NoError(t, err)
+
+	assert.Equal(t, "task-456", result["id"])
+	assert.Equal(t, "hello\n", result["output"])
+	assert.Equal(t, float64(0), result["exit_code"])
+}
+
+func TestTaskGet_PendingTaskWithoutOutput(t *testing.T) {
+	// Runs `hlctl task get` on pending task and verifies output/exit_code are null
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" && r.URL.Path == "/api/v2/tasks/task-789" {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]any{
+				"id":         "task-789",
+				"command":    "sleep 100",
+				"status":     "pending",
+				"priority":   1,
+				"output":     nil,
+				"exit_code":  nil,
+				"created_at": "2025-10-03T00:00:00Z",
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	stdout, stderr, exitCode := runHlctl(t, "task", "get", "task-789", "--server", server.URL)
+
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+
+	var result map[string]any
+	err := json.Unmarshal([]byte(stdout), &result)
+	require.NoError(t, err)
+
+	assert.Equal(t, "task-789", result["id"])
+	assert.Equal(t, "pending", result["status"])
+	assert.Nil(t, result["output"])
+	assert.Nil(t, result["exit_code"])
+}

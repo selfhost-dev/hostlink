@@ -370,3 +370,81 @@ func TestListTasks_HandlesAPIError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "500")
 }
+
+func TestGetTask_WithValidID(t *testing.T) {
+	// Verifies GET /api/v2/tasks/{id} returns task details
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v2/tasks/task-123", r.URL.Path)
+		assert.Equal(t, "GET", r.Method)
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":           "task-123",
+			"command":      "ls -la",
+			"status":       "completed",
+			"priority":     2,
+			"agent_id":     "agt_1",
+			"output":       "total 48\ndrwxr-xr-x",
+			"exit_code":    0,
+			"created_at":   "2025-10-03T00:00:00Z",
+			"started_at":   "2025-10-03T00:00:05Z",
+			"completed_at": "2025-10-03T00:00:10Z",
+		})
+	}))
+	defer server.Close()
+
+	client := NewHTTPClient(server.URL)
+
+	task, err := client.GetTask("task-123")
+
+	require.NoError(t, err)
+	assert.Equal(t, "task-123", task.ID)
+	assert.Equal(t, "ls -la", task.Command)
+	assert.Equal(t, "completed", task.Status)
+	assert.Equal(t, 2, task.Priority)
+	assert.NotNil(t, task.AgentID)
+	assert.Equal(t, "agt_1", *task.AgentID)
+	assert.NotNil(t, task.Output)
+	assert.Equal(t, "total 48\ndrwxr-xr-x", *task.Output)
+	assert.NotNil(t, task.ExitCode)
+	assert.Equal(t, 0, *task.ExitCode)
+	assert.False(t, task.CreatedAt.IsZero())
+	assert.NotNil(t, task.StartedAt)
+	assert.NotNil(t, task.CompletedAt)
+}
+
+func TestGetTask_With404Response(t *testing.T) {
+	// Verifies non-existent task ID returns error
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": "task not found",
+		})
+	}))
+	defer server.Close()
+
+	client := NewHTTPClient(server.URL)
+
+	_, err := client.GetTask("invalid-id")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "404")
+}
+
+func TestGetTask_HandlesAPIError(t *testing.T) {
+	// Verifies non-200/404 status code returns error
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": "internal server error",
+		})
+	}))
+	defer server.Close()
+
+	client := NewHTTPClient(server.URL)
+
+	_, err := client.GetTask("task-123")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "500")
+}
