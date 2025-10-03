@@ -16,6 +16,7 @@ type Client interface {
 	ListAgents(tags []string) ([]Agent, error)
 	ListTasks(filters *ListTasksRequest) ([]Task, error)
 	GetTask(taskID string) (*TaskDetails, error)
+	GetAgent(agentID string) (*Agent, error)
 }
 
 // HTTPClient implements the Client interface
@@ -48,10 +49,11 @@ type CreateTaskResponse struct {
 
 // Agent represents an agent from the API
 type Agent struct {
-	ID       string    `json:"id"`
-	Status   string    `json:"status"`
-	LastSeen time.Time `json:"last_seen"`
-	Tags     []Tag     `json:"tags"`
+	ID           string    `json:"id"`
+	Status       string    `json:"status"`
+	LastSeen     time.Time `json:"last_seen"`
+	Tags         []Tag     `json:"tags"`
+	RegisteredAt time.Time `json:"registered_at"`
 }
 
 // Tag represents a tag key-value pair
@@ -212,4 +214,27 @@ func (c *HTTPClient) GetTask(taskID string) (*TaskDetails, error) {
 	}
 
 	return &task, nil
+}
+
+// GetAgent gets agent details by ID
+func (c *HTTPClient) GetAgent(agentID string) (*Agent, error) {
+	url := fmt.Sprintf("%s/api/v1/agents/%s", c.baseURL, agentID)
+
+	resp, err := c.client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API error: status %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var agent Agent
+	if err := json.NewDecoder(resp.Body).Decode(&agent); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &agent, nil
 }

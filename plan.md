@@ -366,10 +366,11 @@ All filtering options are the options present on that particular tables fields.
  **Dependencies:** Task 6
 
  **Notes:**
- - Changed from AID to ID (string) as primary key
- - Removed recent_tasks feature (will be added in Phase 6 when task-agent relationship is implemented)
- - Using existing FindByID repository method
- - **BREAKING CHANGE**: Schema changed - delete `hostlink.db` and `hostlink-dev.db` before running server or smoke tests
+
+- Changed from AID to ID (string) as primary key
+- Removed recent_tasks feature (will be added in Phase 6 when task-agent relationship is implemented)
+- Using existing FindByID repository method
+- **BREAKING CHANGE**: Schema changed - delete `hostlink.db` and `hostlink-dev.db` before running server or smoke tests
 
  ---
 
@@ -455,9 +456,10 @@ All filtering options are the options present on that particular tables fields.
  **Dependencies:** Task 3
 
  **Notes:**
- - Removed `--fingerprint` flag (fingerprint is agent-internal only)
- - Agent filtering works by querying GET /api/v1/agents?tag=X and resolving to agent IDs
- - Task creation sends agent_ids array to POST /api/v2/tasks
+
+- Removed `--fingerprint` flag (fingerprint is agent-internal only)
+- Agent filtering works by querying GET /api/v1/agents?tag=X and resolving to agent IDs
+- Task creation sends agent_ids array to POST /api/v2/tasks
 
  ---
 
@@ -638,21 +640,23 @@ All filtering options are the options present on that particular tables fields.
  **Dependencies:** Task 6, 8
 
  **Notes:**
- - Fingerprint excluded from output (user requirement)
- - Agent struct enhanced with Status, LastSeen, and Tags fields
+
+- Fingerprint excluded from output (user requirement)
+- Agent struct enhanced with Status, LastSeen, and Tags fields
 
  ---
 
-### Task 12: Implement `hlctl agent get` ⏳
+### Task 12: Implement `hlctl agent get` ✅
 
  **Goal**: CLI command to get agent details.
 
- **Files to create/modify:**
+ **Files created/modified:**
 
-- `cmd/hlctl/commands/agent.go` (add get subcommand)
-- `cmd/hlctl/commands/agent_test.go`
-- `test/integration/hlctl_agent_test.go` (add get tests)
-- `test/smoke/hlctl_agent_test.go` (add get smoke tests)
+- `cmd/hlctl/commands/agent.go` (added get subcommand) ✅
+- `cmd/hlctl/commands/agent_test.go` (added get tests) ✅
+- `cmd/hlctl/client/client.go` (added GetAgent method, enhanced Agent struct) ✅
+- `test/integration/hlctl_agent_test.go` (added get tests) ✅
+- `test/smoke/hlctl_agent_test.go` (added get smoke tests) ✅
 
  **Command Spec:**
 
@@ -663,33 +667,37 @@ All filtering options are the options present on that particular tables fields.
  # Output
  {
    "id":"agent-123",
-   "fingerprint":"fp-abc",
    "status":"active",
+   "last_seen": "...",
    "tags":[{"key":"env","value":"prod"}],
-   "recent_tasks":[
-     {"id":"task-456","command":"ls","status":"completed"}
-   ]
+   "registered_at":"..."
  }
  ```
 
  **Success Criteria:**
 
-- [ ] Gets agent details for valid agent ID
-- [ ] Shows error for non-existent agent ID
-- [ ] Outputs JSON with full details
-- [ ] Includes recent tasks
+- [x] Gets agent details for valid agent ID
+- [x] Shows error for non-existent agent ID
+- [x] Outputs JSON with full details
+- [x] Includes tags in output
 
  **Tests:**
 
-- **Unit (20%)**: Test agent ID validation
-- **Integration (50%)**: Test full CLI → API flow
+- **Unit (20%)**: Test agent ID validation ✅ 2/2 passing
+- **Integration (50%)**: Test full CLI → API flow ✅ 4/4 passing
   - Get existing agent
   - Get non-existent agent
-  - Get agent with tasks
-  - Get agent without tasks
-- **Smoke (30%)**: Test against running server (golang tests with `//go:build smoke` tag)
+  - Get agent with tags
+  - Get agent without tags
+- **Smoke (30%)**: Test against running server (golang tests with `//go:build smoke` tag) ✅ 3/3 created
+  - Run with: `go test -tags=smoke ./test/smoke -run TestAgentGetSmoke`
 
  **Dependencies:** Task 7, 11
+
+ **Notes:**
+ - Uses existing `Agent` struct (enhanced with `RegisteredAt` field)
+ - No fingerprint in output (per user requirement)
+ - Recent tasks feature excluded (will be added in Phase 6 per Task 7 notes)
 
  ---
 

@@ -17,6 +17,7 @@ func AgentCommand() *cli.Command {
 		Usage: "Manage agents",
 		Commands: []*cli.Command{
 			listAgentCommand(),
+			getAgentCommand(),
 		},
 	}
 }
@@ -49,6 +50,49 @@ func listAgentAction(ctx context.Context, c *cli.Command) error {
 
 	formatter := output.NewJSONFormatter()
 	jsonOutput, err := formatter.Format(agents)
+	if err != nil {
+		return fmt.Errorf("failed to format output: %w", err)
+	}
+
+	fmt.Println(jsonOutput)
+	return nil
+}
+
+func getAgentCommand() *cli.Command {
+	return &cli.Command{
+		Name:      "get",
+		Usage:     "Get agent details",
+		ArgsUsage: "<agent-id>",
+		Action:    getAgentAction,
+	}
+}
+
+func getAgentAction(ctx context.Context, c *cli.Command) error {
+	if c.Args().Len() != 1 {
+		return fmt.Errorf("agent ID is required")
+	}
+
+	agentID := c.Args().Get(0)
+
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	serverURL := cfg.GetServerURL()
+	if c.IsSet("server") {
+		serverURL = c.String("server")
+	}
+
+	httpClient := client.NewHTTPClient(serverURL)
+
+	agent, err := httpClient.GetAgent(agentID)
+	if err != nil {
+		return fmt.Errorf("failed to get agent: %w", err)
+	}
+
+	formatter := output.NewJSONFormatter()
+	jsonOutput, err := formatter.Format(agent)
 	if err != nil {
 		return fmt.Errorf("failed to format output: %w", err)
 	}
