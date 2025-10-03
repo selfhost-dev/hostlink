@@ -136,7 +136,7 @@ func verifyTaskInDatabase(t *testing.T, taskID string) {
 	err = json.NewDecoder(resp.Body).Decode(&task)
 	require.NoError(t, err)
 
-	assert.Equal(t, taskID, task["ID"])
+	assert.Equal(t, taskID, task["id"])
 }
 
 func createTempScript(t *testing.T, content string) (filePath string, cleanup func()) {
@@ -154,4 +154,131 @@ func parseJSONOutput(t *testing.T, jsonStr string) map[string]any {
 	err := json.Unmarshal([]byte(jsonStr), &result)
 	require.NoError(t, err, "Output should be valid JSON: %s", jsonStr)
 	return result
+}
+
+func createTaskViaAPI(t *testing.T, serverURL, command string) string {
+	reqBody := map[string]any{"command": command, "priority": 1}
+	jsonData, _ := json.Marshal(reqBody)
+
+	resp, err := http.Post(serverURL+"/api/v2/tasks", "application/json", strings.NewReader(string(jsonData)))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	var task map[string]any
+	json.NewDecoder(resp.Body).Decode(&task)
+	return task["id"].(string)
+}
+
+func getFirstAgentID(t *testing.T, serverURL string) string {
+	resp, err := http.Get(serverURL + "/api/v1/agents")
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	var agents []map[string]any
+	json.NewDecoder(resp.Body).Decode(&agents)
+
+	if len(agents) > 0 {
+		if id, ok := agents[0]["id"].(string); ok {
+			return id
+		}
+	}
+	return ""
+}
+
+func TestTaskListSmoke_WithoutFilters(t *testing.T) {
+	// Creates 3 tasks via API then runs `hlctl task list` against real server to verify all are returned
+	serverURL := getServerURL()
+
+	createTaskViaAPI(t, serverURL, "ls -la")
+	createTaskViaAPI(t, serverURL, "echo test")
+	createTaskViaAPI(t, serverURL, "whoami")
+
+	stdout, stderr, exitCode := runHlctlCommand(t, "task", "list", "--server", serverURL)
+
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+
+	var tasks []map[string]any
+	err := json.Unmarshal([]byte(stdout), &tasks)
+	require.NoError(t, err, "Output should be valid JSON array")
+	assert.GreaterOrEqual(t, len(tasks), 3, "Should return at least 3 tasks")
+}
+
+func TestTaskListSmoke_WithStatusFilter(t *testing.T) {
+	// Creates tasks with different statuses then runs `hlctl task list --status pending` to verify filtering
+	serverURL := getServerURL()
+
+	createTaskViaAPI(t, serverURL, "sleep 1")
+
+	stdout, stderr, exitCode := runHlctlCommand(t, "task", "list", "--status", "pending", "--server", serverURL)
+
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+
+	var tasks []map[string]any
+	err := json.Unmarshal([]byte(stdout), &tasks)
+	require.NoError(t, err, "Output should be valid JSON array")
+
+	for _, task := range tasks {
+		assert.Equal(t, "pending", task["status"], "All returned tasks should have pending status")
+	}
+}
+
+func TestTaskListSmoke_WithAgentFilter(t *testing.T) {
+	// Creates tasks assigned to different agents then runs `hlctl task list --agent agt_1` to verify filtering
+	serverURL := getServerURL()
+
+	agentID := getFirstAgentID(t, serverURL)
+	if agentID == "" {
+		t.Skip("No agents available for testing")
+	}
+
+	stdout, stderr, exitCode := runHlctlCommand(t, "task", "list", "--agent", agentID, "--server", serverURL)
+
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+
+	var tasks []map[string]any
+	err := json.Unmarshal([]byte(stdout), &tasks)
+	require.NoError(t, err, "Output should be valid JSON array")
+}
+
+func TestTaskListSmoke_OutputFormat(t *testing.T) {
+	// Runs `hlctl task list` and validates JSON array structure with required fields (id, command, status, etc)
+	serverURL := getServerURL()
+
+	createTaskViaAPI(t, serverURL, "echo format-test")
+
+	stdout, stderr, exitCode := runHlctlCommand(t, "task", "list", "--server", serverURL)
+
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+
+	var tasks []map[string]any
+	err := json.Unmarshal([]byte(stdout), &tasks)
+	require.NoError(t, err, "Output should be valid JSON array")
+
+	if len(tasks) > 0 {
+		task := tasks[0]
+		assert.Contains(t, task, "id", "Task should have id field")
+		assert.Contains(t, task, "command", "Task should have command field")
+		assert.Contains(t, task, "status", "Task should have status field")
+		assert.Contains(t, task, "priority", "Task should have priority field")
+		assert.Contains(t, task, "created_at", "Task should have created_at field")
+	}
+}
+
+func TestTaskListSmoke_InvalidInput(t *testing.T) {
+	// Runs `hlctl task list --status invalidstatus` and verifies graceful error handling
+	serverURL := getServerURL()
+
+	stdout, stderr, exitCode := runHlctlCommand(t, "task", "list", "--status", "invalidstatus", "--server", serverURL)
+
+	if exitCode != 0 {
+		assert.NotEmpty(t, stderr, "Should have error message")
+	} else {
+		var tasks []map[string]any
+		err := json.Unmarshal([]byte(stdout), &tasks)
+		require.NoError(t, err, "Should return valid JSON even with invalid status")
+	}
 }

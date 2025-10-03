@@ -69,7 +69,7 @@ func TestEndToEndAuth_CompleteFlow(t *testing.T) {
 		err = json.Unmarshal(pollRec.Body.Bytes(), &tasks)
 		require.NoError(t, err)
 		assert.Len(t, tasks, 1)
-		assert.Equal(t, "echo 'e2e test'", tasks[0]["Command"])
+		assert.Equal(t, "echo 'e2e test'", tasks[0]["command"])
 	})
 }
 

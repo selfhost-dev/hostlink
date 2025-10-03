@@ -3,8 +3,8 @@
 ## Testing Strategy
 
 - **50% Integration Tests**: End-to-end flows testing CLI → API → Agent → Response
-- **20% Smoke Tests**: Basic functionality tests against running server (golang tests with `//go:build smoke` tag)
-- **30% Unit Tests**: Individual function/component tests
+- **30% Smoke Tests**: Basic functionality tests against running server (golang tests with `//go:build smoke` tag)
+- **20% Unit Tests**: Individual function/component tests
 
 ## File Structure Guidelines
 
@@ -430,7 +430,7 @@ All filtering options are the options present on that particular tables fields.
 
  **Tests:**
 
-- **Unit (30%)**: ✅ 21/21 passing
+- **Unit (20%)**: ✅ 21/21 passing
   - Client tests: 12/12 passing (CreateTask, ListAgents)
   - Output formatter tests: 6/6 passing (JSON formatting)
   - Command tests: 3/3 passing (readScriptFile)
@@ -445,7 +445,7 @@ All filtering options are the options present on that particular tables fields.
   - Error: API unreachable
   - Error: file does not exist
   - Verify JSON output
-- **Smoke (20%)**: ✅ 5/5 test cases created (run with: `go test -tags=smoke ./test/smoke -run TestTaskCreateSmoke`)
+- **Smoke (30%)**: ✅ 5/5 golang tests with `//go:build smoke` tag (run with: `go test -tags=smoke ./test/smoke -run TestTaskCreateSmoke`)
   - With command
   - With file
   - With tags
@@ -461,31 +461,33 @@ All filtering options are the options present on that particular tables fields.
 
  ---
 
-### Task 9: Implement `hlctl task list` ⏳
+### Task 9: Implement `hlctl task list` ✅
 
  **Goal**: CLI command to list tasks with optional filters.
 
- **Files to create/modify:**
+ **Files created/modified:**
 
-- `cmd/hlctl/commands/task.go` (add list subcommand)
-- `cmd/hlctl/commands/task_test.go`
-- `test/integration/hlctl_task_test.go` (add list tests)
+- `cmd/hlctl/commands/task.go` (added list subcommand) ✅
+- `cmd/hlctl/client/client.go` (added ListTasks method) ✅
+- `cmd/hlctl/client/client_test.go` (added 6 unit tests) ✅
+- `test/integration/hlctl_task_test.go` (added 5 integration tests) ✅
+- `test/smoke/hlctl_task_test.go` (added 5 smoke tests) ✅
 
  **Command Spec:**
 
  ```bash
  # List all tasks
  hlctl task list
- 
+
  # Filter by status
  hlctl task list --status pending
- 
+
  # Filter by agent
  hlctl task list --agent agent-123
- 
+
  # Multiple filters
  hlctl task list --status completed --agent agent-123
- 
+
  # Output
  [
    {"id":"task-123","command":"ls -la","status":"pending","created_at":"..."}
@@ -494,23 +496,35 @@ All filtering options are the options present on that particular tables fields.
 
  **Success Criteria:**
 
-- [ ] Lists all tasks without filters
-- [ ] `--status` flag filters by status
-- [ ] `--agent` flag filters by agent ID
-- [ ] Combines multiple filters
-- [ ] Outputs JSON array
-- [ ] Shows empty array if no tasks match
+- [x] Lists all tasks without filters
+- [x] `--status` flag filters by status
+- [x] `--agent` flag filters by agent ID
+- [x] Combines multiple filters
+- [x] Outputs JSON array
+- [x] Shows empty array if no tasks match
 
  **Tests:**
 
-- **Unit (30%)**: Test query parameter building
-- **Integration (50%)**: Test full CLI → API flow
+- **Unit (20%)**: Test query parameter building ✅ 6/6 passing
+  - TestListTasks_WithoutFilters
+  - TestListTasks_WithStatusFilter
+  - TestListTasks_WithAgentFilter
+  - TestListTasks_WithMultipleFilters
+  - TestListTasks_ParsesResponse
+  - TestListTasks_HandlesAPIError
+- **Integration (50%)**: Test full CLI → API flow ✅ 5/5 passing
   - List all tasks
   - Filter by status
   - Filter by agent
   - Multiple filters
   - Empty results
-- **Smoke (20%)**: Manual test against running server
+- **Smoke (30%)**: Test against running server (golang tests with `//go:build smoke` tag) ✅ 5/5 created
+  - TestTaskListSmoke_WithoutFilters
+  - TestTaskListSmoke_WithStatusFilter
+  - TestTaskListSmoke_WithAgentFilter
+  - TestTaskListSmoke_OutputFormat
+  - TestTaskListSmoke_InvalidInput
+  - Run with: `go test -tags=smoke ./test/smoke -run TestTaskListSmoke`
 
  **Dependencies:** Task 4, 8
 
@@ -525,13 +539,14 @@ All filtering options are the options present on that particular tables fields.
 - `cmd/hlctl/commands/task.go` (add get subcommand)
 - `cmd/hlctl/commands/task_test.go`
 - `test/integration/hlctl_task_test.go` (add get tests)
+- `test/smoke/hlctl_task_test.go` (add get smoke tests)
 
  **Command Spec:**
 
  ```bash
  # Get task details
  hlctl task get task-123
- 
+
  # Output
  {
    "id":"task-123",
@@ -553,13 +568,13 @@ All filtering options are the options present on that particular tables fields.
 
  **Tests:**
 
-- **Unit (30%)**: Test task ID validation
+- **Unit (20%)**: Test task ID validation
 - **Integration (50%)**: Test full CLI → API flow
   - Get existing task
   - Get non-existent task
   - Get task with output
   - Get pending task without output
-- **Smoke (20%)**: Manual test against running server
+- **Smoke (30%)**: Test against running server (golang tests with `//go:build smoke` tag)
 
  **Dependencies:** Task 5, 8
 
@@ -576,13 +591,14 @@ All filtering options are the options present on that particular tables fields.
 - `cmd/hlctl/commands/agent.go`
 - `cmd/hlctl/commands/agent_test.go`
 - `test/integration/hlctl_agent_test.go`
+- `test/smoke/hlctl_agent_test.go`
 
  **Command Spec:**
 
  ```bash
  # List all agents
  hlctl agent list
- 
+
  # Output
  [
    {
@@ -604,12 +620,12 @@ All filtering options are the options present on that particular tables fields.
 
  **Tests:**
 
-- **Unit (30%)**: Test request building
+- **Unit (20%)**: Test request building
 - **Integration (50%)**: Test full CLI → API flow
   - List all agents
   - List when no agents exist
   - Verify tags included
-- **Smoke (20%)**: Manual test against running server
+- **Smoke (30%)**: Test against running server (golang tests with `//go:build smoke` tag)
 
  **Dependencies:** Task 6, 8
 
@@ -624,13 +640,14 @@ All filtering options are the options present on that particular tables fields.
 - `cmd/hlctl/commands/agent.go` (add get subcommand)
 - `cmd/hlctl/commands/agent_test.go`
 - `test/integration/hlctl_agent_test.go` (add get tests)
+- `test/smoke/hlctl_agent_test.go` (add get smoke tests)
 
  **Command Spec:**
 
  ```bash
  # Get agent details
  hlctl agent get agent-123
- 
+
  # Output
  {
    "id":"agent-123",
@@ -652,13 +669,13 @@ All filtering options are the options present on that particular tables fields.
 
  **Tests:**
 
-- **Unit (30%)**: Test agent ID validation
+- **Unit (20%)**: Test agent ID validation
 - **Integration (50%)**: Test full CLI → API flow
   - Get existing agent
   - Get non-existent agent
   - Get agent with tasks
   - Get agent without tasks
-- **Smoke (20%)**: Manual test against running server
+- **Smoke (30%)**: Test against running server (golang tests with `//go:build smoke` tag)
 
  **Dependencies:** Task 7, 11
 
@@ -676,6 +693,7 @@ All filtering options are the options present on that particular tables fields.
 - Agent task execution code (verify stdout/stderr capture)
 - Task completion endpoint (verify accepts output)
 - `test/integration/agent_output_test.go`
+- `test/smoke/agent_output_test.go`
 
  **Success Criteria:**
 
@@ -688,7 +706,7 @@ All filtering options are the options present on that particular tables fields.
 
  **Tests:**
 
-- **Unit (30%)**: Test output capture logic in isolation
+- **Unit (20%)**: Test output capture logic in isolation
 - **Integration (50%)**: Test full flow
   - Create task with command that produces stdout
   - Create task with command that produces stderr
@@ -696,7 +714,7 @@ All filtering options are the options present on that particular tables fields.
   - Verify output stored in database
   - Verify output returned via API
   - Verify output shown in hlctl
-- **Smoke (20%)**: Manual test with real commands
+- **Smoke (30%)**: Test with real commands against running server (golang tests with `//go:build smoke` tag)
 
  **Dependencies:** Task 10
 
@@ -809,8 +827,8 @@ All filtering options are the options present on that particular tables fields.
  **Testing Breakdown:**
 
 - Integration tests: ~50% (focused on full workflows)
-- Smoke tests: ~20% (manual verification against running server)
-- Unit tests: ~30% (individual components)
+- Smoke tests: ~30% (golang tests with `//go:build smoke` tag against running server)
+- Unit tests: ~20% (individual components)
 
  **Key Milestones:**
 
