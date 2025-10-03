@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hostlink/domain/task"
 	"net/http"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/mattn/go-shellwords"
@@ -22,6 +23,13 @@ type (
 	TaskRequest struct {
 		Command  string `json:"command" validate:"required"`
 		Priority int    `json:"priority"`
+	}
+	TaskResponse struct {
+		ID        string    `json:"id"`
+		Command   string    `json:"command"`
+		Status    string    `json:"status"`
+		Priority  int       `json:"priority"`
+		CreatedAt time.Time `json:"created_at"`
 	}
 )
 
@@ -60,7 +68,15 @@ func (h Handler) Create(c echo.Context) error {
 		})
 	}
 
-	return c.JSON(http.StatusOK, newTask)
+	response := TaskResponse{
+		ID:        newTask.ID,
+		Command:   newTask.Command,
+		Status:    newTask.Status,
+		Priority:  newTask.Priority,
+		CreatedAt: newTask.CreatedAt,
+	}
+
+	return c.JSON(http.StatusCreated, response)
 }
 
 func (h Handler) Index(c echo.Context) error {

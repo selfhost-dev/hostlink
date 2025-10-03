@@ -14,7 +14,7 @@ func Trigger(fn func(tsk []task.Task) error) {
 
 	tfetcher, err := taskfetcher.NewDefault()
 	if err != nil {
-		log.Error("failed to initialize task fetcher", err)
+		log.Error("failed to initialize task fetcher ", err)
 		return
 	}
 

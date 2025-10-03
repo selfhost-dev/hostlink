@@ -48,7 +48,7 @@ func TestTaskDetailsSmoke_GetExistingTask(t *testing.T) {
 	require.NoError(t, err, "Failed to create task - is the server running?")
 	defer createResp.Body.Close()
 
-	require.Equal(t, http.StatusOK, createResp.StatusCode)
+	require.Equal(t, http.StatusCreated, createResp.StatusCode)
 
 	var createdTask Task
 	json.NewDecoder(createResp.Body).Decode(&createdTask)
