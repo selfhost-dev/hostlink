@@ -590,16 +590,16 @@ All filtering options are the options present on that particular tables fields.
 
 ## Phase 5: CLI - Agent Commands
 
-### Task 11: Implement `hlctl agent list` ⏳
+### Task 11: Implement `hlctl agent list` ✅
 
  **Goal**: CLI command to list agents.
 
- **Files to create:**
+ **Files created:**
 
-- `cmd/hlctl/commands/agent.go`
-- `cmd/hlctl/commands/agent_test.go`
-- `test/integration/hlctl_agent_test.go`
-- `test/smoke/hlctl_agent_test.go`
+- `cmd/hlctl/commands/agent.go` ✅
+- `cmd/hlctl/commands/agent_test.go` ✅
+- `test/integration/hlctl_agent_test.go` ✅
+- `test/smoke/hlctl_agent_test.go` ✅
 
  **Command Spec:**
 
@@ -611,7 +611,6 @@ All filtering options are the options present on that particular tables fields.
  [
    {
      "id":"agent-123",
-     "fingerprint":"fp-abc",
      "status":"active",
      "tags":[{"key":"env","value":"prod"}],
      "last_seen":"..."
@@ -621,21 +620,26 @@ All filtering options are the options present on that particular tables fields.
 
  **Success Criteria:**
 
-- [ ] Lists all registered agents
-- [ ] Outputs JSON array
-- [ ] Shows empty array if no agents registered
-- [ ] Includes tags in output
+- [x] Lists all registered agents
+- [x] Outputs JSON array
+- [x] Shows empty array if no agents registered
+- [x] Includes tags in output
 
  **Tests:**
 
-- **Unit (20%)**: Test request building
-- **Integration (50%)**: Test full CLI → API flow
+- **Unit (20%)**: Test request building ✅ 1/1 passing
+- **Integration (50%)**: Test full CLI → API flow ✅ 3/3 passing
   - List all agents
   - List when no agents exist
   - Verify tags included
-- **Smoke (30%)**: Test against running server (golang tests with `//go:build smoke` tag)
+- **Smoke (30%)**: Test against running server (golang tests with `//go:build smoke` tag) ✅ 3/3 created
+  - Run with: `go test -tags=smoke ./test/smoke -run TestAgentListSmoke`
 
  **Dependencies:** Task 6, 8
+
+ **Notes:**
+ - Fingerprint excluded from output (user requirement)
+ - Agent struct enhanced with Status, LastSeen, and Tags fields
 
  ---
 
