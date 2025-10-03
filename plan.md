@@ -530,16 +530,17 @@ All filtering options are the options present on that particular tables fields.
 
  ---
 
-### Task 10: Implement `hlctl task get` ⏳
+### Task 10: Implement `hlctl task get` ✅
 
  **Goal**: CLI command to get task details.
 
- **Files to create/modify:**
+ **Files created/modified:**
 
-- `cmd/hlctl/commands/task.go` (add get subcommand)
-- `cmd/hlctl/commands/task_test.go`
-- `test/integration/hlctl_task_test.go` (add get tests)
-- `test/smoke/hlctl_task_test.go` (add get smoke tests)
+- `cmd/hlctl/commands/task.go` (added get subcommand) ✅
+- `cmd/hlctl/client/client.go` (added GetTask method and TaskDetails struct) ✅
+- `cmd/hlctl/client/client_test.go` (added 3 unit tests) ✅
+- `test/integration/hlctl_task_test.go` (added 4 integration tests) ✅
+- `test/smoke/hlctl_task_test.go` (added 3 smoke tests) ✅
 
  **Command Spec:**
 
@@ -561,20 +562,27 @@ All filtering options are the options present on that particular tables fields.
 
  **Success Criteria:**
 
-- [ ] Gets task details for valid task ID
-- [ ] Shows error for non-existent task ID
-- [ ] Outputs JSON with full details
-- [ ] Includes output and exit_code when available
+- [x] Gets task details for valid task ID
+- [x] Shows error for non-existent task ID
+- [x] Outputs JSON with full details
+- [x] Includes output and exit_code when available
 
  **Tests:**
 
-- **Unit (20%)**: Test task ID validation
-- **Integration (50%)**: Test full CLI → API flow
-  - Get existing task
-  - Get non-existent task
-  - Get task with output
-  - Get pending task without output
-- **Smoke (30%)**: Test against running server (golang tests with `//go:build smoke` tag)
+- **Unit (20%)**: ✅ 3/3 passing
+  - TestGetTask_WithValidID
+  - TestGetTask_With404Response
+  - TestGetTask_HandlesAPIError
+- **Integration (50%)**: ✅ 4/4 passing
+  - TestTaskGet_WithExistingTask
+  - TestTaskGet_WithNonExistentTask
+  - TestTaskGet_WithOutput
+  - TestTaskGet_PendingTaskWithoutOutput
+- **Smoke (30%)**: ✅ 3/3 created (golang tests with `//go:build smoke` tag)
+  - TestTaskGetSmoke_WithExistingTask
+  - TestTaskGetSmoke_WithNonExistentTask
+  - TestTaskGetSmoke_OutputFormat
+  - Run with: `go test -tags=smoke ./test/smoke -run TestTaskGetSmoke`
 
  **Dependencies:** Task 5, 8
 

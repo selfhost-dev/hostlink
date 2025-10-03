@@ -282,3 +282,56 @@ func TestTaskListSmoke_InvalidInput(t *testing.T) {
 		require.NoError(t, err, "Should return valid JSON even with invalid status")
 	}
 }
+
+func TestTaskGetSmoke_WithExistingTask(t *testing.T) {
+	// Creates task then runs `hlctl task get <id>` and verifies full task details are returned
+	serverURL := getServerURL()
+
+	stdout, _, _ := runHlctlCommand(t, "task", "create", "--command", "echo smoke", "--server", serverURL)
+	createResult := parseJSONOutput(t, stdout)
+	taskID := createResult["id"].(string)
+
+	stdout, stderr, exitCode := runHlctlCommand(t, "task", "get", taskID, "--server", serverURL)
+
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+
+	result := parseJSONOutput(t, stdout)
+	assert.Equal(t, taskID, result["id"])
+	assert.Contains(t, result, "command")
+	assert.Contains(t, result, "status")
+}
+
+func TestTaskGetSmoke_WithNonExistentTask(t *testing.T) {
+	// Runs `hlctl task get invalid-id` and verifies appropriate error handling
+	serverURL := getServerURL()
+
+	_, stderr, exitCode := runHlctlCommand(t, "task", "get", "nonexistent-task-id", "--server", serverURL)
+
+	assert.NotEqual(t, 0, exitCode, "Should fail for non-existent task")
+	assert.NotEmpty(t, stderr, "Should have error message")
+}
+
+func TestTaskGetSmoke_OutputFormat(t *testing.T) {
+	// Runs `hlctl task get` and validates JSON object structure with all fields (id, command, status, output, exit_code, timestamps)
+	serverURL := getServerURL()
+
+	stdout, _, _ := runHlctlCommand(t, "task", "create", "--command", "whoami", "--server", serverURL)
+	createResult := parseJSONOutput(t, stdout)
+	taskID := createResult["id"].(string)
+
+	stdout, stderr, exitCode := runHlctlCommand(t, "task", "get", taskID, "--server", serverURL)
+
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+
+	result := parseJSONOutput(t, stdout)
+
+	assert.Contains(t, result, "id", "Should have id field")
+	assert.Contains(t, result, "command", "Should have command field")
+	assert.Contains(t, result, "status", "Should have status field")
+	assert.Contains(t, result, "priority", "Should have priority field")
+	assert.Contains(t, result, "created_at", "Should have created_at field")
+
+	assert.NotEmpty(t, result["id"])
+	assert.NotEmpty(t, result["command"])
+	assert.NotEmpty(t, result["status"])
+}

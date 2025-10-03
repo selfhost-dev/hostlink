@@ -20,6 +20,7 @@ func TaskCommand() *cli.Command {
 		Commands: []*cli.Command{
 			createTaskCommand(),
 			listTaskCommand(),
+			getTaskCommand(),
 		},
 	}
 }
@@ -188,6 +189,51 @@ func listTaskAction(ctx context.Context, c *cli.Command) error {
 
 	formatter := output.NewJSONFormatter()
 	jsonOutput, err := formatter.Format(tasks)
+	if err != nil {
+		return fmt.Errorf("failed to format output: %w", err)
+	}
+
+	fmt.Println(jsonOutput)
+	return nil
+}
+
+// getTaskCommand returns the get subcommand
+func getTaskCommand() *cli.Command {
+	return &cli.Command{
+		Name:      "get",
+		Usage:     "Get task details",
+		ArgsUsage: "<task-id>",
+		Action:    getTaskAction,
+	}
+}
+
+// getTaskAction handles the get task command
+func getTaskAction(ctx context.Context, c *cli.Command) error {
+	if c.Args().Len() != 1 {
+		return fmt.Errorf("task ID is required")
+	}
+
+	taskID := c.Args().Get(0)
+
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	serverURL := cfg.GetServerURL()
+	if c.IsSet("server") {
+		serverURL = c.String("server")
+	}
+
+	httpClient := client.NewHTTPClient(serverURL)
+
+	task, err := httpClient.GetTask(taskID)
+	if err != nil {
+		return fmt.Errorf("failed to get task: %w", err)
+	}
+
+	formatter := output.NewJSONFormatter()
+	jsonOutput, err := formatter.Format(task)
 	if err != nil {
 		return fmt.Errorf("failed to format output: %w", err)
 	}
