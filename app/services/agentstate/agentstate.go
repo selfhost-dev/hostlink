@@ -7,10 +7,8 @@ import (
 	"sync"
 )
 
-var (
-	// Global mutex for file operations
-	fileMutex sync.RWMutex
-)
+// Global mutex for file operations
+var fileMutex sync.RWMutex
 
 type AgentState struct {
 	AgentID      string            `json:"agent_id,omitempty"`
@@ -92,3 +90,4 @@ func (s *AgentState) Clear() error {
 
 	return nil
 }
+

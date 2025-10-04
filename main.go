@@ -5,6 +5,8 @@ import (
 	"hostlink/app"
 	"hostlink/app/jobs/registrationjob"
 	"hostlink/app/jobs/taskjob"
+	"hostlink/app/services/taskfetcher"
+	"hostlink/app/services/taskreporter"
 	"hostlink/config"
 	"hostlink/config/appconf"
 	"hostlink/internal/dbconn"
@@ -41,9 +43,29 @@ func main() {
 	config.AddRoutesV2(e, container)
 
 	// TODO(iAziz786): check if we can move this cron in app
-	taskjob.Register(container.TaskRepository)
-	registrationJob := registrationjob.New()
-	registrationJob.Register()
+	// Agent-related jobs run in goroutine after registration
+	go func() {
+		registeredChan := make(chan bool, 1)
+
+		registrationJob := registrationjob.New()
+		registrationJob.Register(registeredChan)
+
+		// Wait for registration to complete
+		<-registeredChan
+		log.Println("Agent registered, starting task job...")
+
+		fetcher, err := taskfetcher.NewDefault()
+		if err != nil {
+			log.Printf("failed to initialize task fetcher: %v", err)
+			return
+		}
+		reporter, err := taskreporter.NewDefault()
+		if err != nil {
+			log.Printf("failed to initialize task reporter: %v", err)
+			return
+		}
+		taskjob.Register(fetcher, reporter)
+	}()
 
 	log.Fatal(e.Start(fmt.Sprintf(":%s", appconf.Port())))
 }

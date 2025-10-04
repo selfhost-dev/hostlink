@@ -12,7 +12,103 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestNew_InitializesAgentState(t *testing.T) {
+	t.Run("should initialize agent state in New()", func(t *testing.T) {
+		job := New()
+
+		if job.agentState == nil {
+			t.Error("Expected agentState to be initialized, but got nil")
+		}
+	})
+}
+
+func TestRegistration_SavesAgentIDToState(t *testing.T) {
+	t.Run("should save agent ID after successful registration", func(t *testing.T) {
+		stateDir := t.TempDir()
+		agentState := agentstate.New(stateDir)
+		expectedAgentID := "test-agent-123"
+
+		mockRegistrar := &mockRegistrar{
+			preparePublicKeyFunc: func() (string, error) {
+				return "test-key", nil
+			},
+			getDefaultTagsFunc: func() []agentregistrar.TagPair {
+				return []agentregistrar.TagPair{}
+			},
+			registerFunc: func(fp string, pk string, tags []agentregistrar.TagPair) (*agentregistrar.RegistrationResponse, error) {
+				return &agentregistrar.RegistrationResponse{
+					ID: expectedAgentID,
+				}, nil
+			},
+		}
+
+		mockFingerprintMgr := &mockFingerprintManager{
+			loadOrGenerateFunc: func() (*fingerprint.FingerprintData, bool, error) {
+				return &fingerprint.FingerprintData{
+					Fingerprint: "test-fp",
+				}, true, nil
+			},
+		}
+
+		job := NewWithConfig(&Config{
+			FingerprintManager: mockFingerprintMgr,
+			Registrar:          mockRegistrar,
+			AgentState:         agentState,
+			Trigger:            Trigger,
+		})
+
+		err := executeRegistrationJob(t, job)
+		require.NoError(t, err)
+
+		savedState := agentstate.New(stateDir)
+		err = savedState.Load()
+		require.NoError(t, err, "agent.json should be created")
+
+		assert.Equal(t, expectedAgentID, savedState.GetAgentID(),
+			"Agent ID should be saved to state file")
+	})
+
+	t.Run("should not fail when AgentState is nil", func(t *testing.T) {
+		expectedAgentID := "test-agent-456"
+
+		mockRegistrar := &mockRegistrar{
+			preparePublicKeyFunc: func() (string, error) {
+				return "test-key", nil
+			},
+			getDefaultTagsFunc: func() []agentregistrar.TagPair {
+				return []agentregistrar.TagPair{}
+			},
+			registerFunc: func(fp string, pk string, tags []agentregistrar.TagPair) (*agentregistrar.RegistrationResponse, error) {
+				return &agentregistrar.RegistrationResponse{
+					ID: expectedAgentID,
+				}, nil
+			},
+		}
+
+		mockFingerprintMgr := &mockFingerprintManager{
+			loadOrGenerateFunc: func() (*fingerprint.FingerprintData, bool, error) {
+				return &fingerprint.FingerprintData{
+					Fingerprint: "test-fp",
+				}, true, nil
+			},
+		}
+
+		job := NewWithConfig(&Config{
+			FingerprintManager: mockFingerprintMgr,
+			Registrar:          mockRegistrar,
+			AgentState:         nil,
+			Trigger:            Trigger,
+		})
+
+		err := executeRegistrationJob(t, job)
+		require.NoError(t, err, "Registration should succeed even without AgentState")
+	})
+}
 
 func TestRegister(t *testing.T) {
 	t.Run("should start registration in goroutine", func(t *testing.T) {
@@ -34,7 +130,7 @@ func TestRegister(t *testing.T) {
 		})
 
 		// Call Register which should invoke trigger in a goroutine
-		job.Register()
+		job.Register(nil)
 
 		// Check if Trigger was called
 		select {
@@ -70,7 +166,7 @@ func TestRegister(t *testing.T) {
 			Trigger:            mockTrigger,
 		})
 
-		job.Register()
+		job.Register(nil)
 
 		// Wait for the function to be passed to Trigger
 		select {
@@ -117,7 +213,7 @@ func TestRegister(t *testing.T) {
 			Trigger:            mockTrigger,
 		})
 
-		job.Register()
+		job.Register(nil)
 
 		// Wait for the function to be passed to Trigger
 		select {
@@ -170,7 +266,7 @@ func TestRegister(t *testing.T) {
 			Trigger:            mockTrigger,
 		})
 
-		job.Register()
+		job.Register(nil)
 
 		// Wait for the function to be passed to Trigger
 		select {
@@ -237,7 +333,7 @@ func TestRegister(t *testing.T) {
 			Trigger:            mockTrigger,
 		})
 
-		job.Register()
+		job.Register(nil)
 
 		// Wait for the function to be passed to Trigger
 		select {
@@ -309,7 +405,7 @@ func TestRegister(t *testing.T) {
 			Trigger:            mockTrigger,
 		})
 
-		job.Register()
+		job.Register(nil)
 
 		// Wait for the function to be passed to Trigger
 		select {
@@ -362,7 +458,7 @@ func TestRegister(t *testing.T) {
 			Trigger:            mockTrigger,
 		})
 
-		job.Register()
+		job.Register(nil)
 
 		// Wait for the function to be passed to Trigger
 		select {
@@ -419,7 +515,7 @@ func TestRegister(t *testing.T) {
 			Trigger:            mockTrigger,
 		})
 
-		job.Register()
+		job.Register(nil)
 
 		// Wait for the function to be passed to Trigger
 		select {
@@ -473,7 +569,7 @@ func TestRegister(t *testing.T) {
 			Trigger:            mockTrigger,
 		})
 
-		job.Register()
+		job.Register(nil)
 
 		// Wait for the function to be passed to Trigger
 		select {
@@ -875,7 +971,7 @@ func TestIntegrationFlow(t *testing.T) {
 		})
 
 		// Start the registration
-		job.Register()
+		job.Register(nil)
 
 		// Wait for and execute the registration synchronously
 		var triggerFunc func() error
@@ -952,7 +1048,7 @@ func TestIntegrationFlow(t *testing.T) {
 		})
 
 		// Start the registration
-		job.Register()
+		job.Register(nil)
 
 		// Wait for and execute the registration
 		var triggerFunc func() error
@@ -1024,7 +1120,7 @@ func TestIntegrationFlow(t *testing.T) {
 		})
 
 		// Start the registration
-		job.Register()
+		job.Register(nil)
 
 		// Wait for and execute the registration
 		var triggerFunc func() error
@@ -1104,7 +1200,7 @@ func TestIntegrationFlow(t *testing.T) {
 		})
 
 		// Start the registration
-		job.Register()
+		job.Register(nil)
 
 		// Wait for and execute the registration
 		var triggerFunc func() error
@@ -1193,7 +1289,7 @@ func TestIntegrationFlow(t *testing.T) {
 		})
 
 		// Start the registration
-		job.Register()
+		job.Register(nil)
 
 		// Wait for and execute the registration
 		var triggerFunc func() error
@@ -1457,7 +1553,7 @@ func TestConcurrency(t *testing.T) {
 
 		// Launch multiple concurrent registration attempts
 		for range concurrentAttempts {
-			job.Register()
+			job.Register(nil)
 		}
 
 		// Collect all trigger functions
@@ -1615,7 +1711,7 @@ func executeRegistrationJob(t *testing.T, job *Job) error {
 	})
 
 	// Start registration
-	job.Register()
+	job.Register(nil)
 
 	// Execute and return result
 	select {

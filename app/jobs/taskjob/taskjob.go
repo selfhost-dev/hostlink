@@ -3,21 +3,41 @@
 package taskjob
 
 import (
-	"context"
 	"fmt"
+	"hostlink/app/services/taskfetcher"
+	"hostlink/app/services/taskreporter"
 	"hostlink/domain/task"
 	"os"
 	"os/exec"
+
+	"github.com/labstack/gommon/log"
 )
 
-func Register(repo task.Repository) {
-	go Trigger(func(tasks []task.Task) error {
-		for _, t := range tasks {
+func Register(tf taskfetcher.TaskFetcher, tr taskreporter.TaskReporter) {
+	go Trigger(func() error {
+		allTasks, err := tf.Fetch()
+		if err != nil {
+			return err
+		}
+		incompleteTasks := []task.Task{}
+		for _, task := range allTasks {
+			if task.Status != "completed" {
+				incompleteTasks = append(incompleteTasks, task)
+			}
+		}
+		for _, t := range incompleteTasks {
 			tempFile, err := os.CreateTemp("", "*_script.sh")
 			if err != nil {
 				t.Error = fmt.Sprintf("failed to create temp file: %v", err)
 				t.Status = "failed"
-				repo.Update(context.Background(), &t)
+				if reportErr := tr.Report(t.ID, &taskreporter.TaskResult{
+					Status:   t.Status,
+					Output:   t.Output,
+					Error:    t.Error,
+					ExitCode: t.ExitCode,
+				}); reportErr != nil {
+					log.Errorf("failed to report task %s: %v", t.ID, reportErr)
+				}
 				continue
 			}
 			defer os.Remove(tempFile.Name())
@@ -26,14 +46,28 @@ func Register(repo task.Repository) {
 				tempFile.Close()
 				t.Error = fmt.Sprintf("failed to write script: %v", err)
 				t.Status = "failed"
-				repo.Update(context.Background(), &t)
+				if reportErr := tr.Report(t.ID, &taskreporter.TaskResult{
+					Status:   t.Status,
+					Output:   t.Output,
+					Error:    t.Error,
+					ExitCode: t.ExitCode,
+				}); reportErr != nil {
+					log.Errorf("failed to report task %s: %v", t.ID, reportErr)
+				}
 				continue
 			}
 
 			if err := os.Chmod(tempFile.Name(), 0755); err != nil {
 				t.Error = fmt.Sprintf("failed to chmod: %v", err)
 				t.Status = "failed"
-				repo.Update(context.Background(), &t)
+				if reportErr := tr.Report(t.ID, &taskreporter.TaskResult{
+					Status:   t.Status,
+					Output:   t.Output,
+					Error:    t.Error,
+					ExitCode: t.ExitCode,
+				}); reportErr != nil {
+					log.Errorf("failed to report task %s: %v", t.ID, reportErr)
+				}
 				continue
 			}
 			execCmd := exec.Command("/bin/sh", tempFile.Name())
@@ -50,8 +84,13 @@ func Register(repo task.Repository) {
 			t.Error = errMsg
 			t.Output = string(output)
 			t.Status = "completed"
-			if err := repo.Update(context.Background(), &t); err != nil {
-				return err
+			if reportErr := tr.Report(t.ID, &taskreporter.TaskResult{
+				Status:   t.Status,
+				Output:   t.Output,
+				Error:    t.Error,
+				ExitCode: t.ExitCode,
+			}); reportErr != nil {
+				log.Errorf("failed to report task %s: %v", t.ID, reportErr)
 			}
 		}
 		return nil
