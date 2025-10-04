@@ -58,6 +58,50 @@ Hostlink uses **one-way authentication** for secure agent-to-server communicatio
 - ✅ Horizontally scalable authentication
 - ✅ HTTPS/TLS for transport security
 
+## hlctl - CLI Tool
+
+`hlctl` is the command-line interface for managing Hostlink tasks and agents.
+
+### Quick Start
+
+**Build from source:**
+```bash
+go build -o hlctl cmd/hlctl/main.go
+```
+
+**Configure server URL:**
+```bash
+# Via environment variable
+export HOSTLINK_SERVER_URL=http://localhost:8080
+
+# Or via config file
+mkdir -p ~/.hostlink
+echo "server: http://localhost:8080" > ~/.hostlink/config.yml
+```
+
+**Create and execute a task:**
+```bash
+# Create a task
+hlctl task create --command "echo 'Hello World'"
+
+# List tasks
+hlctl task list
+
+# Get task details
+hlctl task get <task-id>
+```
+
+**Manage agents:**
+```bash
+# List all agents
+hlctl agent list
+
+# Get agent details
+hlctl agent get <agent-id>
+```
+
+For complete documentation, see [docs/hlctl.md](docs/hlctl.md).
+
 ## Upcoming Features
 
 - Agent self update
