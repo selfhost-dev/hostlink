@@ -259,3 +259,93 @@ func TestHandler_Get(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	})
 }
+
+func TestHandler_Update(t *testing.T) {
+	t.Run("should accept valid update request", func(t *testing.T) {
+		repo := &mockTaskRepository{
+			findByIDFunc: func(ctx context.Context, id string) (*task.Task, error) {
+				return &task.Task{
+					ID:      "tsk_123",
+					Command: "ls -la",
+					Status:  "pending",
+				}, nil
+			},
+		}
+		handler := NewHandler(repo)
+
+		e := echo.New()
+		e.Validator = validator.New()
+
+		reqBody := map[string]interface{}{
+			"status":    "completed",
+			"output":    "command output",
+			"error":     "",
+			"exit_code": 0,
+		}
+		body, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodPut, "/tasks/tsk_123", bytes.NewReader(body))
+		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.SetParamNames("id")
+		c.SetParamValues("tsk_123")
+
+		err := handler.Update(c)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, rec.Code)
+	})
+
+	t.Run("should validate required fields", func(t *testing.T) {
+		repo := &mockTaskRepository{}
+		handler := NewHandler(repo)
+
+		e := echo.New()
+		e.Validator = validator.New()
+
+		reqBody := map[string]interface{}{
+			"output": "some output",
+		}
+		body, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodPut, "/tasks/tsk_123", bytes.NewReader(body))
+		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.SetParamNames("id")
+		c.SetParamValues("tsk_123")
+
+		err := handler.Update(c)
+		require.Error(t, err)
+	})
+
+	t.Run("should return 404 for non-existent task", func(t *testing.T) {
+		repo := &mockTaskRepository{
+			findByIDFunc: func(ctx context.Context, id string) (*task.Task, error) {
+				return nil, nil
+			},
+		}
+		handler := NewHandler(repo)
+
+		e := echo.New()
+		e.Validator = validator.New()
+
+		reqBody := map[string]interface{}{
+			"status":    "completed",
+			"output":    "command output",
+			"exit_code": 0,
+		}
+		body, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodPut, "/tasks/nonexistent", bytes.NewReader(body))
+		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.SetParamNames("id")
+		c.SetParamValues("nonexistent")
+
+		err := handler.Update(c)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+	})
+}
