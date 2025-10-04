@@ -186,10 +186,10 @@ Remove agent's direct database dependency by having agents send task updates to 
 
 ### Success Criteria
 
-- [ ] Retries up to 5 times
-- [ ] Uses exponential backoff
-- [ ] Max wait time is 30 minutes
-- [ ] Config allows custom retry settings (for tests)
+- [x] Retries up to 5 times
+- [x] Uses exponential backoff
+- [x] Max wait time is 30 minutes
+- [x] Config allows custom retry settings (for tests)
 
 ---
 
@@ -199,13 +199,13 @@ Remove agent's direct database dependency by having agents send task updates to 
 
 ### Tests in `app/services/taskreporter/taskreporter_test.go`
 
-- [ ] Test: retries on network failure
-- [ ] Test: retries on 500 error
-- [ ] Test: does not retry on 404
-- [ ] Test: does not retry on 400
-- [ ] Test: uses exponential backoff
-- [ ] Test: respects max retries (5)
-- [ ] Test: custom retry config works (for testing)
+- [x] Test: retries on network failure
+- [x] Test: retries on 500 error
+- [x] Test: does not retry on 404
+- [x] Test: does not retry on 400
+- [x] Test: uses exponential backoff
+- [x] Test: respects max retries (5)
+- [x] Test: custom retry config works (for testing)
 
 ---
 

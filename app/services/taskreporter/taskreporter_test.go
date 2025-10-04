@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -30,7 +31,6 @@ func TestTaskReporter_New(t *testing.T) {
 			ControlPlaneURL: "http://localhost:8080",
 			Timeout:         10 * time.Second,
 		})
-
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -77,7 +77,6 @@ func TestTaskReporter_New(t *testing.T) {
 			ControlPlaneURL: "http://localhost:8080",
 			Timeout:         customTimeout,
 		})
-
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -98,7 +97,6 @@ func TestTaskReporter_New(t *testing.T) {
 			ControlPlaneURL: "http://localhost:8080",
 			Timeout:         0,
 		})
-
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -186,7 +184,6 @@ func TestTaskReporter_Report(t *testing.T) {
 		}
 
 		err := reporter.Report(taskID, result)
-
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -213,7 +210,6 @@ func TestTaskReporter_Report(t *testing.T) {
 		result := &TaskResult{Status: "completed", Output: "test", Error: "", ExitCode: 0}
 
 		err := reporter.Report("task-123", result)
-
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -246,7 +242,6 @@ func TestTaskReporter_Report(t *testing.T) {
 		}
 
 		err := reporter.Report("task-123", result)
-
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -278,7 +273,6 @@ func TestTaskReporter_Report(t *testing.T) {
 		result := &TaskResult{Status: "completed", Output: "test", Error: "", ExitCode: 0}
 
 		err := reporter.Report("task-123", result)
-
 		if err != nil {
 			t.Errorf("expected no error, got %v", err)
 		}
@@ -347,8 +341,10 @@ func setupTestReporter(t *testing.T, serverURL string, keys *testKeys) *taskrepo
 		PrivateKeyPath:  privateKeyPath,
 		ControlPlaneURL: serverURL,
 		Timeout:         5 * time.Second,
+		SleepFunc: func(d time.Duration) {
+			// No-op sleep for fast tests
+		},
 	})
-
 	if err != nil {
 		t.Fatalf("failed to create test reporter: %v", err)
 	}
@@ -362,4 +358,311 @@ func createServerWithStatusCode(t *testing.T, statusCode int) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(statusCode)
 	}))
+}
+
+func TestTaskReporter_RetryLogic(t *testing.T) {
+	t.Run("retries on network failure", func(t *testing.T) {
+		keys := setupTestKeys(t)
+
+		reporter := setupTestReporterWithRetry(t, "http://invalid-host-does-not-exist:9999", keys, &RetryConfig{
+			MaxRetries:        3,
+			MaxWaitTime:       100 * time.Millisecond,
+			InitialBackoff:    1000 * time.Millisecond,
+			BackoffMultiplier: 2,
+		})
+
+		result := &TaskResult{Status: "completed", Output: "test", Error: "", ExitCode: 0}
+		err := reporter.Report("task-123", result)
+
+		if err == nil {
+			t.Fatal("expected error for network failure")
+		}
+		if !strings.Contains(err.Error(), "request failed") {
+			t.Errorf("expected request failed error, got: %v", err)
+		}
+	})
+
+	t.Run("retries on 500 error", func(t *testing.T) {
+		keys := setupTestKeys(t)
+		var attempts int32
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt32(&attempts, 1)
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer server.Close()
+
+		reporter := setupTestReporterWithRetry(t, server.URL, keys, &RetryConfig{
+			MaxRetries:        3,
+			MaxWaitTime:       10 * time.Millisecond,
+			InitialBackoff:    1000 * time.Millisecond,
+			BackoffMultiplier: 2,
+		})
+
+		result := &TaskResult{Status: "completed", Output: "test", Error: "", ExitCode: 0}
+		err := reporter.Report("task-123", result)
+
+		if err == nil {
+			t.Fatal("expected error for 500 status")
+		}
+		finalAttempts := atomic.LoadInt32(&attempts)
+		if finalAttempts != 4 {
+			t.Errorf("expected 4 attempts (1 + 3 retries), got %d", finalAttempts)
+		}
+	})
+
+	t.Run("does not retry on 404", func(t *testing.T) {
+		keys := setupTestKeys(t)
+		var attempts int32
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt32(&attempts, 1)
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		reporter := setupTestReporterWithRetry(t, server.URL, keys, &RetryConfig{
+			MaxRetries:        3,
+			MaxWaitTime:       10 * time.Millisecond,
+			InitialBackoff:    1000 * time.Millisecond,
+			BackoffMultiplier: 2,
+		})
+
+		result := &TaskResult{Status: "completed", Output: "test", Error: "", ExitCode: 0}
+		err := reporter.Report("task-123", result)
+
+		if err == nil {
+			t.Fatal("expected error for 404 status")
+		}
+		finalAttempts := atomic.LoadInt32(&attempts)
+		if finalAttempts != 1 {
+			t.Errorf("expected 1 attempt (no retry on 404), got %d", finalAttempts)
+		}
+	})
+
+	t.Run("does not retry on 400", func(t *testing.T) {
+		keys := setupTestKeys(t)
+		var attempts int32
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt32(&attempts, 1)
+			w.WriteHeader(http.StatusBadRequest)
+		}))
+		defer server.Close()
+
+		reporter := setupTestReporterWithRetry(t, server.URL, keys, &RetryConfig{
+			MaxRetries:        3,
+			MaxWaitTime:       10 * time.Millisecond,
+			InitialBackoff:    1000 * time.Millisecond,
+			BackoffMultiplier: 2,
+		})
+
+		result := &TaskResult{Status: "completed", Output: "test", Error: "", ExitCode: 0}
+		err := reporter.Report("task-123", result)
+
+		if err == nil {
+			t.Fatal("expected error for 400 status")
+		}
+		finalAttempts := atomic.LoadInt32(&attempts)
+		if finalAttempts != 1 {
+			t.Errorf("expected 1 attempt (no retry on 400), got %d", finalAttempts)
+		}
+	})
+
+	t.Run("uses exponential backoff", func(t *testing.T) {
+		keys := setupTestKeys(t)
+		var sleepDurations []time.Duration
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer server.Close()
+
+		reporter := setupTestReporterWithRetry(t, server.URL, keys, &RetryConfig{
+			MaxRetries:        3,
+			MaxWaitTime:       10000 * time.Millisecond,
+			InitialBackoff:    1000 * time.Millisecond,
+			BackoffMultiplier: 2,
+		})
+
+		reporter.sleepFunc = func(d time.Duration) {
+			sleepDurations = append(sleepDurations, d)
+		}
+
+		result := &TaskResult{Status: "completed", Output: "test", Error: "", ExitCode: 0}
+		reporter.Report("task-123", result)
+
+		if len(sleepDurations) != 3 {
+			t.Errorf("expected 3 sleep calls, got %d", len(sleepDurations))
+		}
+
+		if len(sleepDurations) >= 3 {
+			if sleepDurations[1] <= sleepDurations[0] {
+				t.Error("expected exponential backoff: second delay should be greater than first")
+			}
+			if sleepDurations[2] <= sleepDurations[1] {
+				t.Error("expected exponential backoff: third delay should be greater than second")
+			}
+		}
+	})
+
+	t.Run("uses correct backoff timing", func(t *testing.T) {
+		keys := setupTestKeys(t)
+		var sleepDurations []time.Duration
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer server.Close()
+
+		reporter := setupTestReporterWithRetry(t, server.URL, keys, &RetryConfig{
+			MaxRetries:        3,
+			MaxWaitTime:       10000 * time.Millisecond,
+			InitialBackoff:    1000 * time.Millisecond,
+			BackoffMultiplier: 2,
+		})
+
+		reporter.sleepFunc = func(d time.Duration) {
+			sleepDurations = append(sleepDurations, d)
+		}
+
+		result := &TaskResult{Status: "completed", Output: "test", Error: "", ExitCode: 0}
+		reporter.Report("task-123", result)
+
+		expectedDurations := []time.Duration{
+			1000 * time.Millisecond,
+			2000 * time.Millisecond,
+			4000 * time.Millisecond,
+		}
+
+		if len(sleepDurations) != len(expectedDurations) {
+			t.Fatalf("expected %d sleep calls, got %d", len(expectedDurations), len(sleepDurations))
+		}
+
+		for i := range len(expectedDurations) {
+			if sleepDurations[i] != expectedDurations[i] {
+				t.Errorf("sleep %d: expected %v, got %v", i, expectedDurations[i], sleepDurations[i])
+			}
+		}
+	})
+
+	t.Run("respects max wait time cap", func(t *testing.T) {
+		keys := setupTestKeys(t)
+		var sleepDurations []time.Duration
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer server.Close()
+
+		reporter := setupTestReporterWithRetry(t, server.URL, keys, &RetryConfig{
+			MaxRetries:        5,
+			MaxWaitTime:       3000 * time.Millisecond,
+			InitialBackoff:    1000 * time.Millisecond,
+			BackoffMultiplier: 2,
+		})
+
+		reporter.sleepFunc = func(d time.Duration) {
+			sleepDurations = append(sleepDurations, d)
+		}
+
+		result := &TaskResult{Status: "completed", Output: "test", Error: "", ExitCode: 0}
+		reporter.Report("task-123", result)
+
+		expectedDurations := []time.Duration{
+			1000 * time.Millisecond,
+			2000 * time.Millisecond,
+			3000 * time.Millisecond,
+			3000 * time.Millisecond,
+			3000 * time.Millisecond,
+		}
+
+		if len(sleepDurations) != len(expectedDurations) {
+			t.Fatalf("expected %d sleep calls, got %d", len(expectedDurations), len(sleepDurations))
+		}
+
+		for i := range len(expectedDurations) {
+			if sleepDurations[i] != expectedDurations[i] {
+				t.Errorf("sleep %d: expected %v, got %v", i, expectedDurations[i], sleepDurations[i])
+			}
+		}
+	})
+
+	t.Run("respects max retries", func(t *testing.T) {
+		keys := setupTestKeys(t)
+		var attempts int32
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt32(&attempts, 1)
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer server.Close()
+
+		reporter := setupTestReporterWithRetry(t, server.URL, keys, &RetryConfig{
+			MaxRetries:        5,
+			MaxWaitTime:       10 * time.Millisecond,
+			InitialBackoff:    1000 * time.Millisecond,
+			BackoffMultiplier: 2,
+		})
+
+		result := &TaskResult{Status: "completed", Output: "test", Error: "", ExitCode: 0}
+		reporter.Report("task-123", result)
+
+		finalAttempts := atomic.LoadInt32(&attempts)
+		if finalAttempts != 6 {
+			t.Errorf("expected 6 attempts (1 + 5 retries), got %d", finalAttempts)
+		}
+	})
+
+	t.Run("custom retry config works", func(t *testing.T) {
+		keys := setupTestKeys(t)
+		var attempts int32
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt32(&attempts, 1)
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer server.Close()
+
+		customRetry := &RetryConfig{
+			MaxRetries:        2,
+			MaxWaitTime:       5 * time.Millisecond,
+			InitialBackoff:    1000 * time.Millisecond,
+			BackoffMultiplier: 2,
+		}
+
+		reporter := setupTestReporterWithRetry(t, server.URL, keys, customRetry)
+
+		result := &TaskResult{Status: "completed", Output: "test", Error: "", ExitCode: 0}
+		reporter.Report("task-123", result)
+
+		finalAttempts := atomic.LoadInt32(&attempts)
+		if finalAttempts != 3 {
+			t.Errorf("expected 3 attempts (1 + 2 retries), got %d", finalAttempts)
+		}
+	})
+}
+
+func setupTestReporterWithRetry(t *testing.T, serverURL string, keys *testKeys, retryConfig *RetryConfig) *taskreporter {
+	t.Helper()
+
+	tempDir := t.TempDir()
+	agentState := setupTestAgentState(t, "test-agent-123")
+	privateKeyPath := saveTestPrivateKey(t, tempDir, keys.privateKey)
+
+	reporter, err := New(&Config{
+		AgentState:      agentState,
+		PrivateKeyPath:  privateKeyPath,
+		ControlPlaneURL: serverURL,
+		Timeout:         2 * time.Second,
+		RetryConfig:     retryConfig,
+		SleepFunc: func(d time.Duration) {
+			// No-op sleep for fast tests
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to create test reporter: %v", err)
+	}
+
+	return reporter
 }
