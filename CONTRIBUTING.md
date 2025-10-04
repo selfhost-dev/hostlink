@@ -62,7 +62,12 @@ go test ./app/... ./domain/... ./internal/...
 
 **Run integration tests:**
 ```bash
-go test ./test/integration/...
+go test -tags=integration ./test/integration/...
+```
+
+**Run smoke tests:**
+```bash
+go test -tags=smoke ./test/smoke/...
 ```
 
 **Run tests with coverage:**
@@ -86,6 +91,42 @@ Key variables for development:
 - `APP_ENV` - Set to `development` (default)
 - `SH_APP_PORT` - Server port (default: 8080)
 - `SH_DB_URL` - Database URL (default: `file:hostlink-dev.db`)
+
+## Working on hlctl
+
+The `hlctl` CLI tool is located in `cmd/hlctl/`.
+
+### Building hlctl
+
+```bash
+go build -o hlctl cmd/hlctl/main.go
+```
+
+Or build and install to `$GOPATH/bin`:
+```bash
+go install ./cmd/hlctl
+```
+
+### Running hlctl tests
+
+**Unit tests:**
+```bash
+go test ./cmd/hlctl/...
+```
+
+**Integration tests:**
+```bash
+go test -tags=integration ./test/integration -run TestHlctl
+```
+
+**Smoke tests (requires running server):**
+```bash
+# Start the server first
+go run main.go
+
+# In another terminal
+go test -tags=smoke ./test/smoke -run TestHlctl
+```
 
 ### Questions or Issues?
 
