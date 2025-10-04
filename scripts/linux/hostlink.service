@@ -5,6 +5,7 @@ After=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/usr/bin/
+Environment="HOSTLINK_SERVER_URL=http://localhost:8080"
 ExecStart=/usr/bin/hostlink
 Restart=always
 RestartSec=60
