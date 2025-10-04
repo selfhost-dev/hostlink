@@ -40,6 +40,7 @@ func New() *Job {
 	return NewWithConfig(&Config{
 		FingerprintPath: appconf.AgentFingerprintPath(),
 		Registrar:       agentregistrar.New(),
+		AgentState:      agentstate.New(appconf.AgentStatePath()),
 		Trigger:         Trigger,
 	})
 }
@@ -67,7 +68,7 @@ func NewWithConfig(cfg *Config) *Job {
 	}
 }
 
-func (j *Job) Register() {
+func (j *Job) Register(registeredChan chan<- bool) {
 	go j.trigger(func() error {
 		fingerprintData, isNew, err := j.fingerprintMgr.LoadOrGenerate()
 		if err != nil {
@@ -86,6 +87,9 @@ func (j *Job) Register() {
 			// Only check for existing registration if fingerprint is not new
 			if err := j.agentState.Load(); err == nil && j.agentState.GetAgentID() != "" {
 				log.Infof("Agent already registered with ID: %s", j.agentState.GetAgentID())
+				if registeredChan != nil {
+					registeredChan <- true
+				}
 				return nil
 			}
 			// If load fails or no agent ID exists, proceed with registration
@@ -113,6 +117,11 @@ func (j *Job) Register() {
 				log.Errorf("Failed to save agent ID to state: %v", err)
 				// Don't fail the registration if state save fails
 			}
+		}
+
+		// Signal registration complete
+		if registeredChan != nil {
+			registeredChan <- true
 		}
 
 		return nil

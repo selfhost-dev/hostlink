@@ -224,10 +224,10 @@ Remove agent's direct database dependency by having agents send task updates to 
 
 ### Success Criteria
 
-- [ ] No database dependency in taskjob
-- [ ] Uses TaskReporter for all updates
-- [ ] Logs errors on failed reports
-- [ ] Continues processing on report failure
+- [x] No database dependency in taskjob
+- [x] Uses TaskReporter for all updates
+- [x] Logs errors on failed reports
+- [x] Continues processing on report failure
 
 ---
 
@@ -237,12 +237,12 @@ Remove agent's direct database dependency by having agents send task updates to 
 
 ### New file: `test/integration/taskjob_reporter_test.go`
 
-- [ ] Test: taskjob sends update via API (not direct DB)
-- [ ] Test: task output is captured and sent
-- [ ] Test: exit code is sent correctly
-- [ ] Test: error messages are sent
-- [ ] Test: authentication headers are included
-- [ ] Test: failed update is logged (no crash)
+- [x] Test: taskjob sends update via API (not direct DB)
+- [x] Test: task output is captured and sent
+- [x] Test: exit code is sent correctly
+- [x] Test: error messages are sent
+- [x] Test: authentication headers are included
+- [x] Test: failed update is logged (no crash)
 
 ---
 
@@ -256,9 +256,9 @@ Remove agent's direct database dependency by having agents send task updates to 
 
 ### Success Criteria
 
-- [ ] Compiles without errors
-- [ ] Server starts successfully
-- [ ] No repository passed to taskjob
+- [x] Compiles without errors
+- [x] Server starts successfully
+- [x] No repository passed to taskjob
 
 ---
 
