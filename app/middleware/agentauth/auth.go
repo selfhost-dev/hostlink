@@ -2,10 +2,9 @@ package agentauth
 
 import (
 	"context"
-	"net/http"
-
 	"hostlink/app/services/reqauth"
 	"hostlink/internal/crypto"
+	"net/http"
 
 	"github.com/labstack/echo/v4"
 )

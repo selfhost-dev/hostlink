@@ -24,6 +24,12 @@ type (
 		Command  string `json:"command" validate:"required"`
 		Priority int    `json:"priority"`
 	}
+	TaskUpdateRequest struct {
+		Status   string `json:"status" validate:"required"`
+		Output   string `json:"output"`
+		Error    string `json:"error"`
+		ExitCode int    `json:"exit_code"`
+	}
 	TaskResponse struct {
 		ID        string    `json:"id"`
 		Command   string    `json:"command"`
@@ -130,8 +136,55 @@ func (h Handler) Get(c echo.Context) error {
 	return c.JSON(http.StatusOK, task)
 }
 
+func (h Handler) Update(c echo.Context) error {
+	ctx := c.Request().Context()
+	taskID := c.Param("id")
+
+	var req TaskUpdateRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request"})
+	}
+
+	if err := c.Validate(&req); err != nil {
+		return err
+	}
+
+	existingTask, err := h.repo.FindByID(ctx, taskID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return c.JSON(http.StatusNotFound, map[string]string{
+				"error": "Task not found",
+			})
+		}
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to fetch task: " + err.Error(),
+		})
+	}
+
+	if existingTask == nil {
+		return c.JSON(http.StatusNotFound, map[string]string{
+			"error": "Task not found",
+		})
+	}
+
+	existingTask.Status = req.Status
+	existingTask.Output = req.Output
+	existingTask.Error = req.Error
+	existingTask.ExitCode = req.ExitCode
+
+	err = h.repo.Update(ctx, existingTask)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to update task: " + err.Error(),
+		})
+	}
+
+	return c.JSON(http.StatusOK, existingTask)
+}
+
 func (h *Handler) RegisterRoutes(g *echo.Group) {
 	g.POST("", h.Create)
 	g.GET("", h.Index)
 	g.GET("/:id", h.Get)
+	g.PUT("/:id", h.Update)
 }

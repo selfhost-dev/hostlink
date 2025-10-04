@@ -15,6 +15,7 @@ import (
 	"hostlink/app"
 	"hostlink/config"
 	"hostlink/domain/agent"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -320,7 +321,7 @@ func generateTestKeyPair(t *testing.T) (*rsa.PrivateKey, string) {
 	return privateKey, publicKeyBase64
 }
 
-func createSignedRequest(t *testing.T, method, path, agentID string, privateKey *rsa.PrivateKey, timestamp time.Time) *http.Request {
+func createSignedRequest(t *testing.T, method, path, agentID string, privateKey *rsa.PrivateKey, timestamp time.Time, body ...io.Reader) *http.Request {
 	t.Helper()
 
 	timestampUnix := timestamp.Unix()
@@ -331,7 +332,12 @@ func createSignedRequest(t *testing.T, method, path, agentID string, privateKey 
 	signature, err := rsa.SignPSS(rand.Reader, privateKey, crypto.SHA256, hashed[:], nil)
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(method, path, nil)
+	var reqBody io.Reader
+	if len(body) > 0 {
+		reqBody = body[0]
+	}
+
+	req := httptest.NewRequest(method, path, reqBody)
 	req.Header.Set("X-Agent-ID", agentID)
 	req.Header.Set("X-Timestamp", strconv.FormatInt(timestampUnix, 10))
 	req.Header.Set("X-Nonce", nonce)
