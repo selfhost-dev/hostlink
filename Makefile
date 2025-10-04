@@ -10,7 +10,7 @@ test-it:
 
 # Run smoke tests
 test-smoke:
-	go test -tags=smoke ./test/smoke/...
+	go test -count=1 -tags=smoke ./test/smoke/...
 
 # Run tests in Docker
 test-in-docker:
