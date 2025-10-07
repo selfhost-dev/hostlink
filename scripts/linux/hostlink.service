@@ -5,9 +5,7 @@ After=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/usr/bin/
-Environment="HOSTLINK_SERVER_URL=http://localhost:8080"
-Environment="HOSTLINK_TOKEN_ID=default-token-id"
-Environment="HOSTLINK_TOKEN_KEY=default-token-key"
+EnvironmentFile=/etc/hostlink/hostlink.env
 ExecStart=/usr/bin/hostlink
 Restart=always
 RestartSec=60
