@@ -37,7 +37,7 @@ machine. You can access it on port :1232 of your machine.
 After installation, you can modify the configuration at `/etc/hostlink/hostlink.env`:
 
 ```bash
-HOSTLINK_SERVER_URL=http://localhost:8080
+SH_CONTROL_PLANE_URL=http://localhost:8080
 HOSTLINK_TOKEN_ID=your-token-id
 HOSTLINK_TOKEN_KEY=your-token-key
 ```

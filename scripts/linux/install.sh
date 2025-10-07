@@ -96,7 +96,7 @@ create_directories() {
 create_env_file() {
   echo "Creating environment configuration..."
   cat > /etc/hostlink/hostlink.env <<EOF
-HOSTLINK_SERVER_URL=$SERVER_URL
+SH_CONTROL_PLANE_URL=$SERVER_URL
 HOSTLINK_TOKEN_ID=$TOKEN_ID
 HOSTLINK_TOKEN_KEY=$TOKEN_KEY
 EOF
