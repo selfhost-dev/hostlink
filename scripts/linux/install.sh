@@ -34,6 +34,32 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+uninstall_existing() {
+  echo "Checking for existing installation..."
+  if systemctl is-active --quiet hostlink; then
+    echo "Stopping existing hostlink service..."
+    sudo systemctl stop hostlink
+  fi
+
+  if systemctl is-enabled --quiet hostlink 2>/dev/null; then
+    echo "Disabling existing hostlink service..."
+    sudo systemctl disable hostlink
+  fi
+
+  if [ -f /etc/systemd/system/hostlink.service ]; then
+    echo "Removing old service file..."
+    sudo rm /etc/systemd/system/hostlink.service
+    sudo systemctl daemon-reload
+  fi
+
+  if [ -f /usr/bin/hostlink ]; then
+    echo "Removing old binary..."
+    sudo rm /usr/bin/hostlink
+  fi
+
+  echo "Cleanup complete."
+}
+
 latest_version() {
   local version=$(curl -s https://api.github.com/repos/selfhost-dev/hostlink/releases/latest | grep tag_name | cut -d'"' -f4)
   echo $version
@@ -87,6 +113,7 @@ install_service() {
   echo "Service started."
 }
 
+uninstall_existing
 download_tar
 extract_tar
 move_bin
