@@ -9,12 +9,44 @@ This project is trying to be an agent process which make managing software on th
 
 Just like it, the installation is also very simple.
 
+### Quick Install (with default credentials)
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/selfhost-dev/hostlink/refs/heads/main/scripts/linux/install.sh | sudo sh
 ```
 
+### Install with Custom Token
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/selfhost-dev/hostlink/refs/heads/main/scripts/linux/install.sh | \
+  sudo sh -s -- --token-id "your-token-id" --token-key "your-token-key"
+```
+
+### Install with Custom Server URL
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/selfhost-dev/hostlink/refs/heads/main/scripts/linux/install.sh | \
+  sudo sh -s -- --server-url "https://your-server.com" --token-id "your-token-id" --token-key "your-token-key"
+```
+
 Just running this above script will make the server up and running on your
 machine. You can access it on port :1232 of your machine.
+
+### Configuration
+
+After installation, you can modify the configuration at `/etc/hostlink/hostlink.env`:
+
+```bash
+HOSTLINK_SERVER_URL=http://localhost:8080
+HOSTLINK_TOKEN_ID=your-token-id
+HOSTLINK_TOKEN_KEY=your-token-key
+```
+
+After modifying the configuration, restart the service:
+
+```sh
+sudo systemctl restart hostlink
+```
 
 ## Authentication Architecture
 

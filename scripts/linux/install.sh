@@ -6,6 +6,34 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
+# Default values
+TOKEN_ID="default-token-id"
+TOKEN_KEY="default-token-key"
+SERVER_URL="http://localhost:8080"
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --token-id)
+      TOKEN_ID="$2"
+      shift 2
+      ;;
+    --token-key)
+      TOKEN_KEY="$2"
+      shift 2
+      ;;
+    --server-url)
+      SERVER_URL="$2"
+      shift 2
+      ;;
+    *)
+      echo "Unknown option: $1"
+      echo "Usage: $0 [--token-id ID] [--token-key KEY] [--server-url URL]"
+      exit 1
+      ;;
+  esac
+done
+
 latest_version() {
   local version=$(curl -s https://api.github.com/repos/selfhost-dev/hostlink/releases/latest | grep tag_name | cut -d'"' -f4)
   echo $version
@@ -13,6 +41,7 @@ latest_version() {
 
 VERSION=$(latest_version)
 HOSTLINK_TAR=hostlink_$VERSION.tar.gz
+
 download_tar() {
   curl -L -o $HOSTLINK_TAR \
     https://github.com/selfhost-dev/hostlink/releases/download/${VERSION}/hostlink_Linux_x86_64.tar.gz
@@ -31,9 +60,22 @@ create_directories() {
   echo "Creating hostlink directories..."
   sudo mkdir -p /var/lib/hostlink
   sudo mkdir -p /var/log/hostlink
+  sudo mkdir -p /etc/hostlink
   sudo chmod 700 /var/lib/hostlink
   sudo chmod 755 /var/log/hostlink
+  sudo chmod 755 /etc/hostlink
   echo "Directories created."
+}
+
+create_env_file() {
+  echo "Creating environment configuration..."
+  cat > /etc/hostlink/hostlink.env <<EOF
+HOSTLINK_SERVER_URL=$SERVER_URL
+HOSTLINK_TOKEN_ID=$TOKEN_ID
+HOSTLINK_TOKEN_KEY=$TOKEN_KEY
+EOF
+  sudo chmod 600 /etc/hostlink/hostlink.env
+  echo "Environment file created at /etc/hostlink/hostlink.env"
 }
 
 install_service() {
@@ -49,4 +91,5 @@ download_tar
 extract_tar
 move_bin
 create_directories
+create_env_file
 install_service
