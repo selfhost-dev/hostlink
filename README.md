@@ -12,21 +12,21 @@ Just like it, the installation is also very simple.
 ### Quick Install (with default credentials)
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/selfhost-dev/hostlink/refs/heads/main/scripts/linux/install.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/selfhost-dev/hostlink/refs/heads/main/scripts/linux/install.sh | sudo bash
 ```
 
 ### Install with Custom Token
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/selfhost-dev/hostlink/refs/heads/main/scripts/linux/install.sh | \
-  sudo sh -s -- --token-id "your-token-id" --token-key "your-token-key"
+  sudo bash -s -- --token-id "your-token-id" --token-key "your-token-key"
 ```
 
 ### Install with Custom Server URL
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/selfhost-dev/hostlink/refs/heads/main/scripts/linux/install.sh | \
-  sudo sh -s -- --server-url "https://your-server.com" --token-id "your-token-id" --token-key "your-token-key"
+  sudo bash -s -- --server-url "https://your-server.com" --token-id "your-token-id" --token-key "your-token-key"
 ```
 
 Just running this above script will make the server up and running on your
@@ -97,11 +97,13 @@ Hostlink uses **one-way authentication** for secure agent-to-server communicatio
 ### Quick Start
 
 **Build from source:**
+
 ```bash
 go build -o hlctl cmd/hlctl/main.go
 ```
 
 **Configure server URL:**
+
 ```bash
 # Via environment variable
 export HOSTLINK_SERVER_URL=http://localhost:8080
@@ -112,6 +114,7 @@ echo "server: http://localhost:8080" > ~/.hostlink/config.yml
 ```
 
 **Create and execute a task:**
+
 ```bash
 # Create a task
 hlctl task create --command "echo 'Hello World'"
@@ -124,6 +127,7 @@ hlctl task get <task-id>
 ```
 
 **Manage agents:**
+
 ```bash
 # List all agents
 hlctl agent list
