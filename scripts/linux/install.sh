@@ -65,12 +65,29 @@ latest_version() {
   echo $version
 }
 
+detect_arch() {
+  local arch=$(uname -m)
+  case $arch in
+    x86_64)
+      echo "x86_64"
+      ;;
+    aarch64|arm64)
+      echo "arm64"
+      ;;
+    *)
+      echo "Unsupported architecture: $arch" >&2
+      exit 1
+      ;;
+  esac
+}
+
 VERSION=$(latest_version)
+ARCH=$(detect_arch)
 HOSTLINK_TAR=hostlink_$VERSION.tar.gz
 
 download_tar() {
   curl -L -o $HOSTLINK_TAR \
-    https://github.com/selfhost-dev/hostlink/releases/download/${VERSION}/hostlink_Linux_x86_64.tar.gz
+    https://github.com/selfhost-dev/hostlink/releases/download/${VERSION}/hostlink_Linux_${ARCH}.tar.gz
 }
 
 extract_tar() {
