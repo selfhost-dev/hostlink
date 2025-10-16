@@ -70,7 +70,7 @@ func Register(tf taskfetcher.TaskFetcher, tr taskreporter.TaskReporter) {
 				}
 				continue
 			}
-			execCmd := exec.Command("/bin/sh", tempFile.Name())
+			execCmd := exec.Command("/bin/bash", tempFile.Name())
 			output, err := execCmd.CombinedOutput()
 			exitCode := 0
 			errMsg := ""
