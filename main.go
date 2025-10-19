@@ -68,7 +68,8 @@ func main() {
 			log.Printf("failed to initialize task reporter: %v", err)
 			return
 		}
-		taskjob.Register(fetcher, reporter)
+		taskJob := taskjob.New()
+		taskJob.Register(ctx, fetcher, reporter)
 
 		metricsReporter, err := metrics.New()
 		if err != nil {

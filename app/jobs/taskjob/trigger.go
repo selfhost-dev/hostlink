@@ -1,19 +1,39 @@
 package taskjob
 
 import (
+	"context"
 	"time"
 
 	"github.com/labstack/gommon/log"
 )
 
-func Trigger(fn func() error) {
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
+// TriggerConfig holds configuration for the Trigger function
+type TriggerConfig struct {
+	InitialDelay time.Duration
+	SleepFunc    func(time.Duration)
+}
 
-	for range ticker.C {
-		if err := fn(); err != nil {
-			log.Error("error while running callback: %w", err)
-			continue
+// DefaultTriggerConfig returns the default configuration
+func DefaultTriggerConfig() TriggerConfig {
+	return TriggerConfig{
+		InitialDelay: 10 * time.Second,
+		SleepFunc:    time.Sleep,
+	}
+}
+
+func triggerWithConfig(ctx context.Context, fn func() error, config TriggerConfig) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(config.InitialDelay):
+			if err := fn(); err != nil {
+				log.Errorf("Failed while running metrics job: %s", err)
+			}
 		}
 	}
+}
+
+func Trigger(ctx context.Context, fn func() error) {
+	triggerWithConfig(ctx, fn, DefaultTriggerConfig())
 }

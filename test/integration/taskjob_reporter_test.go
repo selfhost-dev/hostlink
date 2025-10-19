@@ -22,7 +22,6 @@ import (
 	"os"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/labstack/echo/v4"
@@ -45,6 +44,8 @@ func TestTaskJobReporter_SendsUpdateViaAPI(t *testing.T) {
 
 	var updateReceived bool
 	var mu sync.Mutex
+	var wg sync.WaitGroup
+	wg.Add(1)
 
 	env.echo.PUT("/api/v1/tasks/:id", func(c echo.Context) error {
 		mu.Lock()
@@ -53,9 +54,18 @@ func TestTaskJobReporter_SendsUpdateViaAPI(t *testing.T) {
 		return c.NoContent(http.StatusOK)
 	})
 
-	taskjob.Register(env.fetcher, env.reporter)
+	job := taskjob.NewJobWithConf(taskjob.TaskJobConfig{
+		Trigger: func(ctx context.Context, fn func() error) {
+			fn()
+			wg.Done()
+		},
+	})
+	defer job.Shutdown()
 
-	time.Sleep(3 * time.Second)
+	ctx := context.Background()
+	job.Register(ctx, env.fetcher, env.reporter)
+
+	wg.Wait()
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -80,6 +90,8 @@ func TestTaskJobReporter_CapturesTaskOutput(t *testing.T) {
 
 	var receivedOutput string
 	var mu sync.Mutex
+	var wg sync.WaitGroup
+	wg.Add(1)
 
 	env.echo.PUT("/api/v1/tasks/:id", func(c echo.Context) error {
 		var req map[string]any
@@ -94,9 +106,18 @@ func TestTaskJobReporter_CapturesTaskOutput(t *testing.T) {
 		return c.NoContent(http.StatusOK)
 	})
 
-	taskjob.Register(env.fetcher, env.reporter)
+	job := taskjob.NewJobWithConf(taskjob.TaskJobConfig{
+		Trigger: func(ctx context.Context, fn func() error) {
+			fn()
+			wg.Done()
+		},
+	})
+	defer job.Shutdown()
 
-	time.Sleep(3 * time.Second)
+	ctx := context.Background()
+	job.Register(ctx, env.fetcher, env.reporter)
+
+	wg.Wait()
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -117,6 +138,8 @@ func TestTaskJobReporter_SendsExitCode(t *testing.T) {
 
 	var receivedExitCode int
 	var mu sync.Mutex
+	var wg sync.WaitGroup
+	wg.Add(1)
 
 	env.echo.PUT("/api/v1/tasks/:id", func(c echo.Context) error {
 		var req map[string]any
@@ -131,9 +154,18 @@ func TestTaskJobReporter_SendsExitCode(t *testing.T) {
 		return c.NoContent(http.StatusOK)
 	})
 
-	taskjob.Register(env.fetcher, env.reporter)
+	job := taskjob.NewJobWithConf(taskjob.TaskJobConfig{
+		Trigger: func(ctx context.Context, fn func() error) {
+			fn()
+			wg.Done()
+		},
+	})
+	defer job.Shutdown()
 
-	time.Sleep(3 * time.Second)
+	ctx := context.Background()
+	job.Register(ctx, env.fetcher, env.reporter)
+
+	wg.Wait()
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -155,6 +187,8 @@ func TestTaskJobReporter_SendsErrorMessages(t *testing.T) {
 	var receivedError string
 	var receivedStatus string
 	var mu sync.Mutex
+	var wg sync.WaitGroup
+	wg.Add(1)
 
 	env.echo.PUT("/api/v1/tasks/:id", func(c echo.Context) error {
 		var req map[string]any
@@ -172,9 +206,18 @@ func TestTaskJobReporter_SendsErrorMessages(t *testing.T) {
 		return c.NoContent(http.StatusOK)
 	})
 
-	taskjob.Register(env.fetcher, env.reporter)
+	job := taskjob.NewJobWithConf(taskjob.TaskJobConfig{
+		Trigger: func(ctx context.Context, fn func() error) {
+			fn()
+			wg.Done()
+		},
+	})
+	defer job.Shutdown()
 
-	time.Sleep(3 * time.Second)
+	ctx := context.Background()
+	job.Register(ctx, env.fetcher, env.reporter)
+
+	wg.Wait()
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -196,6 +239,8 @@ func TestTaskJobReporter_IncludesAuthHeaders(t *testing.T) {
 
 	var hasAgentID, hasTimestamp, hasNonce, hasSignature bool
 	var mu sync.Mutex
+	var wg sync.WaitGroup
+	wg.Add(1)
 
 	env.echo.PUT("/api/v1/tasks/:id", func(c echo.Context) error {
 		mu.Lock()
@@ -207,9 +252,18 @@ func TestTaskJobReporter_IncludesAuthHeaders(t *testing.T) {
 		return c.NoContent(http.StatusOK)
 	})
 
-	taskjob.Register(env.fetcher, env.reporter)
+	job := taskjob.NewJobWithConf(taskjob.TaskJobConfig{
+		Trigger: func(ctx context.Context, fn func() error) {
+			fn()
+			wg.Done()
+		},
+	})
+	defer job.Shutdown()
 
-	time.Sleep(3 * time.Second)
+	ctx := context.Background()
+	job.Register(ctx, env.fetcher, env.reporter)
+
+	wg.Wait()
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -233,6 +287,8 @@ func TestTaskJobReporter_FailedUpdateIsLogged(t *testing.T) {
 
 	var updateAttempted bool
 	var mu sync.Mutex
+	var wg sync.WaitGroup
+	wg.Add(1)
 
 	env.echo.PUT("/api/v1/tasks/:id", func(c echo.Context) error {
 		mu.Lock()
@@ -241,9 +297,18 @@ func TestTaskJobReporter_FailedUpdateIsLogged(t *testing.T) {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "server error"})
 	})
 
-	taskjob.Register(env.fetcher, env.reporter)
+	job := taskjob.NewJobWithConf(taskjob.TaskJobConfig{
+		Trigger: func(ctx context.Context, fn func() error) {
+			fn()
+			wg.Done()
+		},
+	})
+	defer job.Shutdown()
 
-	time.Sleep(3 * time.Second)
+	ctx := context.Background()
+	job.Register(ctx, env.fetcher, env.reporter)
+
+	wg.Wait()
 
 	mu.Lock()
 	defer mu.Unlock()
