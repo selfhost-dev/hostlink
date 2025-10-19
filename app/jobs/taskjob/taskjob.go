@@ -86,7 +86,7 @@ func (tj *TaskJob) processTask(t task.Task, tr taskreporter.TaskReporter) {
 	}
 	defer os.Remove(tempFile.Name())
 
-	if _, err := tempFile.WriteString("#!/usr/bin/env bash\n" + t.Command); err != nil {
+	if _, err := tempFile.WriteString(t.Command); err != nil {
 		tempFile.Close()
 		t.Error = fmt.Sprintf("failed to write script: %v", err)
 		t.Status = "failed"
@@ -115,7 +115,7 @@ func (tj *TaskJob) processTask(t task.Task, tr taskreporter.TaskReporter) {
 		}
 		return
 	}
-	execCmd := exec.Command("/bin/bash", tempFile.Name())
+	execCmd := exec.Command("/bin/sh", "-c", tempFile.Name())
 	output, err := execCmd.CombinedOutput()
 	exitCode := 0
 	errMsg := ""
