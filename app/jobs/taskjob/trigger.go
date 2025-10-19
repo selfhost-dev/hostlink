@@ -7,12 +7,12 @@ import (
 )
 
 func Trigger(fn func() error) {
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		if err := fn(); err != nil {
-			log.Error("error while running callback", err)
+			log.Error("error while running callback: %w", err)
 			continue
 		}
 	}

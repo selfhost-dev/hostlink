@@ -10,6 +10,14 @@ import (
 // Global mutex for file operations
 var fileMutex sync.RWMutex
 
+type Operations interface {
+	Save() error
+	Load() error
+	GetAgentID() string
+	SetAgentID(id string) error
+	Clear() error
+}
+
 type AgentState struct {
 	AgentID      string            `json:"agent_id,omitempty"`
 	LastSyncTime int64             `json:"last_sync_time,omitempty"`
@@ -90,4 +98,3 @@ func (s *AgentState) Clear() error {
 
 	return nil
 }
-

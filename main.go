@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"hostlink/app"
+	"hostlink/app/jobs/metricsjob"
 	"hostlink/app/jobs/registrationjob"
 	"hostlink/app/jobs/taskjob"
+	"hostlink/app/services/metrics"
 	"hostlink/app/services/taskfetcher"
 	"hostlink/app/services/taskreporter"
 	"hostlink/config"
@@ -45,6 +48,7 @@ func main() {
 	// TODO(iAziz786): check if we can move this cron in app
 	// Agent-related jobs run in goroutine after registration
 	go func() {
+		ctx := context.Background()
 		registeredChan := make(chan bool, 1)
 
 		registrationJob := registrationjob.New()
@@ -65,6 +69,14 @@ func main() {
 			return
 		}
 		taskjob.Register(fetcher, reporter)
+
+		metricsReporter, err := metrics.New()
+		if err != nil {
+			log.Printf("failed to initialize metrics reporter: %v", err)
+			return
+		}
+		metricsJob := metricsjob.New()
+		metricsJob.Register(ctx, metricsReporter, metricsReporter)
 	}()
 
 	log.Fatal(e.Start(fmt.Sprintf(":%s", appconf.Port())))

@@ -4,6 +4,7 @@ package crypto
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
@@ -11,6 +12,82 @@ import (
 	"os"
 	"path/filepath"
 )
+
+// Service defines cryptographic operations for RSA key management and encryption
+type Service interface {
+	// Key Generation and Management
+	GenerateKeypair(bits int) (*rsa.PrivateKey, error)
+	LoadOrGenerateKeypair(keyPath string, bits int) (*rsa.PrivateKey, error)
+
+	// Private Key Operations
+	SavePrivateKey(privateKey *rsa.PrivateKey, keyPath string) error
+	LoadPrivateKey(keyPath string) (*rsa.PrivateKey, error)
+
+	// Public Key Operations
+	LoadPublicKey(keyPath string) (*rsa.PublicKey, error)
+	GetPublicKeyBase64(privateKey *rsa.PrivateKey) (string, error)
+	GetPublicKeyPEM(privateKey *rsa.PrivateKey) (string, error)
+
+	// Public Key Parsing
+	ParsePublicKeyFromBase64(base64String string) (*rsa.PublicKey, error)
+	ParsePublicKeyFromPEM(pemString string) (*rsa.PublicKey, error)
+
+	// Encryption/Decryption
+	EncryptWithPublicKey(msg string, pub *rsa.PublicKey) (string, error)
+	DecryptWithPrivateKey(ciphertextBase64 string, privateKey *rsa.PrivateKey) (string, error)
+}
+
+// DefaultCryptoService implements CryptoService using the existing functions
+type DefaultCryptoService struct{}
+
+// NewService creates a new instance of the default crypto service
+func NewService() Service {
+	return &DefaultCryptoService{}
+}
+
+func (s *DefaultCryptoService) GenerateKeypair(bits int) (*rsa.PrivateKey, error) {
+	return GenerateRSAKeypair(bits)
+}
+
+func (s *DefaultCryptoService) LoadOrGenerateKeypair(keyPath string, bits int) (*rsa.PrivateKey, error) {
+	return LoadOrGenerateKeypair(keyPath, bits)
+}
+
+func (s *DefaultCryptoService) SavePrivateKey(privateKey *rsa.PrivateKey, keyPath string) error {
+	return SavePrivateKey(privateKey, keyPath)
+}
+
+func (s *DefaultCryptoService) LoadPrivateKey(keyPath string) (*rsa.PrivateKey, error) {
+	return LoadPrivateKey(keyPath)
+}
+
+func (s *DefaultCryptoService) LoadPublicKey(keyPath string) (*rsa.PublicKey, error) {
+	return LoadPublicKey(keyPath)
+}
+
+func (s *DefaultCryptoService) GetPublicKeyBase64(privateKey *rsa.PrivateKey) (string, error) {
+	return GetPublicKeyBase64(privateKey)
+}
+
+func (s *DefaultCryptoService) GetPublicKeyPEM(privateKey *rsa.PrivateKey) (string, error) {
+	return GetPublicKeyPEM(privateKey)
+}
+
+func (s *DefaultCryptoService) ParsePublicKeyFromBase64(base64String string) (*rsa.PublicKey, error) {
+	return ParsePublicKeyFromBase64(base64String)
+}
+
+func (s *DefaultCryptoService) ParsePublicKeyFromPEM(pemString string) (*rsa.PublicKey, error) {
+	return ParsePublicKeyFromPEM(pemString)
+}
+
+func (s *DefaultCryptoService) EncryptWithPublicKey(msg string, pub *rsa.PublicKey) (string, error) {
+	return EncryptWithPublicKey(msg, pub)
+}
+
+func (s *DefaultCryptoService) DecryptWithPrivateKey(ciphertextBase64 string, privateKey *rsa.PrivateKey) (string, error) {
+	return DecryptWithPrivateKey(ciphertextBase64, privateKey)
+}
 
 // GenerateRSAKeypair generates a new RSA keypair
 func GenerateRSAKeypair(bits int) (*rsa.PrivateKey, error) {
@@ -216,4 +293,28 @@ func LoadOrGenerateKeypair(keyPath string, bits int) (*rsa.PrivateKey, error) {
 	}
 
 	return privateKey, nil
+}
+
+// DecryptWithPrivateKey decrypts a base64 encoded ciphertext with a private key
+func DecryptWithPrivateKey(ciphertextBase64 string, privateKey *rsa.PrivateKey) (string, error) {
+	ciphertext, err := base64.StdEncoding.DecodeString(ciphertextBase64)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode ciphertext: %w", err)
+	}
+
+	plaintext, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, privateKey, ciphertext, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to decrypt ciphertext: %w", err)
+	}
+
+	return string(plaintext), nil
+}
+
+// EncryptWithPublicKey encrypts a message with a public key
+func EncryptWithPublicKey(msg string, pub *rsa.PublicKey) (string, error) {
+	ciphertext, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, pub, []byte(msg), nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to encrypt message: %w", err)
+	}
+	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }

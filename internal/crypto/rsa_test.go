@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
@@ -296,7 +297,7 @@ func TestLoadPrivateKey(t *testing.T) {
 		if !os.IsNotExist(err) {
 			// Check if the error contains file not found message
 			if !bytes.Contains([]byte(err.Error()), []byte("no such file")) &&
-			   !bytes.Contains([]byte(err.Error()), []byte("cannot find")) {
+				!bytes.Contains([]byte(err.Error()), []byte("cannot find")) {
 				t.Logf("Error might not be a file not found error: %v", err)
 			}
 		}
@@ -1094,3 +1095,181 @@ func setupTempFile(t *testing.T) (string, func()) {
 
 	return tmpFile.Name(), cleanup
 }
+
+func TestDecryptWithPrivateKey(t *testing.T) {
+	// Generate a keypair for testing
+	privateKey, err := GenerateRSAKeypair(2048)
+	if err != nil {
+		t.Fatalf("Failed to generate RSA keypair: %v", err)
+	}
+	publicKey := &privateKey.PublicKey
+
+	t.Run("happy case", func(t *testing.T) {
+		// The message to be encrypted
+		message := "this is a secret message"
+
+		// Encrypt the message with the public key
+		ciphertext, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, publicKey, []byte(message), nil)
+		if err != nil {
+			t.Fatalf("Failed to encrypt message: %v", err)
+		}
+
+		// Encode the ciphertext to base64
+		ciphertextBase64 := base64.StdEncoding.EncodeToString(ciphertext)
+
+		// Decrypt the message with the private key
+		decryptedMessage, err := DecryptWithPrivateKey(ciphertextBase64, privateKey)
+		if err != nil {
+			t.Fatalf("Failed to decrypt message: %v", err)
+		}
+
+		// Check if the decrypted message is the same as the original
+		if decryptedMessage != message {
+			t.Errorf("Decrypted message is not the same as the original. Got '%s', want '%s'", decryptedMessage, message)
+		}
+	})
+
+	t.Run("valid base64 not actual signed text", func(t *testing.T) {
+		// A random base64 string that is not a valid ciphertext
+		invalidCiphertextBase64 := base64.StdEncoding.EncodeToString([]byte("this is not a ciphertext"))
+
+		// Try to decrypt the invalid ciphertext
+		_, err := DecryptWithPrivateKey(invalidCiphertextBase64, privateKey)
+		if err == nil {
+			t.Error("Expected an error when decrypting an invalid ciphertext, but got nil")
+		}
+	})
+
+	t.Run("invalid private key", func(t *testing.T) {
+		// The message to be encrypted
+		message := "this is a secret message"
+
+		// Encrypt the message with the public key
+		ciphertext, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, publicKey, []byte(message), nil)
+		if err != nil {
+			t.Fatalf("Failed to encrypt message: %v", err)
+		}
+
+		// Encode the ciphertext to base64
+		ciphertextBase64 := base64.StdEncoding.EncodeToString(ciphertext)
+
+		// Generate a different private key
+		wrongPrivateKey, err := GenerateRSAKeypair(2048)
+		if err != nil {
+			t.Fatalf("Failed to generate wrong RSA keypair: %v", err)
+		}
+
+		// Try to decrypt the message with the wrong private key
+		_, err = DecryptWithPrivateKey(ciphertextBase64, wrongPrivateKey)
+		if err == nil {
+			t.Error("Expected an error when decrypting with a wrong private key, but got nil")
+		}
+	})
+
+	t.Run("both base64 and private key are invalid", func(t *testing.T) {
+		// A random base64 string that is not a valid ciphertext
+		invalidCiphertextBase64 := "this is not a valid base64 string"
+
+		// Generate a different private key
+		wrongPrivateKey, err := GenerateRSAKeypair(2048)
+		if err != nil {
+			t.Fatalf("Failed to generate wrong RSA keypair: %v", err)
+		}
+
+		// Try to decrypt the invalid ciphertext with the wrong private key
+		_, err = DecryptWithPrivateKey(invalidCiphertextBase64, wrongPrivateKey)
+		if err == nil {
+			t.Error("Expected an error when decrypting an invalid ciphertext with a wrong private key, but got nil")
+		}
+	})
+}
+
+func TestEncryptWithPublicKey(t *testing.T) {
+	// Generate a keypair for testing
+	privateKey, err := GenerateRSAKeypair(2048)
+	if err != nil {
+		t.Fatalf("Failed to generate RSA keypair: %v", err)
+	}
+	publicKey := &privateKey.PublicKey
+
+	t.Run("happy case", func(t *testing.T) {
+		// The message to be encrypted
+		message := "this is a secret message"
+
+		// Encrypt the message with the public key
+		encryptedMessage, err := EncryptWithPublicKey(message, publicKey)
+		if err != nil {
+			t.Fatalf("Failed to encrypt message: %v", err)
+		}
+
+		// Decrypt the message with the private key to verify
+		decryptedMessage, err := DecryptWithPrivateKey(encryptedMessage, privateKey)
+		if err != nil {
+			t.Fatalf("Failed to decrypt message: %v", err)
+		}
+
+		// Check if the decrypted message is the same as the original
+		if decryptedMessage != message {
+			t.Errorf("Decrypted message is not the same as the original. Got '%s', want '%s'", decryptedMessage, message)
+		}
+	})
+
+	t.Run("invalid public key", func(t *testing.T) {
+		// The message to be encrypted
+		message := "this is a secret message"
+
+		// Create an invalid public key
+		invalidPublicKey := &rsa.PublicKey{}
+
+		// Try to encrypt the message with the invalid public key
+		_, err := EncryptWithPublicKey(message, invalidPublicKey)
+		if err == nil {
+			t.Error("Expected an error when encrypting with an invalid public key, but got nil")
+		}
+	})
+
+	t.Run("empty message", func(t *testing.T) {
+		// The message to be encrypted
+		message := ""
+
+		// Encrypt the message with the public key
+		encryptedMessage, err := EncryptWithPublicKey(message, publicKey)
+		if err != nil {
+			t.Fatalf("Failed to encrypt message: %v", err)
+		}
+
+		// Decrypt the message with the private key to verify
+		decryptedMessage, err := DecryptWithPrivateKey(encryptedMessage, privateKey)
+		if err != nil {
+			t.Fatalf("Failed to decrypt message: %v", err)
+		}
+
+		// Check if the decrypted message is the same as the original
+		if decryptedMessage != message {
+			t.Errorf("Decrypted message is not the same as the original. Got '%s', want '%s'", decryptedMessage, message)
+		}
+	})
+
+	t.Run("message with special characters", func(t *testing.T) {
+		// The message to be encrypted
+		message := "this is a secret message with special characters !@#$%^&*()"
+
+		// Encrypt the message with the public key
+		encryptedMessage, err := EncryptWithPublicKey(message, publicKey)
+		if err != nil {
+			t.Fatalf("Failed to encrypt message: %v", err)
+		}
+
+		// Decrypt the message with the private key to verify
+		decryptedMessage, err := DecryptWithPrivateKey(encryptedMessage, privateKey)
+		if err != nil {
+			t.Fatalf("Failed to decrypt message: %v", err)
+		}
+
+		// Check if the decrypted message is the same as the original
+		if decryptedMessage != message {
+			t.Errorf("Decrypted message is not the same as the original. Got '%s', want '%s'", decryptedMessage, message)
+		}
+	})
+}
+

@@ -7,11 +7,16 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"hostlink/app/services/agentstate"
+	"hostlink/config/appconf"
 	rsautil "hostlink/internal/crypto"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 )
+
+var mu sync.RWMutex
 
 type RequestSigner struct {
 	privateKey *rsa.PrivateKey
@@ -19,6 +24,31 @@ type RequestSigner struct {
 }
 
 func New(privateKeyPath, agentID string) (*RequestSigner, error) {
+	mu.RLock()
+	defer mu.RUnlock()
+	if agentID == "" {
+		return nil, fmt.Errorf("agent ID is required")
+	}
+
+	privateKey, err := rsautil.LoadPrivateKey(privateKeyPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load private key: %w", err)
+	}
+
+	return &RequestSigner{
+		privateKey: privateKey,
+		agentID:    agentID,
+	}, nil
+}
+
+func New2(privateKeyPath, agentStatePath string) (*RequestSigner, error) {
+	mu.RLock()
+	defer mu.RUnlock()
+	agentState := agentstate.New(appconf.AgentStatePath())
+	if err := agentState.Load(); err != nil {
+		return nil, fmt.Errorf("failed to load agent state: %w", err)
+	}
+	agentID := agentState.GetAgentID()
 	if agentID == "" {
 		return nil, fmt.Errorf("agent ID is required")
 	}
