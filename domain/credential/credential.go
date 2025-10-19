@@ -9,6 +9,7 @@ type Credential struct {
 	Host      string     `json:"host"`
 	Port      int        `json:"port"`
 	Username  string     `json:"username"`
+	Database  string     `json:"database"`
 	PasswdEnc string     `json:"passwd_enc"`
 	Password  *string    `json:"password"`
 	AgentID   string     `json:"agent_id"`
