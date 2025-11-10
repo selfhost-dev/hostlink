@@ -16,7 +16,7 @@ type TriggerConfig struct {
 // DefaultTriggerConfig returns the default configuration
 func DefaultTriggerConfig() TriggerConfig {
 	return TriggerConfig{
-		InitialDelay: 1 * time.Minute,
+		InitialDelay: 20 * time.Second,
 		SleepFunc:    time.Sleep,
 	}
 }
