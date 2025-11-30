@@ -119,6 +119,9 @@ func TestCollector_Collect(t *testing.T) {
 	// TPS might be 0 for a new database without stats_reset or very low activity
 	assert.GreaterOrEqual(t, metrics.TransactionsPerSecond, 0.0)
 
+	// Committed TPS might be 0 for a new database without stats_reset
+	assert.GreaterOrEqual(t, metrics.CommittedTxPerSecond, 0.0)
+
 	// Blocks read per second might be 0 for a new database without stats_reset
 	assert.GreaterOrEqual(t, metrics.BlocksReadPerSecond, 0.0)
 

@@ -16,6 +16,7 @@ type DatabaseMetrics struct {
 	MaxConnections        int
 	CacheHitRatio         float64
 	TransactionsPerSecond float64
+	CommittedTxPerSecond  float64
 	BlocksReadPerSecond   float64
 	ReplicationLagSeconds int
 }
@@ -100,7 +101,7 @@ func (pgm pgmetrics) collectDatabaseMetrics(ctx context.Context, db *sql.DB, m *
 		return fmt.Errorf("cache hit ratio: %w", err)
 	}
 
-	// Transactions per second
+	// Transactions per second (commit + rollback)
 	tpsQuery := `
 		SELECT
 			COALESCE(ROUND(
@@ -112,6 +113,20 @@ func (pgm pgmetrics) collectDatabaseMetrics(ctx context.Context, db *sql.DB, m *
 	`
 	if err := db.QueryRowContext(ctx, tpsQuery).Scan(&m.TransactionsPerSecond); err != nil {
 		m.TransactionsPerSecond = 0
+	}
+
+	// Committed transactions per second
+	commitTpsQuery := `
+		SELECT
+			COALESCE(ROUND(
+				sum(xact_commit)::numeric /
+				NULLIF(EXTRACT(EPOCH FROM (now() - min(stats_reset))), 0)
+			, 2), 0) as commit_tps
+		FROM pg_stat_database
+		WHERE stats_reset IS NOT NULL;
+	`
+	if err := db.QueryRowContext(ctx, commitTpsQuery).Scan(&m.CommittedTxPerSecond); err != nil {
+		m.CommittedTxPerSecond = 0
 	}
 
 	// Blocks read per second
