@@ -16,6 +16,7 @@ type DatabaseMetrics struct {
 	MaxConnections        int
 	CacheHitRatio         float64
 	TransactionsPerSecond float64
+	BlocksReadPerSecond   float64
 	ReplicationLagSeconds int
 }
 
@@ -111,6 +112,20 @@ func (pgm pgmetrics) collectDatabaseMetrics(ctx context.Context, db *sql.DB, m *
 	`
 	if err := db.QueryRowContext(ctx, tpsQuery).Scan(&m.TransactionsPerSecond); err != nil {
 		m.TransactionsPerSecond = 0
+	}
+
+	// Blocks read per second
+	blocksQuery := `
+		SELECT
+			COALESCE(ROUND(
+				sum(blks_read)::numeric /
+				NULLIF(EXTRACT(EPOCH FROM (now() - min(stats_reset))), 0)
+			, 2), 0) as blocks_read_per_sec
+		FROM pg_stat_database
+		WHERE stats_reset IS NOT NULL;
+	`
+	if err := db.QueryRowContext(ctx, blocksQuery).Scan(&m.BlocksReadPerSecond); err != nil {
+		m.BlocksReadPerSecond = 0
 	}
 
 	return nil
