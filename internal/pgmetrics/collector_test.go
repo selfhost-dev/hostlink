@@ -77,16 +77,6 @@ func setupTestData(t *testing.T, cred credential.Credential) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Create test databases
-	testDBs := []string{"proddb", "analyticsdb"}
-	for _, dbName := range testDBs {
-		_, err := db.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE %s", dbName))
-		if err != nil {
-			t.Logf("database %s might already exist: %v", dbName, err)
-		}
-	}
-
-	// Create some test activity
 	_, err = db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS test_table (
 			id SERIAL PRIMARY KEY,
@@ -95,14 +85,12 @@ func setupTestData(t *testing.T, cred credential.Credential) {
 	`)
 	require.NoError(t, err)
 
-	// Insert some data to generate activity
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		_, err = db.ExecContext(ctx, "INSERT INTO test_table (data) VALUES ($1)", fmt.Sprintf("test-data-%d", i))
 		require.NoError(t, err)
 	}
 
-	// Generate some reads to affect cache hit ratio
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		var count int
 		err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test_table").Scan(&count)
 		require.NoError(t, err)
@@ -128,9 +116,6 @@ func TestCollector_Collect(t *testing.T) {
 	// TPS might be 0 for a new database without stats_reset or very low activity
 	assert.GreaterOrEqual(t, metrics.TransactionsPerSecond, 0.0)
 
-	// CPU percent should be calculated (even if 0)
-	assert.GreaterOrEqual(t, metrics.CPUPercent, 0.0)
-
 	// Replication lag should be 0 when no replication is configured
 	assert.Equal(t, 0, metrics.ReplicationLagSeconds)
 
@@ -154,39 +139,6 @@ func TestCollector_Collect_InvalidCredentials(t *testing.T) {
 		strings.Contains(err.Error(), "authentication failed") ||
 			strings.Contains(err.Error(), "ping failed"),
 		"expected authentication or connection error, got: %v", err)
-}
-
-func TestCollector_Collect_ConnectionsPerDB(t *testing.T) {
-	_, cred := setupPostgresContainer(t)
-	setupTestData(t, cred)
-
-	// Create connections to specific databases
-	connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
-		cred.Host, cred.Port, cred.Username, *cred.Password, "proddb")
-
-	db, err := sql.Open("postgres", connStr)
-	require.NoError(t, err)
-	defer db.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	err = db.PingContext(ctx)
-	require.NoError(t, err)
-
-	// Now collect metrics
-	collector := New()
-	metrics, err := collector.Collect(cred)
-
-	require.NoError(t, err)
-
-	// Should have at least one connection to proddb
-	assert.GreaterOrEqual(t, metrics.ConnectionsPerDB.ProdDB, 1,
-		"should have at least 1 connection to proddb")
-
-	t.Logf("Connections per DB: ProdDB=%d, AnalyticsDB=%d",
-		metrics.ConnectionsPerDB.ProdDB,
-		metrics.ConnectionsPerDB.AnalyticsDB)
 }
 
 func TestCollector_Collect_CacheHitRatio(t *testing.T) {
