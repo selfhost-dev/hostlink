@@ -144,6 +144,7 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 		ReplicationLagSeconds: dbMetrics.ReplicationLagSeconds,
 		CacheHitRatio:         dbMetrics.CacheHitRatio,
 		TransactionsPerSecond: dbMetrics.TransactionsPerSecond,
+		CommittedTxPerSecond:  dbMetrics.CommittedTxPerSecond,
 		BlocksReadPerSecond:   dbMetrics.BlocksReadPerSecond,
 	}
 
