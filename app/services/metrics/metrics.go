@@ -144,6 +144,7 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 		ReplicationLagSeconds: dbMetrics.ReplicationLagSeconds,
 		CacheHitRatio:         dbMetrics.CacheHitRatio,
 		TransactionsPerSecond: dbMetrics.TransactionsPerSecond,
+		BlocksReadPerSecond:   dbMetrics.BlocksReadPerSecond,
 	}
 
 	return mp.apiserver.PushPostgreSQLMetrics(ctx, combined, agentID)

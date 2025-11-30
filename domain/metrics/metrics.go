@@ -14,4 +14,5 @@ type PostgreSQLMetrics struct {
 	ReplicationLagSeconds int     `json:"replication_lag_seconds"`
 	CacheHitRatio         float64 `json:"cache_hit_ratio"`
 	TransactionsPerSecond float64 `json:"transactions_per_second"`
+	BlocksReadPerSecond   float64 `json:"blocks_read_per_second"`
 }

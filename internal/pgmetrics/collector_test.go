@@ -109,6 +109,9 @@ func TestCollector_Collect(t *testing.T) {
 	// Verify connections are being tracked
 	assert.GreaterOrEqual(t, metrics.ConnectionsTotal, 1, "should have at least 1 connection")
 
+	// Verify max connections is set (default is typically 100)
+	assert.Greater(t, metrics.MaxConnections, 0, "max_connections should be greater than 0")
+
 	// Verify cache hit ratio is calculated (should be between 0 and 100)
 	assert.GreaterOrEqual(t, metrics.CacheHitRatio, 0.0)
 	assert.LessOrEqual(t, metrics.CacheHitRatio, 100.0)
@@ -116,10 +119,11 @@ func TestCollector_Collect(t *testing.T) {
 	// TPS might be 0 for a new database without stats_reset or very low activity
 	assert.GreaterOrEqual(t, metrics.TransactionsPerSecond, 0.0)
 
+	// Blocks read per second might be 0 for a new database without stats_reset
+	assert.GreaterOrEqual(t, metrics.BlocksReadPerSecond, 0.0)
+
 	// Replication lag should be 0 when no replication is configured
 	assert.Equal(t, 0, metrics.ReplicationLagSeconds)
-
-	t.Logf("Collected metrics: %+v", metrics)
 }
 
 func TestCollector_Collect_InvalidCredentials(t *testing.T) {
@@ -154,8 +158,6 @@ func TestCollector_Collect_CacheHitRatio(t *testing.T) {
 	// It should be high since we're reading the same data multiple times
 	assert.Greater(t, metrics.CacheHitRatio, 0.0,
 		"cache hit ratio should be greater than 0 after queries")
-
-	t.Logf("Cache hit ratio: %.2f%%", metrics.CacheHitRatio)
 }
 
 func TestCollector_Collect_Timeout(t *testing.T) {
