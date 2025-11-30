@@ -140,6 +140,7 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 		DiskUsagePercent:      sysMetrics.DiskUsagePercent,
 		SwapUsagePercent:      sysMetrics.SwapUsagePercent,
 		ConnectionsTotal:      dbMetrics.ConnectionsTotal,
+		MaxConnections:        dbMetrics.MaxConnections,
 		ReplicationLagSeconds: dbMetrics.ReplicationLagSeconds,
 		CacheHitRatio:         dbMetrics.CacheHitRatio,
 		TransactionsPerSecond: dbMetrics.TransactionsPerSecond,

@@ -13,6 +13,7 @@ import (
 
 type DatabaseMetrics struct {
 	ConnectionsTotal      int
+	MaxConnections        int
 	CacheHitRatio         float64
 	TransactionsPerSecond float64
 	ReplicationLagSeconds int
@@ -77,6 +78,12 @@ func (pgm pgmetrics) collectDatabaseMetrics(ctx context.Context, db *sql.DB, m *
 	`
 	if err := db.QueryRowContext(ctx, connQuery).Scan(&m.ConnectionsTotal); err != nil {
 		return fmt.Errorf("connections total: %w", err)
+	}
+
+	// Max connections
+	maxConnQuery := `SELECT setting::int FROM pg_settings WHERE name = 'max_connections';`
+	if err := db.QueryRowContext(ctx, maxConnQuery).Scan(&m.MaxConnections); err != nil {
+		return fmt.Errorf("max connections: %w", err)
 	}
 
 	// Cache hit ratio
