@@ -6,7 +6,9 @@ import (
 	"crypto/rsa"
 	"errors"
 	"hostlink/domain/credential"
-	"hostlink/domain/metrics"
+	domainmetrics "hostlink/domain/metrics"
+	"hostlink/internal/pgmetrics"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -28,7 +30,7 @@ func (m *MockAPIServer) GetMetricsCreds(ctx context.Context, agentID string) ([]
 	return args.Get(0).([]credential.Credential), args.Error(1)
 }
 
-func (m *MockAPIServer) PushPostgreSQLMetrics(ctx context.Context, metrics metrics.PostgreSQLMetrics, agentID string) error {
+func (m *MockAPIServer) PushPostgreSQLMetrics(ctx context.Context, metrics domainmetrics.PostgreSQLMetrics, agentID string) error {
 	args := m.Called(ctx, metrics, agentID)
 	return args.Error(0)
 }
@@ -66,9 +68,18 @@ type MockCollector struct {
 	mock.Mock
 }
 
-func (m *MockCollector) Collect(cred credential.Credential) (metrics.PostgreSQLMetrics, error) {
+func (m *MockCollector) Collect(cred credential.Credential) (pgmetrics.DatabaseMetrics, error) {
 	args := m.Called(cred)
-	return args.Get(0).(metrics.PostgreSQLMetrics), args.Error(1)
+	return args.Get(0).(pgmetrics.DatabaseMetrics), args.Error(1)
+}
+
+type MockCommandExecutor struct {
+	mock.Mock
+}
+
+func (m *MockCommandExecutor) Execute(ctx context.Context, command string) (string, error) {
+	args := m.Called(ctx, command)
+	return args.String(0), args.Error(1)
 }
 
 type MockCrypto struct {
@@ -150,24 +161,27 @@ func (m *MockCrypto) DecryptWithPrivateKey(ciphertextBase64 string, privateKey *
 
 // Test helpers
 type testMocks struct {
-	apiserver  *MockAPIServer
-	agentstate *MockAgentState
-	collector  *MockCollector
-	crypto     *MockCrypto
+	apiserver   *MockAPIServer
+	agentstate  *MockAgentState
+	collector   *MockCollector
+	cmdExecutor *MockCommandExecutor
+	crypto      *MockCrypto
 }
 
 func setupTestMetricsPusher() (*metricspusher, *testMocks) {
 	mocks := &testMocks{
-		apiserver:  new(MockAPIServer),
-		agentstate: new(MockAgentState),
-		collector:  new(MockCollector),
-		crypto:     new(MockCrypto),
+		apiserver:   new(MockAPIServer),
+		agentstate:  new(MockAgentState),
+		collector:   new(MockCollector),
+		cmdExecutor: new(MockCommandExecutor),
+		crypto:      new(MockCrypto),
 	}
 
 	mp := NewWithDependencies(
 		mocks.apiserver,
 		mocks.agentstate,
 		mocks.collector,
+		mocks.cmdExecutor,
 		mocks.crypto,
 		"/test/key/path",
 	)
@@ -183,6 +197,7 @@ func TestNewWithDependencies_AllFieldsSet(t *testing.T) {
 	assert.Equal(t, mocks.apiserver, mp.apiserver)
 	assert.Equal(t, mocks.agentstate, mp.agentstate)
 	assert.Equal(t, mocks.collector, mp.metricscollector)
+	assert.Equal(t, mocks.cmdExecutor, mp.cmdExecutor)
 	assert.Equal(t, mocks.crypto, mp.crypto)
 	assert.Equal(t, "/test/key/path", mp.privateKeyPath)
 }
@@ -393,7 +408,7 @@ func TestGetCreds_DecryptionFailureAtSecondCredential(t *testing.T) {
 // Push Tests - Agent State Validation
 func TestPush_NoAgentID(t *testing.T) {
 	mp, mocks := setupTestMetricsPusher()
-	testCred := credential.Credential{}
+	testCred := credential.Credential{Host: "localhost", DataDirectory: "/var/lib/postgresql"}
 
 	mocks.agentstate.On("GetAgentID").Return("")
 
@@ -405,33 +420,51 @@ func TestPush_NoAgentID(t *testing.T) {
 	mocks.apiserver.AssertNotCalled(t, "PushPostgreSQLMetrics")
 }
 
-// Push Tests - Metrics Collection
-func TestPush_CollectionFailure(t *testing.T) {
+// Push Tests - System Metrics Collection Failure
+func TestPush_SystemMetricsFailure(t *testing.T) {
 	mp, mocks := setupTestMetricsPusher()
-	testCred := credential.Credential{Host: "localhost"}
-	collectErr := errors.New("connection refused")
+	testCred := credential.Credential{Host: "localhost", DataDirectory: "/var/lib/postgresql"}
 
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
-	mocks.collector.On("Collect", testCred).
-		Return(metrics.PostgreSQLMetrics{}, collectErr)
+	mocks.cmdExecutor.On("Execute", mock.Anything, mock.Anything).
+		Return("", errors.New("command failed"))
 
 	err := mp.Push(testCred)
 
-	assert.Equal(t, collectErr, err)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "system metrics")
+	mocks.collector.AssertNotCalled(t, "Collect")
+	mocks.apiserver.AssertNotCalled(t, "PushPostgreSQLMetrics")
+}
+
+func TestPush_DatabaseMetricsFailure(t *testing.T) {
+	mp, mocks := setupTestMetricsPusher()
+	testCred := credential.Credential{Host: "localhost", DataDirectory: "/var/lib/postgresql"}
+	collectErr := errors.New("connection refused")
+
+	mocks.agentstate.On("GetAgentID").Return("agent-123")
+	setupCmdExecutorMocks(mocks.cmdExecutor)
+	mocks.collector.On("Collect", testCred).
+		Return(pgmetrics.DatabaseMetrics{}, collectErr)
+
+	err := mp.Push(testCred)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "database metrics")
 	mocks.collector.AssertExpectations(t)
 	mocks.apiserver.AssertNotCalled(t, "PushPostgreSQLMetrics")
 }
 
 func TestPush_APIServerPushFailure(t *testing.T) {
 	mp, mocks := setupTestMetricsPusher()
-	testCred := credential.Credential{Host: "localhost"}
-	testMetrics := metrics.PostgreSQLMetrics{CPUPercent: 45.5}
+	testCred := credential.Credential{Host: "localhost", DataDirectory: "/var/lib/postgresql"}
 	pushErr := errors.New("network timeout")
 
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
+	setupCmdExecutorMocks(mocks.cmdExecutor)
 	mocks.collector.On("Collect", testCred).
-		Return(testMetrics, nil)
-	mocks.apiserver.On("PushPostgreSQLMetrics", mock.Anything, testMetrics, "agent-123").
+		Return(pgmetrics.DatabaseMetrics{ConnectionsTotal: 5}, nil)
+	mocks.apiserver.On("PushPostgreSQLMetrics", mock.Anything, mock.Anything, "agent-123").
 		Return(pushErr)
 
 	err := mp.Push(testCred)
@@ -443,20 +476,27 @@ func TestPush_APIServerPushFailure(t *testing.T) {
 func TestPush_Success(t *testing.T) {
 	mp, mocks := setupTestMetricsPusher()
 	testCred := credential.Credential{
-		Host:     "localhost",
-		Port:     5432,
-		Username: "postgres",
-	}
-	testMetrics := metrics.PostgreSQLMetrics{
-		CPUPercent:    45.5,
-		MemoryPercent: 78.2,
+		Host:          "localhost",
+		Port:          5432,
+		Username:      "postgres",
+		DataDirectory: "/var/lib/postgresql",
 	}
 
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
+	setupCmdExecutorMocks(mocks.cmdExecutor)
 	mocks.collector.On("Collect", testCred).
-		Return(testMetrics, nil)
-	mocks.apiserver.On("PushPostgreSQLMetrics", mock.Anything, testMetrics, "agent-123").
-		Return(nil)
+		Return(pgmetrics.DatabaseMetrics{
+			ConnectionsTotal:      10,
+			CacheHitRatio:         95.5,
+			TransactionsPerSecond: 100.0,
+			ReplicationLagSeconds: 0,
+		}, nil)
+	mocks.apiserver.On("PushPostgreSQLMetrics", mock.Anything, mock.MatchedBy(func(m domainmetrics.PostgreSQLMetrics) bool {
+		return m.CPUPercent == 25.0 &&
+			m.MemoryPercent == 50.0 &&
+			m.ConnectionsTotal == 10 &&
+			m.CacheHitRatio == 95.5
+	}), "agent-123").Return(nil)
 
 	err := mp.Push(testCred)
 
@@ -464,22 +504,19 @@ func TestPush_Success(t *testing.T) {
 	mocks.agentstate.AssertExpectations(t)
 	mocks.collector.AssertExpectations(t)
 	mocks.apiserver.AssertExpectations(t)
-
-	// Verify context.Background() used
-	mocks.apiserver.AssertCalled(t, "PushPostgreSQLMetrics", context.Background(), testMetrics, "agent-123")
 }
 
 func TestPush_ContextPropagation(t *testing.T) {
 	mp, mocks := setupTestMetricsPusher()
-	testCred := credential.Credential{}
-	testMetrics := metrics.PostgreSQLMetrics{}
+	testCred := credential.Credential{DataDirectory: "/data"}
 
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
+	setupCmdExecutorMocks(mocks.cmdExecutor)
 	mocks.collector.On("Collect", testCred).
-		Return(testMetrics, nil)
+		Return(pgmetrics.DatabaseMetrics{}, nil)
 	mocks.apiserver.On("PushPostgreSQLMetrics", mock.MatchedBy(func(ctx context.Context) bool {
 		return ctx != nil
-	}), testMetrics, "agent-123").
+	}), mock.Anything, "agent-123").
 		Return(nil)
 
 	err := mp.Push(testCred)
@@ -507,25 +544,44 @@ func TestGetCreds_ContextIsBackground(t *testing.T) {
 func TestPush_CredentialPassedCorrectly(t *testing.T) {
 	mp, mocks := setupTestMetricsPusher()
 	testCred := credential.Credential{
-		Host:     "db.example.com",
-		Port:     5432,
-		Username: "admin",
-		Dialect:  "postgresql",
+		Host:          "db.example.com",
+		Port:          5432,
+		Username:      "admin",
+		Dialect:       "postgresql",
+		DataDirectory: "/var/lib/postgresql",
 	}
-	testMetrics := metrics.PostgreSQLMetrics{}
 
 	mocks.agentstate.On("GetAgentID").Return("agent-456")
+	setupCmdExecutorMocks(mocks.cmdExecutor)
 	mocks.collector.On("Collect", mock.MatchedBy(func(c credential.Credential) bool {
 		return c.Host == testCred.Host &&
 			c.Port == testCred.Port &&
 			c.Username == testCred.Username &&
 			c.Dialect == testCred.Dialect
-	})).Return(testMetrics, nil)
-	mocks.apiserver.On("PushPostgreSQLMetrics", mock.Anything, testMetrics, "agent-456").
+	})).Return(pgmetrics.DatabaseMetrics{}, nil)
+	mocks.apiserver.On("PushPostgreSQLMetrics", mock.Anything, mock.Anything, "agent-456").
 		Return(nil)
 
 	err := mp.Push(testCred)
 
 	assert.NoError(t, err)
 	mocks.collector.AssertExpectations(t)
+}
+
+func setupCmdExecutorMocks(executor *MockCommandExecutor) {
+	executor.On("Execute", mock.Anything, mock.MatchedBy(func(cmd string) bool {
+		return strings.HasPrefix(cmd, "top")
+	})).Return("25.0", nil)
+	executor.On("Execute", mock.Anything, mock.MatchedBy(func(cmd string) bool {
+		return strings.HasPrefix(cmd, "free") && !strings.Contains(cmd, "Swap")
+	})).Return("50.0", nil)
+	executor.On("Execute", mock.Anything, mock.MatchedBy(func(cmd string) bool {
+		return strings.HasPrefix(cmd, "cat")
+	})).Return("1.5 2.0 2.5", nil)
+	executor.On("Execute", mock.Anything, mock.MatchedBy(func(cmd string) bool {
+		return strings.Contains(cmd, "Swap")
+	})).Return("10.0", nil)
+	executor.On("Execute", mock.Anything, mock.MatchedBy(func(cmd string) bool {
+		return strings.HasPrefix(cmd, "df")
+	})).Return("75", nil)
 }

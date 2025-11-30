@@ -6,9 +6,12 @@ import (
 	"hostlink/app/services/agentstate"
 	"hostlink/config/appconf"
 	"hostlink/domain/credential"
+	domainmetrics "hostlink/domain/metrics"
 	"hostlink/internal/apiserver"
+	"hostlink/internal/cmdexec"
 	"hostlink/internal/crypto"
 	"hostlink/internal/pgmetrics"
+	"hostlink/internal/sysmetrics"
 )
 
 type AuthGetter interface {
@@ -23,6 +26,7 @@ type metricspusher struct {
 	apiserver        apiserver.Operations
 	agentstate       agentstate.Operations
 	metricscollector pgmetrics.Collector
+	cmdExecutor      sysmetrics.CommandExecutor
 	crypto           crypto.Service
 	privateKeyPath   string
 }
@@ -41,6 +45,7 @@ func NewWithConf() (*metricspusher, error) {
 		apiserver:        svr,
 		agentstate:       agentstate,
 		metricscollector: pgmetrics.New(),
+		cmdExecutor:      cmdexec.New(),
 		crypto:           crypto.NewService(),
 		privateKeyPath:   appconf.AgentPrivateKeyPath(),
 	}, nil
@@ -55,6 +60,7 @@ func NewWithDependencies(
 	apiserver apiserver.Operations,
 	agentstate agentstate.Operations,
 	collector pgmetrics.Collector,
+	cmdExecutor sysmetrics.CommandExecutor,
 	crypto crypto.Service,
 	privateKeyPath string,
 ) *metricspusher {
@@ -62,6 +68,7 @@ func NewWithDependencies(
 		apiserver:        apiserver,
 		agentstate:       agentstate,
 		metricscollector: collector,
+		cmdExecutor:      cmdExecutor,
 		crypto:           crypto,
 		privateKeyPath:   privateKeyPath,
 	}
@@ -109,14 +116,34 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 		return fmt.Errorf("agent not registered: missing agent ID")
 	}
 
-	metrics, err := mp.metricscollector.Collect(cred)
+	ctx := context.Background()
+
+	sysCollector := sysmetrics.New(mp.cmdExecutor, sysmetrics.Config{
+		DiskPath: cred.DataDirectory,
+	})
+	sysMetrics, err := sysCollector.Collect(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("system metrics: %w", err)
 	}
 
-	return mp.apiserver.PushPostgreSQLMetrics(
-		context.Background(),
-		metrics,
-		agentID,
-	)
+	dbMetrics, err := mp.metricscollector.Collect(cred)
+	if err != nil {
+		return fmt.Errorf("database metrics: %w", err)
+	}
+
+	combined := domainmetrics.PostgreSQLMetrics{
+		CPUPercent:            sysMetrics.CPUPercent,
+		MemoryPercent:         sysMetrics.MemoryPercent,
+		LoadAvg1:              sysMetrics.LoadAvg1,
+		LoadAvg5:              sysMetrics.LoadAvg5,
+		LoadAvg15:             sysMetrics.LoadAvg15,
+		DiskUsagePercent:      sysMetrics.DiskUsagePercent,
+		SwapUsagePercent:      sysMetrics.SwapUsagePercent,
+		ConnectionsTotal:      dbMetrics.ConnectionsTotal,
+		ReplicationLagSeconds: dbMetrics.ReplicationLagSeconds,
+		CacheHitRatio:         dbMetrics.CacheHitRatio,
+		TransactionsPerSecond: dbMetrics.TransactionsPerSecond,
+	}
+
+	return mp.apiserver.PushPostgreSQLMetrics(ctx, combined, agentID)
 }
