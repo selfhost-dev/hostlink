@@ -10,6 +10,7 @@ type PostgreSQLMetrics struct {
 	DiskUsagePercent      float64 `json:"disk_usage_percent"`
 	SwapUsagePercent      float64 `json:"swap_usage_percent"`
 	ConnectionsTotal      int     `json:"connections_total"`
+	MaxConnections        int     `json:"max_connections"`
 	ReplicationLagSeconds int     `json:"replication_lag_seconds"`
 	CacheHitRatio         float64 `json:"cache_hit_ratio"`
 	TransactionsPerSecond float64 `json:"transactions_per_second"`
