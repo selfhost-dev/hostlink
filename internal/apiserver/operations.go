@@ -9,7 +9,7 @@ import (
 
 type Operations interface {
 	GetMetricsCreds(ctx context.Context, agentID string) ([]credential.Credential, error)
-	PushPostgreSQLMetrics(ctx context.Context, metrics metrics.PostgreSQLMetrics, agentID string) error
+	PushMetrics(ctx context.Context, payload metrics.MetricPayload) error
 }
 
 func (c *client) GetMetricsCreds(ctx context.Context, agentID string) ([]credential.Credential, error) {
@@ -18,7 +18,9 @@ func (c *client) GetMetricsCreds(ctx context.Context, agentID string) ([]credent
 	return result, err
 }
 
-func (c *client) PushPostgreSQLMetrics(ctx context.Context, req metrics.PostgreSQLMetrics, agentID string) error {
-	err := c.Post(ctx, fmt.Sprintf("/api/v1/agents/%s/instances/heartbeat", agentID), req, nil)
-	return err
+func (c *client) PushMetrics(ctx context.Context, payload metrics.MetricPayload) error {
+	agentID := payload.Resource.AgentID
+	return c.Post(ctx, fmt.Sprintf("/api/v1/agents/%s/metrics", agentID), payload, nil)
 }
+
+// TODO: Add heartbeat endpoint with higher ping frequency

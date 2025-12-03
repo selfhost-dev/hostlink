@@ -3,6 +3,9 @@ package metrics
 import (
 	"context"
 	"fmt"
+	"os"
+	"time"
+
 	"hostlink/app/services/agentstate"
 	"hostlink/config/appconf"
 	"hostlink/domain/credential"
@@ -117,36 +120,47 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 	}
 
 	ctx := context.Background()
+	var metricSets []domainmetrics.MetricSet
+	var collectionErrors []error
 
 	sysCollector := sysmetrics.New(mp.cmdExecutor, sysmetrics.Config{
 		DiskPath: cred.DataDirectory,
 	})
 	sysMetrics, err := sysCollector.Collect(ctx)
 	if err != nil {
-		return fmt.Errorf("system metrics: %w", err)
+		collectionErrors = append(collectionErrors, fmt.Errorf("system metrics: %w", err))
+	} else {
+		metricSets = append(metricSets, domainmetrics.MetricSet{
+			Type:    domainmetrics.MetricTypeSystem,
+			Metrics: sysMetrics,
+		})
 	}
 
 	dbMetrics, err := mp.metricscollector.Collect(cred)
 	if err != nil {
-		return fmt.Errorf("database metrics: %w", err)
+		collectionErrors = append(collectionErrors, fmt.Errorf("database metrics: %w", err))
+	} else {
+		metricSets = append(metricSets, domainmetrics.MetricSet{
+			Type:    domainmetrics.MetricTypePostgreSQLDatabase,
+			Metrics: dbMetrics,
+		})
 	}
 
-	combined := domainmetrics.PostgreSQLMetrics{
-		CPUPercent:            sysMetrics.CPUPercent,
-		MemoryPercent:         sysMetrics.MemoryPercent,
-		LoadAvg1:              sysMetrics.LoadAvg1,
-		LoadAvg5:              sysMetrics.LoadAvg5,
-		LoadAvg15:             sysMetrics.LoadAvg15,
-		DiskUsagePercent:      sysMetrics.DiskUsagePercent,
-		SwapUsagePercent:      sysMetrics.SwapUsagePercent,
-		ConnectionsTotal:      dbMetrics.ConnectionsTotal,
-		MaxConnections:        dbMetrics.MaxConnections,
-		ReplicationLagSeconds: dbMetrics.ReplicationLagSeconds,
-		CacheHitRatio:         dbMetrics.CacheHitRatio,
-		TransactionsPerSecond: dbMetrics.TransactionsPerSecond,
-		CommittedTxPerSecond:  dbMetrics.CommittedTxPerSecond,
-		BlocksReadPerSecond:   dbMetrics.BlocksReadPerSecond,
+	if len(metricSets) == 0 {
+		return fmt.Errorf("all metrics collection failed: %v", collectionErrors)
 	}
 
-	return mp.apiserver.PushPostgreSQLMetrics(ctx, combined, agentID)
+	hostname, _ := os.Hostname()
+
+	payload := domainmetrics.MetricPayload{
+		Version:     "1.0",
+		TimestampMs: time.Now().UnixMilli(),
+		Resource: domainmetrics.Resource{
+			AgentID:  agentID,
+			HostName: hostname,
+		},
+		MetricSets: metricSets,
+	}
+
+	return mp.apiserver.PushMetrics(ctx, payload)
 }

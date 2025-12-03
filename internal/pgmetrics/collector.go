@@ -6,23 +6,14 @@ import (
 	"database/sql"
 	"fmt"
 	"hostlink/domain/credential"
+	"hostlink/domain/metrics"
 	"time"
 
 	_ "github.com/lib/pq"
 )
 
-type DatabaseMetrics struct {
-	ConnectionsTotal      int
-	MaxConnections        int
-	CacheHitRatio         float64
-	TransactionsPerSecond float64
-	CommittedTxPerSecond  float64
-	BlocksReadPerSecond   float64
-	ReplicationLagSeconds int
-}
-
 type Collector interface {
-	Collect(credential.Credential) (DatabaseMetrics, error)
+	Collect(credential.Credential) (metrics.PostgreSQLDatabaseMetrics, error)
 }
 
 type pgmetrics struct {
@@ -35,7 +26,7 @@ func New() Collector {
 	}
 }
 
-func (pgm pgmetrics) Collect(cred credential.Credential) (DatabaseMetrics, error) {
+func (pgm pgmetrics) Collect(cred credential.Credential) (metrics.PostgreSQLDatabaseMetrics, error) {
 	password := ""
 	if cred.Password != nil {
 		password = *cred.Password
@@ -45,7 +36,7 @@ func (pgm pgmetrics) Collect(cred credential.Credential) (DatabaseMetrics, error
 
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
-		return DatabaseMetrics{}, fmt.Errorf("failed to connect: %w", err)
+		return metrics.PostgreSQLDatabaseMetrics{}, fmt.Errorf("failed to connect: %w", err)
 	}
 	defer db.Close()
 
@@ -53,10 +44,10 @@ func (pgm pgmetrics) Collect(cred credential.Credential) (DatabaseMetrics, error
 	defer cancel()
 
 	if err := db.PingContext(ctx); err != nil {
-		return DatabaseMetrics{}, fmt.Errorf("ping failed: %w", err)
+		return metrics.PostgreSQLDatabaseMetrics{}, fmt.Errorf("ping failed: %w", err)
 	}
 
-	m := DatabaseMetrics{}
+	m := metrics.PostgreSQLDatabaseMetrics{}
 
 	// Collect database metrics
 	if err := pgm.collectDatabaseMetrics(ctx, db, &m); err != nil {
@@ -71,7 +62,7 @@ func (pgm pgmetrics) Collect(cred credential.Credential) (DatabaseMetrics, error
 	return m, nil
 }
 
-func (pgm pgmetrics) collectDatabaseMetrics(ctx context.Context, db *sql.DB, m *DatabaseMetrics) error {
+func (pgm pgmetrics) collectDatabaseMetrics(ctx context.Context, db *sql.DB, m *metrics.PostgreSQLDatabaseMetrics) error {
 	// Total connections
 	connQuery := `
 		SELECT COUNT(*)
@@ -146,7 +137,7 @@ func (pgm pgmetrics) collectDatabaseMetrics(ctx context.Context, db *sql.DB, m *
 	return nil
 }
 
-func (pgm pgmetrics) collectReplicationMetrics(ctx context.Context, db *sql.DB, m *DatabaseMetrics) error {
+func (pgm pgmetrics) collectReplicationMetrics(ctx context.Context, db *sql.DB, m *metrics.PostgreSQLDatabaseMetrics) error {
 	replQuery := `
 		SELECT
 			COALESCE(
