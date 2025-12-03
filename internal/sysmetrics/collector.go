@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hostlink/domain/metrics"
 	"strconv"
 	"strings"
 )
@@ -15,22 +16,12 @@ const (
 	swapCommand    = "free -m | grep Swap | awk '{if($2>0) printf \"%.2f\", $3/$2*100; else print 0}'"
 )
 
-type SystemMetrics struct {
-	CPUPercent       float64
-	MemoryPercent    float64
-	LoadAvg1         float64
-	LoadAvg5         float64
-	LoadAvg15        float64
-	SwapUsagePercent float64
-	DiskUsagePercent float64
-}
-
 type CommandExecutor interface {
 	Execute(ctx context.Context, command string) (string, error)
 }
 
 type Collector interface {
-	Collect(ctx context.Context) (SystemMetrics, error)
+	Collect(ctx context.Context) (metrics.SystemMetrics, error)
 }
 
 type Config struct {
@@ -49,8 +40,8 @@ func New(executor CommandExecutor, cfg Config) Collector {
 	}
 }
 
-func (c *collector) Collect(ctx context.Context) (SystemMetrics, error) {
-	var m SystemMetrics
+func (c *collector) Collect(ctx context.Context) (metrics.SystemMetrics, error) {
+	var m metrics.SystemMetrics
 	var errs []error
 
 	cpu, err := c.collectCPU(ctx)
