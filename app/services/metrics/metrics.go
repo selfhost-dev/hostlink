@@ -26,7 +26,7 @@ type Pusher interface {
 }
 
 type metricspusher struct {
-	apiserver        apiserver.Operations
+	apiserver        apiserver.MetricsOperations
 	agentstate       agentstate.Operations
 	metricscollector pgmetrics.Collector
 	cmdExecutor      sysmetrics.CommandExecutor
@@ -60,7 +60,7 @@ func New() (*metricspusher, error) {
 
 // NewWithDependencies allows full dependency injection for testing
 func NewWithDependencies(
-	apiserver apiserver.Operations,
+	apiserver apiserver.MetricsOperations,
 	agentstate agentstate.Operations,
 	collector pgmetrics.Collector,
 	cmdExecutor sysmetrics.CommandExecutor,
