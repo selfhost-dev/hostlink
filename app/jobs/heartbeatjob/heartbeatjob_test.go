@@ -162,7 +162,7 @@ func TestShutdown_StopsJob(t *testing.T) {
 // TestShutdown_WaitsForCompletion - Shutdown() waits for goroutine to finish
 func TestShutdown_WaitsForCompletion(t *testing.T) {
 	var wg sync.WaitGroup
-	goroutineFinished := false
+	var goroutineFinished atomic.Bool
 
 	svc := new(MockHeartbeatService)
 
@@ -170,7 +170,7 @@ func TestShutdown_WaitsForCompletion(t *testing.T) {
 		Trigger: func(ctx context.Context, fn func() error) {
 			<-ctx.Done()
 			time.Sleep(20 * time.Millisecond)
-			goroutineFinished = true
+			goroutineFinished.Store(true)
 		},
 	})
 
@@ -184,5 +184,5 @@ func TestShutdown_WaitsForCompletion(t *testing.T) {
 	}()
 
 	wg.Wait()
-	assert.True(t, goroutineFinished)
+	assert.True(t, goroutineFinished.Load())
 }
