@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"hostlink/app"
+	"hostlink/app/jobs/heartbeatjob"
 	"hostlink/app/jobs/metricsjob"
 	"hostlink/app/jobs/registrationjob"
 	"hostlink/app/jobs/taskjob"
+	"hostlink/app/services/heartbeat"
 	"hostlink/app/services/metrics"
 	"hostlink/app/services/taskfetcher"
 	"hostlink/app/services/taskreporter"
@@ -78,6 +80,14 @@ func main() {
 		}
 		metricsJob := metricsjob.New()
 		metricsJob.Register(ctx, metricsReporter, metricsReporter)
+
+		heartbeatSvc, err := heartbeat.New()
+		if err != nil {
+			log.Printf("failed to initialize heartbeat service: %v", err)
+			return
+		}
+		heartbeatJob := heartbeatjob.New()
+		heartbeatJob.Register(ctx, heartbeatSvc)
 	}()
 
 	log.Fatal(e.Start(fmt.Sprintf(":%s", appconf.Port())))
