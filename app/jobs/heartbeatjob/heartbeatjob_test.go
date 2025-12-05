@@ -150,13 +150,13 @@ func TestShutdown_StopsJob(t *testing.T) {
 	job.Register(ctx, svc)
 
 	time.Sleep(10 * time.Millisecond)
-	countBeforeShutdown := callCount.Load()
 	job.Shutdown()
+	countAtShutdown := callCount.Load()
 
 	time.Sleep(10 * time.Millisecond)
-	countAfterShutdown := callCount.Load()
+	countAfterWait := callCount.Load()
 
-	assert.Equal(t, countBeforeShutdown, countAfterShutdown)
+	assert.Equal(t, countAtShutdown, countAfterWait)
 }
 
 // TestShutdown_WaitsForCompletion - Shutdown() waits for goroutine to finish
