@@ -8,252 +8,234 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-type mockExecutor struct {
-	outputs map[string]string
-	errs    map[string]error
+type mockSystemCollector struct {
+	cpuStats  CPUStats
+	cpuErr    error
+	memStats  MemoryStats
+	memErr    error
+	swapStats SwapStats
+	swapErr   error
+	loadStats LoadStats
+	loadErr   error
+	diskStats DiskStats
+	diskErr   error
 }
 
-func (m *mockExecutor) Execute(ctx context.Context, command string) (string, error) {
-	if err, ok := m.errs[command]; ok && err != nil {
-		return "", err
-	}
-	return m.outputs[command], nil
+func (m *mockSystemCollector) CPUTimes(ctx context.Context) (CPUStats, error) {
+	return m.cpuStats, m.cpuErr
 }
 
-func TestCollectCPU_ParsesTopOutput(t *testing.T) {
-	mock := &mockExecutor{
-		outputs: map[string]string{
-			cpuCommand: "0.0",
-		},
-	}
-	c := &collector{executor: mock}
-
-	cpu, err := c.collectCPU(context.Background())
-
-	assert.NoError(t, err)
-	assert.Equal(t, 0.0, cpu)
+func (m *mockSystemCollector) VirtualMemory(ctx context.Context) (MemoryStats, error) {
+	return m.memStats, m.memErr
 }
 
-func TestCollectCPU_CalculatesUsageFromIdle(t *testing.T) {
-	mock := &mockExecutor{
-		outputs: map[string]string{
-			cpuCommand: "24.5",
-		},
-	}
-	c := &collector{executor: mock}
-
-	cpu, err := c.collectCPU(context.Background())
-
-	assert.NoError(t, err)
-	assert.Equal(t, 24.5, cpu)
+func (m *mockSystemCollector) SwapMemory(ctx context.Context) (SwapStats, error) {
+	return m.swapStats, m.swapErr
 }
 
-func TestCollectCPU_ExecutorError(t *testing.T) {
-	mock := &mockExecutor{
-		errs: map[string]error{
-			cpuCommand: errors.New("command failed"),
-		},
-	}
-	c := &collector{executor: mock}
-
-	_, err := c.collectCPU(context.Background())
-
-	assert.Error(t, err)
+func (m *mockSystemCollector) LoadAvg(ctx context.Context) (LoadStats, error) {
+	return m.loadStats, m.loadErr
 }
 
-func TestCollectMemory_ParsesFreeOutput(t *testing.T) {
-	mock := &mockExecutor{
-		outputs: map[string]string{
-			memoryCommand: "13.24",
-		},
-	}
-	c := &collector{executor: mock}
-
-	mem, err := c.collectMemory(context.Background())
-
-	assert.NoError(t, err)
-	assert.Equal(t, 13.24, mem)
+func (m *mockSystemCollector) DiskUsage(ctx context.Context) (DiskStats, error) {
+	return m.diskStats, m.diskErr
 }
 
-func TestCollectMemory_ExecutorError(t *testing.T) {
-	mock := &mockExecutor{
-		errs: map[string]error{
-			memoryCommand: errors.New("command failed"),
-		},
+// TestCollect_FirstCollection_ReturnsZeroCPU - first collection stores baseline, returns 0 for CPU
+func TestCollect_FirstCollection_ReturnsZeroCPU(t *testing.T) {
+	mock := &mockSystemCollector{
+		cpuStats:  CPUStats{User: 100, System: 50, Idle: 850, Iowait: 10},
+		memStats:  MemoryStats{UsedPercent: 45.0},
+		swapStats: SwapStats{UsedPercent: 10.0},
+		loadStats: LoadStats{Load1: 1.0, Load5: 0.8, Load15: 0.5},
+		diskStats: DiskStats{UsedPercent: 60.0},
 	}
-	c := &collector{executor: mock}
 
-	_, err := c.collectMemory(context.Background())
-
-	assert.Error(t, err)
-}
-
-func TestCollectLoadAvg_ParsesProcLoadavg(t *testing.T) {
-	mock := &mockExecutor{
-		outputs: map[string]string{
-			loadAvgCommand: "0.15 0.10 0.05",
-		},
-	}
-	c := &collector{executor: mock}
-
-	l1, l5, l15, err := c.collectLoadAvg(context.Background())
-
-	assert.NoError(t, err)
-	assert.Equal(t, 0.15, l1)
-	assert.Equal(t, 0.10, l5)
-	assert.Equal(t, 0.05, l15)
-}
-
-func TestCollectLoadAvg_ExecutorError(t *testing.T) {
-	mock := &mockExecutor{
-		errs: map[string]error{
-			loadAvgCommand: errors.New("command failed"),
-		},
-	}
-	c := &collector{executor: mock}
-
-	_, _, _, err := c.collectLoadAvg(context.Background())
-
-	assert.Error(t, err)
-}
-
-func TestCollectSwap_ParsesFreeOutput(t *testing.T) {
-	mock := &mockExecutor{
-		outputs: map[string]string{
-			swapCommand: "25.50",
-		},
-	}
-	c := &collector{executor: mock}
-
-	swap, err := c.collectSwap(context.Background())
-
-	assert.NoError(t, err)
-	assert.Equal(t, 25.50, swap)
-}
-
-func TestCollectSwap_ZeroWhenNoSwap(t *testing.T) {
-	mock := &mockExecutor{
-		outputs: map[string]string{
-			swapCommand: "0",
-		},
-	}
-	c := &collector{executor: mock}
-
-	swap, err := c.collectSwap(context.Background())
-
-	assert.NoError(t, err)
-	assert.Equal(t, 0.0, swap)
-}
-
-func TestCollectSwap_ExecutorError(t *testing.T) {
-	mock := &mockExecutor{
-		errs: map[string]error{
-			swapCommand: errors.New("command failed"),
-		},
-	}
-	c := &collector{executor: mock}
-
-	_, err := c.collectSwap(context.Background())
-
-	assert.Error(t, err)
-}
-
-func TestCollect_ReturnsAllMetrics(t *testing.T) {
-	diskPath := "/selfhostdev/postgresql"
-	diskCmd := "df " + diskPath + " | tail -1 | awk '{print $5}' | tr -d '%'"
-	mock := &mockExecutor{
-		outputs: map[string]string{
-			cpuCommand:     "15.5",
-			memoryCommand:  "42.30",
-			loadAvgCommand: "1.25 0.80 0.50",
-			swapCommand:    "10.00",
-			diskCmd:        "25",
-		},
-	}
-	c := &collector{executor: mock, diskPath: diskPath}
-
+	c := NewWithConfig(&Config{Collector: mock})
 	metrics, err := c.Collect(context.Background())
 
 	assert.NoError(t, err)
-	assert.Equal(t, 15.5, metrics.CPUPercent)
-	assert.Equal(t, 42.30, metrics.MemoryPercent)
-	assert.Equal(t, 1.25, metrics.LoadAvg1)
-	assert.Equal(t, 0.80, metrics.LoadAvg5)
-	assert.Equal(t, 0.50, metrics.LoadAvg15)
-	assert.Equal(t, 10.00, metrics.SwapUsagePercent)
-	assert.Equal(t, 25.0, metrics.DiskUsagePercent)
-}
-
-func TestCollect_PartialFailure(t *testing.T) {
-	diskPath := "/selfhostdev/postgresql"
-	diskCmd := "df " + diskPath + " | tail -1 | awk '{print $5}' | tr -d '%'"
-	mock := &mockExecutor{
-		outputs: map[string]string{
-			memoryCommand:  "42.30",
-			loadAvgCommand: "1.25 0.80 0.50",
-			swapCommand:    "10.00",
-			diskCmd:        "25",
-		},
-		errs: map[string]error{
-			cpuCommand: errors.New("cpu command failed"),
-		},
-	}
-	c := &collector{executor: mock, diskPath: diskPath}
-
-	metrics, err := c.Collect(context.Background())
-
-	assert.Error(t, err)
 	assert.Equal(t, 0.0, metrics.CPUPercent)
-	assert.Equal(t, 42.30, metrics.MemoryPercent)
+	assert.Equal(t, 0.0, metrics.CPUIOWaitPercent)
+	assert.Equal(t, 45.0, metrics.MemoryPercent)
+	assert.Equal(t, 10.0, metrics.SwapUsagePercent)
+	assert.Equal(t, 1.0, metrics.LoadAvg1)
+	assert.Equal(t, 0.8, metrics.LoadAvg5)
+	assert.Equal(t, 0.5, metrics.LoadAvg15)
+	assert.Equal(t, 60.0, metrics.DiskUsagePercent)
+}
+
+// TestCollect_SecondCollection_ReturnsDeltaCPU - second collection calculates delta
+func TestCollect_SecondCollection_ReturnsDeltaCPU(t *testing.T) {
+	mock := &mockSystemCollector{
+		memStats:  MemoryStats{UsedPercent: 45.0},
+		swapStats: SwapStats{UsedPercent: 10.0},
+		loadStats: LoadStats{Load1: 1.0, Load5: 0.8, Load15: 0.5},
+		diskStats: DiskStats{UsedPercent: 60.0},
+	}
+
+	c := NewWithConfig(&Config{Collector: mock})
+
+	// First collection - baseline
+	mock.cpuStats = CPUStats{User: 100, System: 50, Idle: 840, Iowait: 10}
+	c.Collect(context.Background())
+
+	// Second collection - delta
+	mock.cpuStats = CPUStats{User: 120, System: 60, Idle: 900, Iowait: 20}
+	// Delta: User=20, System=10, Idle=60, Iowait=10, Total=100
+	// CPUPercent = (1 - 60/100) * 100 = 40%
+	// IOWaitPercent = (10/100) * 100 = 10%
+
+	metrics, err := c.Collect(context.Background())
+
+	assert.NoError(t, err)
+	assert.Equal(t, 40.0, metrics.CPUPercent)
+	assert.Equal(t, 10.0, metrics.CPUIOWaitPercent)
+}
+
+// TestCollect_ReturnsAllMetrics - all metrics collected successfully (after baseline)
+func TestCollect_ReturnsAllMetrics(t *testing.T) {
+	mock := &mockSystemCollector{
+		memStats:  MemoryStats{UsedPercent: 45.0},
+		swapStats: SwapStats{UsedPercent: 10.0},
+		loadStats: LoadStats{Load1: 1.25, Load5: 0.80, Load15: 0.50},
+		diskStats: DiskStats{UsedPercent: 60.0},
+	}
+
+	c := NewWithConfig(&Config{Collector: mock})
+
+	// First collection - baseline
+	mock.cpuStats = CPUStats{User: 100, System: 50, Idle: 840, Iowait: 10}
+	c.Collect(context.Background())
+
+	// Second collection
+	mock.cpuStats = CPUStats{User: 120, System: 60, Idle: 900, Iowait: 20}
+
+	metrics, err := c.Collect(context.Background())
+
+	assert.NoError(t, err)
+	assert.Equal(t, 40.0, metrics.CPUPercent)
+	assert.Equal(t, 10.0, metrics.CPUIOWaitPercent)
+	assert.Equal(t, 45.0, metrics.MemoryPercent)
 	assert.Equal(t, 1.25, metrics.LoadAvg1)
 	assert.Equal(t, 0.80, metrics.LoadAvg5)
 	assert.Equal(t, 0.50, metrics.LoadAvg15)
-	assert.Equal(t, 10.00, metrics.SwapUsagePercent)
-	assert.Equal(t, 25.0, metrics.DiskUsagePercent)
+	assert.Equal(t, 10.0, metrics.SwapUsagePercent)
+	assert.Equal(t, 60.0, metrics.DiskUsagePercent)
 }
 
-// TestCollectDisk_ParsesDfOutput - verifies disk% from df command
-func TestCollectDisk_ParsesDfOutput(t *testing.T) {
-	diskPath := "/selfhostdev/postgresql"
-	c := &collector{
-		executor: &mockExecutor{
-			outputs: map[string]string{
-				"df " + diskPath + " | tail -1 | awk '{print $5}' | tr -d '%'": "20",
-			},
-		},
-		diskPath: diskPath,
+// TestCollect_CPUFailure_ReturnsZero - CPU fails, returns 0 for CPU fields
+func TestCollect_CPUFailure_ReturnsZero(t *testing.T) {
+	mock := &mockSystemCollector{
+		cpuErr:    errors.New("cpu error"),
+		memStats:  MemoryStats{UsedPercent: 45.0},
+		swapStats: SwapStats{UsedPercent: 10.0},
+		loadStats: LoadStats{Load1: 1.0, Load5: 0.8, Load15: 0.5},
+		diskStats: DiskStats{UsedPercent: 60.0},
 	}
 
-	disk, err := c.collectDisk(context.Background())
+	c := NewWithConfig(&Config{Collector: mock})
+	metrics, err := c.Collect(context.Background())
 
 	assert.NoError(t, err)
-	assert.Equal(t, 20.0, disk)
+	assert.Equal(t, 0.0, metrics.CPUPercent)
+	assert.Equal(t, 0.0, metrics.CPUIOWaitPercent)
+	assert.Equal(t, 45.0, metrics.MemoryPercent)
 }
 
-// TestCollectDisk_ExecutorError - verifies error handling when command fails
-func TestCollectDisk_ExecutorError(t *testing.T) {
-	diskPath := "/selfhostdev/postgresql"
-	c := &collector{
-		executor: &mockExecutor{
-			errs: map[string]error{
-				"df " + diskPath + " | tail -1 | awk '{print $5}' | tr -d '%'": errors.New("command failed"),
-			},
-		},
-		diskPath: diskPath,
+// TestCollect_MemoryFailure_ReturnsZero - memory fails, returns 0
+func TestCollect_MemoryFailure_ReturnsZero(t *testing.T) {
+	mock := &mockSystemCollector{
+		cpuStats:  CPUStats{User: 100, System: 50, Idle: 840, Iowait: 10},
+		memErr:    errors.New("memory error"),
+		swapStats: SwapStats{UsedPercent: 10.0},
+		loadStats: LoadStats{Load1: 1.0, Load5: 0.8, Load15: 0.5},
+		diskStats: DiskStats{UsedPercent: 60.0},
 	}
 
-	_, err := c.collectDisk(context.Background())
+	c := NewWithConfig(&Config{Collector: mock})
+	metrics, err := c.Collect(context.Background())
 
-	assert.Error(t, err)
+	assert.NoError(t, err)
+	assert.Equal(t, 0.0, metrics.MemoryPercent)
+	assert.Equal(t, 10.0, metrics.SwapUsagePercent)
 }
 
-// TestDiskCommand_FormatsPathCorrectly - verifies disk command includes correct path
-func TestDiskCommand_FormatsPathCorrectly(t *testing.T) {
-	diskPath := "/selfhostdev/postgresql"
-	c := &collector{diskPath: diskPath}
+// TestCollect_LoadAvgFailure_ReturnsZero - load avg fails, returns 0
+func TestCollect_LoadAvgFailure_ReturnsZero(t *testing.T) {
+	mock := &mockSystemCollector{
+		cpuStats:  CPUStats{User: 100, System: 50, Idle: 840, Iowait: 10},
+		memStats:  MemoryStats{UsedPercent: 45.0},
+		swapStats: SwapStats{UsedPercent: 10.0},
+		loadErr:   errors.New("load error"),
+		diskStats: DiskStats{UsedPercent: 60.0},
+	}
 
-	cmd := c.diskCommand()
+	c := NewWithConfig(&Config{Collector: mock})
+	metrics, err := c.Collect(context.Background())
 
-	assert.Contains(t, cmd, diskPath)
-	assert.Equal(t, "df /selfhostdev/postgresql | tail -1 | awk '{print $5}' | tr -d '%'", cmd)
+	assert.NoError(t, err)
+	assert.Equal(t, 0.0, metrics.LoadAvg1)
+	assert.Equal(t, 0.0, metrics.LoadAvg5)
+	assert.Equal(t, 0.0, metrics.LoadAvg15)
+}
+
+// TestCollect_SwapFailure_ReturnsZero - swap fails, returns 0
+func TestCollect_SwapFailure_ReturnsZero(t *testing.T) {
+	mock := &mockSystemCollector{
+		cpuStats:  CPUStats{User: 100, System: 50, Idle: 840, Iowait: 10},
+		memStats:  MemoryStats{UsedPercent: 45.0},
+		swapErr:   errors.New("swap error"),
+		loadStats: LoadStats{Load1: 1.0, Load5: 0.8, Load15: 0.5},
+		diskStats: DiskStats{UsedPercent: 60.0},
+	}
+
+	c := NewWithConfig(&Config{Collector: mock})
+	metrics, err := c.Collect(context.Background())
+
+	assert.NoError(t, err)
+	assert.Equal(t, 0.0, metrics.SwapUsagePercent)
+	assert.Equal(t, 45.0, metrics.MemoryPercent)
+}
+
+// TestCollect_DiskFailure_ReturnsZero - disk fails, returns 0
+func TestCollect_DiskFailure_ReturnsZero(t *testing.T) {
+	mock := &mockSystemCollector{
+		cpuStats:  CPUStats{User: 100, System: 50, Idle: 840, Iowait: 10},
+		memStats:  MemoryStats{UsedPercent: 45.0},
+		swapStats: SwapStats{UsedPercent: 10.0},
+		loadStats: LoadStats{Load1: 1.0, Load5: 0.8, Load15: 0.5},
+		diskErr:   errors.New("disk error"),
+	}
+
+	c := NewWithConfig(&Config{Collector: mock})
+	metrics, err := c.Collect(context.Background())
+
+	assert.NoError(t, err)
+	assert.Equal(t, 0.0, metrics.DiskUsagePercent)
+	assert.Equal(t, 45.0, metrics.MemoryPercent)
+}
+
+// TestCollect_AllFailures_ReturnsZeroMetrics - all fail, returns all zeros with nil error
+func TestCollect_AllFailures_ReturnsZeroMetrics(t *testing.T) {
+	mock := &mockSystemCollector{
+		cpuErr:  errors.New("cpu error"),
+		memErr:  errors.New("memory error"),
+		swapErr: errors.New("swap error"),
+		loadErr: errors.New("load error"),
+		diskErr: errors.New("disk error"),
+	}
+
+	c := NewWithConfig(&Config{Collector: mock})
+	metrics, err := c.Collect(context.Background())
+
+	assert.NoError(t, err)
+	assert.Equal(t, 0.0, metrics.CPUPercent)
+	assert.Equal(t, 0.0, metrics.CPUIOWaitPercent)
+	assert.Equal(t, 0.0, metrics.MemoryPercent)
+	assert.Equal(t, 0.0, metrics.LoadAvg1)
+	assert.Equal(t, 0.0, metrics.LoadAvg5)
+	assert.Equal(t, 0.0, metrics.LoadAvg15)
+	assert.Equal(t, 0.0, metrics.SwapUsagePercent)
+	assert.Equal(t, 0.0, metrics.DiskUsagePercent)
 }
