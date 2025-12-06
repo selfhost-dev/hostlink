@@ -26,6 +26,7 @@ type MetricSet struct {
 
 type SystemMetrics struct {
 	CPUPercent       float64 `json:"cpu_percent"`
+	CPUIOWaitPercent float64 `json:"cpu_io_wait_percent"`
 	MemoryPercent    float64 `json:"memory_percent"`
 	DiskUsagePercent float64 `json:"disk_usage_percent"`
 	LoadAvg1         float64 `json:"load_avg_1"`

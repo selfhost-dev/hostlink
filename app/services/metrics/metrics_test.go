@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"errors"
-	"strings"
 	"testing"
 
 	"hostlink/domain/credential"
@@ -73,13 +72,13 @@ func (m *MockCollector) Collect(cred credential.Credential) (domainmetrics.Postg
 	return args.Get(0).(domainmetrics.PostgreSQLDatabaseMetrics), args.Error(1)
 }
 
-type MockCommandExecutor struct {
+type MockSysCollector struct {
 	mock.Mock
 }
 
-func (m *MockCommandExecutor) Execute(ctx context.Context, command string) (string, error) {
-	args := m.Called(ctx, command)
-	return args.String(0), args.Error(1)
+func (m *MockSysCollector) Collect(ctx context.Context) (domainmetrics.SystemMetrics, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(domainmetrics.SystemMetrics), args.Error(1)
 }
 
 type MockCrypto struct {
@@ -161,27 +160,27 @@ func (m *MockCrypto) DecryptWithPrivateKey(ciphertextBase64 string, privateKey *
 
 // Test helpers
 type testMocks struct {
-	apiserver   *MockAPIServer
-	agentstate  *MockAgentState
-	collector   *MockCollector
-	cmdExecutor *MockCommandExecutor
-	crypto      *MockCrypto
+	apiserver    *MockAPIServer
+	agentstate   *MockAgentState
+	collector    *MockCollector
+	syscollector *MockSysCollector
+	crypto       *MockCrypto
 }
 
 func setupTestMetricsPusher() (*metricspusher, *testMocks) {
 	mocks := &testMocks{
-		apiserver:   new(MockAPIServer),
-		agentstate:  new(MockAgentState),
-		collector:   new(MockCollector),
-		cmdExecutor: new(MockCommandExecutor),
-		crypto:      new(MockCrypto),
+		apiserver:    new(MockAPIServer),
+		agentstate:   new(MockAgentState),
+		collector:    new(MockCollector),
+		syscollector: new(MockSysCollector),
+		crypto:       new(MockCrypto),
 	}
 
 	mp := NewWithDependencies(
 		mocks.apiserver,
 		mocks.agentstate,
 		mocks.collector,
-		mocks.cmdExecutor,
+		mocks.syscollector,
 		mocks.crypto,
 		"/test/key/path",
 	)
@@ -197,7 +196,7 @@ func TestNewWithDependencies_AllFieldsSet(t *testing.T) {
 	assert.Equal(t, mocks.apiserver, mp.apiserver)
 	assert.Equal(t, mocks.agentstate, mp.agentstate)
 	assert.Equal(t, mocks.collector, mp.metricscollector)
-	assert.Equal(t, mocks.cmdExecutor, mp.cmdExecutor)
+	assert.Equal(t, mocks.syscollector, mp.syscollector)
 	assert.Equal(t, mocks.crypto, mp.crypto)
 	assert.Equal(t, "/test/key/path", mp.privateKeyPath)
 }
@@ -426,8 +425,8 @@ func TestPush_SystemMetricsFailure_StillPushesDbMetrics(t *testing.T) {
 	testCred := credential.Credential{Host: "localhost", DataDirectory: "/var/lib/postgresql"}
 
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
-	mocks.cmdExecutor.On("Execute", mock.Anything, mock.Anything).
-		Return("", errors.New("command failed"))
+	mocks.syscollector.On("Collect", mock.Anything).
+		Return(domainmetrics.SystemMetrics{}, errors.New("collection failed"))
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{ConnectionsTotal: 5}, nil)
 	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {
@@ -448,7 +447,7 @@ func TestPush_DatabaseMetricsFailure_StillPushesSystemMetrics(t *testing.T) {
 	collectErr := errors.New("connection refused")
 
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
-	setupCmdExecutorMocks(mocks.cmdExecutor)
+	setupSysCollectorMocks(mocks.syscollector)
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{}, collectErr)
 	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {
@@ -468,8 +467,8 @@ func TestPush_AllCollectionsFail(t *testing.T) {
 	testCred := credential.Credential{Host: "localhost", DataDirectory: "/var/lib/postgresql"}
 
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
-	mocks.cmdExecutor.On("Execute", mock.Anything, mock.Anything).
-		Return("", errors.New("command failed"))
+	mocks.syscollector.On("Collect", mock.Anything).
+		Return(domainmetrics.SystemMetrics{}, errors.New("collection failed"))
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{}, errors.New("connection refused"))
 
@@ -486,7 +485,7 @@ func TestPush_APIServerPushFailure(t *testing.T) {
 	pushErr := errors.New("network timeout")
 
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
-	setupCmdExecutorMocks(mocks.cmdExecutor)
+	setupSysCollectorMocks(mocks.syscollector)
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{ConnectionsTotal: 5}, nil)
 	mocks.apiserver.On("PushMetrics", mock.Anything, mock.Anything).
@@ -508,7 +507,7 @@ func TestPush_Success_ValidatesPayloadSchema(t *testing.T) {
 	}
 
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
-	setupCmdExecutorMocks(mocks.cmdExecutor)
+	setupSysCollectorMocks(mocks.syscollector)
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{
 			ConnectionsTotal:      10,
@@ -611,7 +610,7 @@ func TestPush_ContextPropagation(t *testing.T) {
 	testCred := credential.Credential{DataDirectory: "/data"}
 
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
-	setupCmdExecutorMocks(mocks.cmdExecutor)
+	setupSysCollectorMocks(mocks.syscollector)
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{}, nil)
 	mocks.apiserver.On("PushMetrics", mock.MatchedBy(func(ctx context.Context) bool {
@@ -652,7 +651,7 @@ func TestPush_CredentialPassedCorrectly(t *testing.T) {
 	}
 
 	mocks.agentstate.On("GetAgentID").Return("agent-456")
-	setupCmdExecutorMocks(mocks.cmdExecutor)
+	setupSysCollectorMocks(mocks.syscollector)
 	mocks.collector.On("Collect", mock.MatchedBy(func(c credential.Credential) bool {
 		return c.Host == testCred.Host &&
 			c.Port == testCred.Port &&
@@ -668,20 +667,15 @@ func TestPush_CredentialPassedCorrectly(t *testing.T) {
 	mocks.collector.AssertExpectations(t)
 }
 
-func setupCmdExecutorMocks(executor *MockCommandExecutor) {
-	executor.On("Execute", mock.Anything, mock.MatchedBy(func(cmd string) bool {
-		return strings.HasPrefix(cmd, "top")
-	})).Return("25.0", nil)
-	executor.On("Execute", mock.Anything, mock.MatchedBy(func(cmd string) bool {
-		return strings.HasPrefix(cmd, "free") && !strings.Contains(cmd, "Swap")
-	})).Return("50.0", nil)
-	executor.On("Execute", mock.Anything, mock.MatchedBy(func(cmd string) bool {
-		return strings.HasPrefix(cmd, "cat")
-	})).Return("1.5 2.0 2.5", nil)
-	executor.On("Execute", mock.Anything, mock.MatchedBy(func(cmd string) bool {
-		return strings.Contains(cmd, "Swap")
-	})).Return("10.0", nil)
-	executor.On("Execute", mock.Anything, mock.MatchedBy(func(cmd string) bool {
-		return strings.HasPrefix(cmd, "df")
-	})).Return("75", nil)
+func setupSysCollectorMocks(collector *MockSysCollector) {
+	collector.On("Collect", mock.Anything).Return(domainmetrics.SystemMetrics{
+		CPUPercent:       25.0,
+		CPUIOWaitPercent: 5.0,
+		MemoryPercent:    50.0,
+		LoadAvg1:         1.5,
+		LoadAvg5:         2.0,
+		LoadAvg15:        2.5,
+		SwapUsagePercent: 10.0,
+		DiskUsagePercent: 75.0,
+	}, nil)
 }

@@ -11,7 +11,6 @@ import (
 	"hostlink/domain/credential"
 	domainmetrics "hostlink/domain/metrics"
 	"hostlink/internal/apiserver"
-	"hostlink/internal/cmdexec"
 	"hostlink/internal/crypto"
 	"hostlink/internal/pgmetrics"
 	"hostlink/internal/sysmetrics"
@@ -29,7 +28,7 @@ type metricspusher struct {
 	apiserver        apiserver.MetricsOperations
 	agentstate       agentstate.Operations
 	metricscollector pgmetrics.Collector
-	cmdExecutor      sysmetrics.CommandExecutor
+	syscollector     sysmetrics.Collector
 	crypto           crypto.Service
 	privateKeyPath   string
 }
@@ -48,7 +47,7 @@ func NewWithConf() (*metricspusher, error) {
 		apiserver:        svr,
 		agentstate:       agentstate,
 		metricscollector: pgmetrics.New(),
-		cmdExecutor:      cmdexec.New(),
+		syscollector:     sysmetrics.New(),
 		crypto:           crypto.NewService(),
 		privateKeyPath:   appconf.AgentPrivateKeyPath(),
 	}, nil
@@ -62,16 +61,16 @@ func New() (*metricspusher, error) {
 func NewWithDependencies(
 	apiserver apiserver.MetricsOperations,
 	agentstate agentstate.Operations,
-	collector pgmetrics.Collector,
-	cmdExecutor sysmetrics.CommandExecutor,
+	pgcollector pgmetrics.Collector,
+	syscollector sysmetrics.Collector,
 	crypto crypto.Service,
 	privateKeyPath string,
 ) *metricspusher {
 	return &metricspusher{
 		apiserver:        apiserver,
 		agentstate:       agentstate,
-		metricscollector: collector,
-		cmdExecutor:      cmdExecutor,
+		metricscollector: pgcollector,
+		syscollector:     syscollector,
 		crypto:           crypto,
 		privateKeyPath:   privateKeyPath,
 	}
@@ -123,10 +122,7 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 	var metricSets []domainmetrics.MetricSet
 	var collectionErrors []error
 
-	sysCollector := sysmetrics.New(mp.cmdExecutor, sysmetrics.Config{
-		DiskPath: cred.DataDirectory,
-	})
-	sysMetrics, err := sysCollector.Collect(ctx)
+	sysMetrics, err := mp.syscollector.Collect(ctx)
 	if err != nil {
 		collectionErrors = append(collectionErrors, fmt.Errorf("system metrics: %w", err))
 	} else {
