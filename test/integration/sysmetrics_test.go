@@ -18,11 +18,13 @@ func TestSysmetrics_CollectsRealMetrics(t *testing.T) {
 	c := sysmetrics.New()
 	ctx := context.Background()
 
-	// First collection - baseline (CPU returns 0)
+	// First collection - baseline (CPU and network return 0)
 	metrics1, err := c.Collect(ctx)
 	assert.NoError(t, err)
 	assert.Equal(t, 0.0, metrics1.CPUPercent)
 	assert.Equal(t, 0.0, metrics1.CPUIOWaitPercent)
+	assert.Equal(t, 0.0, metrics1.NetworkRecvBytesPerSec)
+	assert.Equal(t, 0.0, metrics1.NetworkSentBytesPerSec)
 
 	// Wait for CPU delta
 	time.Sleep(100 * time.Millisecond)
@@ -46,4 +48,6 @@ func TestSysmetrics_CollectsRealMetrics(t *testing.T) {
 	assert.GreaterOrEqual(t, metrics2.LoadAvg1, 0.0)
 	assert.GreaterOrEqual(t, metrics2.LoadAvg5, 0.0)
 	assert.GreaterOrEqual(t, metrics2.LoadAvg15, 0.0)
+	assert.GreaterOrEqual(t, metrics2.NetworkRecvBytesPerSec, 0.0)
+	assert.GreaterOrEqual(t, metrics2.NetworkSentBytesPerSec, 0.0)
 }
