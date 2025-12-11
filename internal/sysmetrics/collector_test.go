@@ -9,18 +9,16 @@ import (
 )
 
 type mockSystemCollector struct {
-	cpuStats     CPUStats
-	cpuErr       error
-	memStats     MemoryStats
-	memErr       error
-	swapStats    SwapStats
-	swapErr      error
-	loadStats    LoadStats
-	loadErr      error
-	diskStats    DiskStats
-	diskErr      error
-	networkStats NetworkStats
-	networkErr   error
+	cpuStats  CPUStats
+	cpuErr    error
+	memStats  MemoryStats
+	memErr    error
+	swapStats SwapStats
+	swapErr   error
+	loadStats LoadStats
+	loadErr   error
+	diskStats DiskStats
+	diskErr   error
 }
 
 func (m *mockSystemCollector) CPUTimes(ctx context.Context) (CPUStats, error) {
@@ -41,10 +39,6 @@ func (m *mockSystemCollector) LoadAvg(ctx context.Context) (LoadStats, error) {
 
 func (m *mockSystemCollector) DiskUsage(ctx context.Context) (DiskStats, error) {
 	return m.diskStats, m.diskErr
-}
-
-func (m *mockSystemCollector) NetworkIO(ctx context.Context) (NetworkStats, error) {
-	return m.networkStats, m.networkErr
 }
 
 // TestCollect_FirstCollection_ReturnsZeroCPU - first collection stores baseline, returns 0 for CPU
@@ -225,12 +219,11 @@ func TestCollect_DiskFailure_ReturnsZero(t *testing.T) {
 // TestCollect_AllFailures_ReturnsZeroMetrics - all fail, returns all zeros with nil error
 func TestCollect_AllFailures_ReturnsZeroMetrics(t *testing.T) {
 	mock := &mockSystemCollector{
-		cpuErr:     errors.New("cpu error"),
-		memErr:     errors.New("memory error"),
-		swapErr:    errors.New("swap error"),
-		loadErr:    errors.New("load error"),
-		diskErr:    errors.New("disk error"),
-		networkErr: errors.New("network error"),
+		cpuErr:  errors.New("cpu error"),
+		memErr:  errors.New("memory error"),
+		swapErr: errors.New("swap error"),
+		loadErr: errors.New("load error"),
+		diskErr: errors.New("disk error"),
 	}
 
 	c := NewWithConfig(&Config{Collector: mock})
@@ -245,73 +238,4 @@ func TestCollect_AllFailures_ReturnsZeroMetrics(t *testing.T) {
 	assert.Equal(t, 0.0, metrics.LoadAvg15)
 	assert.Equal(t, 0.0, metrics.SwapUsagePercent)
 	assert.Equal(t, 0.0, metrics.DiskUsagePercent)
-	assert.Equal(t, 0.0, metrics.NetworkRecvBytesPerSec)
-	assert.Equal(t, 0.0, metrics.NetworkSentBytesPerSec)
-}
-
-// TestCollect_FirstCollection_ReturnsZeroNetwork - first collection stores baseline, returns 0 for network
-func TestCollect_FirstCollection_ReturnsZeroNetwork(t *testing.T) {
-	mock := &mockSystemCollector{
-		cpuStats:     CPUStats{User: 100, System: 50, Idle: 850, Iowait: 10},
-		memStats:     MemoryStats{UsedPercent: 45.0},
-		swapStats:    SwapStats{UsedPercent: 10.0},
-		loadStats:    LoadStats{Load1: 1.0, Load5: 0.8, Load15: 0.5},
-		diskStats:    DiskStats{UsedPercent: 60.0},
-		networkStats: NetworkStats{RecvBytes: 1000, SentBytes: 500},
-	}
-
-	c := NewWithConfig(&Config{Collector: mock})
-	metrics, err := c.Collect(context.Background())
-
-	assert.NoError(t, err)
-	assert.Equal(t, 0.0, metrics.NetworkRecvBytesPerSec)
-	assert.Equal(t, 0.0, metrics.NetworkSentBytesPerSec)
-}
-
-// TestCollect_SecondCollection_ReturnsDeltaNetwork - second collection calculates bytes per second
-func TestCollect_SecondCollection_ReturnsDeltaNetwork(t *testing.T) {
-	mock := &mockSystemCollector{
-		cpuStats:  CPUStats{User: 100, System: 50, Idle: 840, Iowait: 10},
-		memStats:  MemoryStats{UsedPercent: 45.0},
-		swapStats: SwapStats{UsedPercent: 10.0},
-		loadStats: LoadStats{Load1: 1.0, Load5: 0.8, Load15: 0.5},
-		diskStats: DiskStats{UsedPercent: 60.0},
-	}
-
-	c := NewWithConfig(&Config{Collector: mock})
-
-	// First collection - baseline
-	mock.networkStats = NetworkStats{RecvBytes: 1000, SentBytes: 500}
-	c.Collect(context.Background())
-
-	// Second collection - delta
-	mock.networkStats = NetworkStats{RecvBytes: 2000, SentBytes: 1500}
-	// Delta: RecvBytes=1000, SentBytes=1000
-	// Assuming ~1 second between collections, bytes/sec ≈ delta
-
-	metrics, err := c.Collect(context.Background())
-
-	assert.NoError(t, err)
-	assert.Greater(t, metrics.NetworkRecvBytesPerSec, 0.0)
-	assert.Greater(t, metrics.NetworkSentBytesPerSec, 0.0)
-}
-
-// TestCollect_NetworkFailure_ReturnsZero - network fails, returns 0 for network fields
-func TestCollect_NetworkFailure_ReturnsZero(t *testing.T) {
-	mock := &mockSystemCollector{
-		cpuStats:   CPUStats{User: 100, System: 50, Idle: 840, Iowait: 10},
-		memStats:   MemoryStats{UsedPercent: 45.0},
-		swapStats:  SwapStats{UsedPercent: 10.0},
-		loadStats:  LoadStats{Load1: 1.0, Load5: 0.8, Load15: 0.5},
-		diskStats:  DiskStats{UsedPercent: 60.0},
-		networkErr: errors.New("network error"),
-	}
-
-	c := NewWithConfig(&Config{Collector: mock})
-	metrics, err := c.Collect(context.Background())
-
-	assert.NoError(t, err)
-	assert.Equal(t, 0.0, metrics.NetworkRecvBytesPerSec)
-	assert.Equal(t, 0.0, metrics.NetworkSentBytesPerSec)
-	assert.Equal(t, 45.0, metrics.MemoryPercent)
 }

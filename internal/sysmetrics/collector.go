@@ -11,7 +11,6 @@ import (
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/load"
 	"github.com/shirou/gopsutil/v4/mem"
-	"github.com/shirou/gopsutil/v4/net"
 )
 
 type CPUStats struct {
@@ -47,18 +46,12 @@ type DiskStats struct {
 	UsedPercent float64
 }
 
-type NetworkStats struct {
-	RecvBytes uint64
-	SentBytes uint64
-}
-
 type SystemCollector interface {
 	CPUTimes(ctx context.Context) (CPUStats, error)
 	VirtualMemory(ctx context.Context) (MemoryStats, error)
 	SwapMemory(ctx context.Context) (SwapStats, error)
 	LoadAvg(ctx context.Context) (LoadStats, error)
 	DiskUsage(ctx context.Context) (DiskStats, error)
-	NetworkIO(ctx context.Context) (NetworkStats, error)
 }
 
 type Collector interface {
@@ -70,11 +63,9 @@ type Config struct {
 }
 
 type collector struct {
-	sys             SystemCollector
-	lastCPU         *CPUStats
-	lastCPUTime     time.Time
-	lastNetwork     *NetworkStats
-	lastNetworkTime time.Time
+	sys         SystemCollector
+	lastCPU     *CPUStats
+	lastCPUTime time.Time
 }
 
 func New() Collector {
@@ -122,12 +113,6 @@ func (c *collector) Collect(ctx context.Context) (metrics.SystemMetrics, error) 
 	diskPercent, err := c.collectDisk(ctx)
 	if err == nil {
 		m.DiskUsagePercent = diskPercent
-	}
-
-	recvPerSec, sentPerSec, err := c.collectNetwork(ctx)
-	if err == nil {
-		m.NetworkRecvBytesPerSec = recvPerSec
-		m.NetworkSentBytesPerSec = sentPerSec
 	}
 
 	return m, nil
@@ -200,32 +185,6 @@ func (c *collector) collectDisk(ctx context.Context) (float64, error) {
 		return 0, err
 	}
 	return diskStats.UsedPercent, nil
-}
-
-func (c *collector) collectNetwork(ctx context.Context) (float64, float64, error) {
-	current, err := c.sys.NetworkIO(ctx)
-	if err != nil {
-		return 0, 0, err
-	}
-
-	if c.lastNetwork == nil {
-		c.lastNetwork = &current
-		c.lastNetworkTime = time.Now()
-		return 0, 0, nil
-	}
-
-	elapsed := time.Since(c.lastNetworkTime).Seconds()
-	if elapsed == 0 {
-		return 0, 0, nil
-	}
-
-	recvPerSec := float64(current.RecvBytes-c.lastNetwork.RecvBytes) / elapsed
-	sentPerSec := float64(current.SentBytes-c.lastNetwork.SentBytes) / elapsed
-
-	c.lastNetwork = &current
-	c.lastNetworkTime = time.Now()
-
-	return recvPerSec, sentPerSec, nil
 }
 
 type gopsutilCollector struct{}
@@ -302,19 +261,5 @@ func (g *gopsutilCollector) DiskUsage(ctx context.Context) (DiskStats, error) {
 
 	return DiskStats{
 		UsedPercent: float64(totalUsed) / float64(total) * 100,
-	}, nil
-}
-
-func (g *gopsutilCollector) NetworkIO(ctx context.Context) (NetworkStats, error) {
-	counters, err := net.IOCountersWithContext(ctx, false)
-	if err != nil {
-		return NetworkStats{}, err
-	}
-	if len(counters) == 0 {
-		return NetworkStats{}, fmt.Errorf("no network counters returned")
-	}
-	return NetworkStats{
-		RecvBytes: counters[0].BytesRecv,
-		SentBytes: counters[0].BytesSent,
 	}, nil
 }
