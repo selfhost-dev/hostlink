@@ -32,7 +32,7 @@ func setupPostgresContainer(t *testing.T) (*postgres.PostgresContainer, credenti
 	ctx := context.Background()
 
 	pgContainer, err := postgres.Run(ctx,
-		"postgres:16-alpine",
+		"postgres:18-alpine",
 		postgres.WithDatabase(testDatabase),
 		postgres.WithUsername(testUser),
 		postgres.WithPassword(testPassword),
@@ -163,6 +163,44 @@ func TestCollector_Collect_CacheHitRatio(t *testing.T) {
 	// It should be high since we're reading the same data multiple times
 	assert.Greater(t, metrics.CacheHitRatio, 0.0,
 		"cache hit ratio should be greater than 0 after queries")
+}
+
+func TestCollector_Collect_DeltaBasedTPS(t *testing.T) {
+	_, cred := setupPostgresContainer(t)
+
+	// Generate some initial activity to ensure stats_reset is populated
+	connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
+		cred.Host, cred.Port, cred.Username, *cred.Password, cred.Database)
+	db, err := sql.Open("postgres", connStr)
+	require.NoError(t, err)
+	defer db.Close()
+
+	ctx := context.Background()
+	_, err = db.ExecContext(ctx, "SELECT 1")
+	require.NoError(t, err)
+
+	collector := pgmetrics.New()
+
+	// First collection establishes baseline, returns 0 for rate metrics
+	metrics1, err := collector.Collect(cred)
+	require.NoError(t, err)
+	assert.Equal(t, 0.0, metrics1.TransactionsPerSecond, "first collection should return 0 TPS")
+	assert.Equal(t, 0.0, metrics1.CommittedTxPerSecond, "first collection should return 0 committed TPS")
+
+	// Generate transactions between collections
+	for range 100 {
+		_, err = db.ExecContext(ctx, "SELECT 1")
+		require.NoError(t, err)
+	}
+
+	// PostgreSQL stats flush at minimum 1-second intervals
+	time.Sleep(1 * time.Second)
+
+	// Second collection calculates delta-based TPS
+	metrics2, err := collector.Collect(cred)
+	require.NoError(t, err)
+	assert.Greater(t, metrics2.TransactionsPerSecond, 0.0, "second collection should have TPS > 0")
+	assert.Greater(t, metrics2.CommittedTxPerSecond, 0.0, "second collection should have committed TPS > 0")
 }
 
 func BenchmarkCollector_Collect(b *testing.B) {

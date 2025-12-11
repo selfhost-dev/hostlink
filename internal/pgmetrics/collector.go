@@ -193,19 +193,22 @@ func (d *defaultStatsCollector) QueryStats(ctx context.Context, db *sql.DB) (Pos
 			COALESCE(SUM(xact_commit), 0) AS xact_commit,
 			COALESCE(SUM(xact_rollback), 0) AS xact_rollback,
 			COALESCE(SUM(blks_read), 0) AS blks_read,
-			COALESCE(MIN(stats_reset), now()) AS stats_reset
-		FROM pg_stat_database
-		WHERE stats_reset IS NOT NULL;
+			MIN(stats_reset) AS stats_reset
+		FROM pg_stat_database;
 	`
 	var stats PostgresStats
+	var statsReset sql.NullTime
 	err := db.QueryRowContext(ctx, query).Scan(
 		&stats.XactCommit,
 		&stats.XactRollback,
 		&stats.BlksRead,
-		&stats.StatsReset,
+		&statsReset,
 	)
 	if err != nil {
 		return PostgresStats{}, fmt.Errorf("query stats: %w", err)
+	}
+	if statsReset.Valid {
+		stats.StatsReset = statsReset.Time
 	}
 	return stats, nil
 }
