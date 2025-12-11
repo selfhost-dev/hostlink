@@ -12,6 +12,7 @@ import (
 	domainmetrics "hostlink/domain/metrics"
 	"hostlink/internal/apiserver"
 	"hostlink/internal/crypto"
+	"hostlink/internal/networkmetrics"
 	"hostlink/internal/pgmetrics"
 	"hostlink/internal/sysmetrics"
 )
@@ -29,6 +30,7 @@ type metricspusher struct {
 	agentstate       agentstate.Operations
 	metricscollector pgmetrics.Collector
 	syscollector     sysmetrics.Collector
+	netcollector     networkmetrics.Collector
 	crypto           crypto.Service
 	privateKeyPath   string
 }
@@ -48,6 +50,7 @@ func NewWithConf() (*metricspusher, error) {
 		agentstate:       agentstate,
 		metricscollector: pgmetrics.New(),
 		syscollector:     sysmetrics.New(),
+		netcollector:     networkmetrics.New(),
 		crypto:           crypto.NewService(),
 		privateKeyPath:   appconf.AgentPrivateKeyPath(),
 	}, nil
@@ -63,6 +66,7 @@ func NewWithDependencies(
 	agentstate agentstate.Operations,
 	pgcollector pgmetrics.Collector,
 	syscollector sysmetrics.Collector,
+	netcollector networkmetrics.Collector,
 	crypto crypto.Service,
 	privateKeyPath string,
 ) *metricspusher {
@@ -71,6 +75,7 @@ func NewWithDependencies(
 		agentstate:       agentstate,
 		metricscollector: pgcollector,
 		syscollector:     syscollector,
+		netcollector:     netcollector,
 		crypto:           crypto,
 		privateKeyPath:   privateKeyPath,
 	}
@@ -129,6 +134,16 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 		metricSets = append(metricSets, domainmetrics.MetricSet{
 			Type:    domainmetrics.MetricTypeSystem,
 			Metrics: sysMetrics,
+		})
+	}
+
+	netMetrics, err := mp.netcollector.Collect(ctx)
+	if err != nil {
+		collectionErrors = append(collectionErrors, fmt.Errorf("network metrics: %w", err))
+	} else {
+		metricSets = append(metricSets, domainmetrics.MetricSet{
+			Type:    domainmetrics.MetricTypeNetwork,
+			Metrics: netMetrics,
 		})
 	}
 

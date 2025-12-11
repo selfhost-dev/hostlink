@@ -81,6 +81,15 @@ func (m *MockSysCollector) Collect(ctx context.Context) (domainmetrics.SystemMet
 	return args.Get(0).(domainmetrics.SystemMetrics), args.Error(1)
 }
 
+type MockNetCollector struct {
+	mock.Mock
+}
+
+func (m *MockNetCollector) Collect(ctx context.Context) (domainmetrics.NetworkMetrics, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(domainmetrics.NetworkMetrics), args.Error(1)
+}
+
 type MockCrypto struct {
 	mock.Mock
 }
@@ -164,6 +173,7 @@ type testMocks struct {
 	agentstate   *MockAgentState
 	collector    *MockCollector
 	syscollector *MockSysCollector
+	netcollector *MockNetCollector
 	crypto       *MockCrypto
 }
 
@@ -173,6 +183,7 @@ func setupTestMetricsPusher() (*metricspusher, *testMocks) {
 		agentstate:   new(MockAgentState),
 		collector:    new(MockCollector),
 		syscollector: new(MockSysCollector),
+		netcollector: new(MockNetCollector),
 		crypto:       new(MockCrypto),
 	}
 
@@ -181,6 +192,7 @@ func setupTestMetricsPusher() (*metricspusher, *testMocks) {
 		mocks.agentstate,
 		mocks.collector,
 		mocks.syscollector,
+		mocks.netcollector,
 		mocks.crypto,
 		"/test/key/path",
 	)
@@ -197,6 +209,7 @@ func TestNewWithDependencies_AllFieldsSet(t *testing.T) {
 	assert.Equal(t, mocks.agentstate, mp.agentstate)
 	assert.Equal(t, mocks.collector, mp.metricscollector)
 	assert.Equal(t, mocks.syscollector, mp.syscollector)
+	assert.Equal(t, mocks.netcollector, mp.netcollector)
 	assert.Equal(t, mocks.crypto, mp.crypto)
 	assert.Equal(t, "/test/key/path", mp.privateKeyPath)
 }
@@ -427,10 +440,21 @@ func TestPush_SystemMetricsFailure_StillPushesDbMetrics(t *testing.T) {
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
 	mocks.syscollector.On("Collect", mock.Anything).
 		Return(domainmetrics.SystemMetrics{}, errors.New("collection failed"))
+	setupNetCollectorMocks(mocks.netcollector)
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{ConnectionsTotal: 5}, nil)
 	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {
-		return len(p.MetricSets) == 1 && p.MetricSets[0].Type == domainmetrics.MetricTypePostgreSQLDatabase
+		hasNetwork := false
+		hasDb := false
+		for _, ms := range p.MetricSets {
+			if ms.Type == domainmetrics.MetricTypeNetwork {
+				hasNetwork = true
+			}
+			if ms.Type == domainmetrics.MetricTypePostgreSQLDatabase {
+				hasDb = true
+			}
+		}
+		return len(p.MetricSets) == 2 && hasNetwork && hasDb
 	})).Return(nil)
 
 	err := mp.Push(testCred)
@@ -448,10 +472,21 @@ func TestPush_DatabaseMetricsFailure_StillPushesSystemMetrics(t *testing.T) {
 
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
 	setupSysCollectorMocks(mocks.syscollector)
+	setupNetCollectorMocks(mocks.netcollector)
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{}, collectErr)
 	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {
-		return len(p.MetricSets) == 1 && p.MetricSets[0].Type == domainmetrics.MetricTypeSystem
+		hasSys := false
+		hasNetwork := false
+		for _, ms := range p.MetricSets {
+			if ms.Type == domainmetrics.MetricTypeSystem {
+				hasSys = true
+			}
+			if ms.Type == domainmetrics.MetricTypeNetwork {
+				hasNetwork = true
+			}
+		}
+		return len(p.MetricSets) == 2 && hasSys && hasNetwork
 	})).Return(nil)
 
 	err := mp.Push(testCred)
@@ -469,6 +504,8 @@ func TestPush_AllCollectionsFail(t *testing.T) {
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
 	mocks.syscollector.On("Collect", mock.Anything).
 		Return(domainmetrics.SystemMetrics{}, errors.New("collection failed"))
+	mocks.netcollector.On("Collect", mock.Anything).
+		Return(domainmetrics.NetworkMetrics{}, errors.New("network failed"))
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{}, errors.New("connection refused"))
 
@@ -486,6 +523,7 @@ func TestPush_APIServerPushFailure(t *testing.T) {
 
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
 	setupSysCollectorMocks(mocks.syscollector)
+	setupNetCollectorMocks(mocks.netcollector)
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{ConnectionsTotal: 5}, nil)
 	mocks.apiserver.On("PushMetrics", mock.Anything, mock.Anything).
@@ -508,6 +546,7 @@ func TestPush_Success_ValidatesPayloadSchema(t *testing.T) {
 
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
 	setupSysCollectorMocks(mocks.syscollector)
+	setupNetCollectorMocks(mocks.netcollector)
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{
 			ConnectionsTotal:      10,
@@ -532,23 +571,27 @@ func TestPush_Success_ValidatesPayloadSchema(t *testing.T) {
 		if p.Resource.HostName == "" {
 			return false
 		}
-		if len(p.MetricSets) != 2 {
+		if len(p.MetricSets) != 3 {
 			return false
 		}
 
-		// Validate system metrics
+		// Validate metrics
 		var sysMetrics domainmetrics.SystemMetrics
+		var netMetrics domainmetrics.NetworkMetrics
 		var dbMetrics domainmetrics.PostgreSQLDatabaseMetrics
 		for _, ms := range p.MetricSets {
 			if ms.Type == domainmetrics.MetricTypeSystem {
 				sysMetrics = ms.Metrics.(domainmetrics.SystemMetrics)
+			}
+			if ms.Type == domainmetrics.MetricTypeNetwork {
+				netMetrics = ms.Metrics.(domainmetrics.NetworkMetrics)
 			}
 			if ms.Type == domainmetrics.MetricTypePostgreSQLDatabase {
 				dbMetrics = ms.Metrics.(domainmetrics.PostgreSQLDatabaseMetrics)
 			}
 		}
 
-		// Check system metrics values (from setupCmdExecutorMocks)
+		// Check system metrics values
 		if sysMetrics.CPUPercent != 25.0 {
 			return false
 		}
@@ -568,6 +611,14 @@ func TestPush_Success_ValidatesPayloadSchema(t *testing.T) {
 			return false
 		}
 		if sysMetrics.DiskUsagePercent != 75.0 {
+			return false
+		}
+
+		// Check network metrics values
+		if netMetrics.RecvBytesPerSec != 1000.0 {
+			return false
+		}
+		if netMetrics.SentBytesPerSec != 500.0 {
 			return false
 		}
 
@@ -611,6 +662,7 @@ func TestPush_ContextPropagation(t *testing.T) {
 
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
 	setupSysCollectorMocks(mocks.syscollector)
+	setupNetCollectorMocks(mocks.netcollector)
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{}, nil)
 	mocks.apiserver.On("PushMetrics", mock.MatchedBy(func(ctx context.Context) bool {
@@ -652,6 +704,7 @@ func TestPush_CredentialPassedCorrectly(t *testing.T) {
 
 	mocks.agentstate.On("GetAgentID").Return("agent-456")
 	setupSysCollectorMocks(mocks.syscollector)
+	setupNetCollectorMocks(mocks.netcollector)
 	mocks.collector.On("Collect", mock.MatchedBy(func(c credential.Credential) bool {
 		return c.Host == testCred.Host &&
 			c.Port == testCred.Port &&
@@ -677,5 +730,12 @@ func setupSysCollectorMocks(collector *MockSysCollector) {
 		LoadAvg15:        2.5,
 		SwapUsagePercent: 10.0,
 		DiskUsagePercent: 75.0,
+	}, nil)
+}
+
+func setupNetCollectorMocks(collector *MockNetCollector) {
+	collector.On("Collect", mock.Anything).Return(domainmetrics.NetworkMetrics{
+		RecvBytesPerSec: 1000.0,
+		SentBytesPerSec: 500.0,
 	}, nil)
 }
