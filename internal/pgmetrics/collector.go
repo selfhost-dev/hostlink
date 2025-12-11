@@ -16,17 +16,46 @@ type Collector interface {
 	Collect(credential.Credential) (metrics.PostgreSQLDatabaseMetrics, error)
 }
 
+type PostgresStats struct {
+	XactCommit   int64
+	XactRollback int64
+	BlksRead     int64
+	StatsReset   time.Time // Detects pg_stat_reset() calls or crash recovery
+}
+
+type StatsCollector interface {
+	QueryStats(ctx context.Context, db *sql.DB) (PostgresStats, error)
+}
+
+type Config struct {
+	StatsCollector StatsCollector
+}
+
 type pgmetrics struct {
-	queryTimeout time.Duration
+	queryTimeout   time.Duration
+	statsCollector StatsCollector
+	lastStats      *PostgresStats
+	lastTime       time.Time
 }
 
 func New() Collector {
-	return pgmetrics{
-		queryTimeout: 10 * time.Second,
+	return NewWithConfig(nil)
+}
+
+func NewWithConfig(cfg *Config) Collector {
+	var sc StatsCollector
+	if cfg != nil && cfg.StatsCollector != nil {
+		sc = cfg.StatsCollector
+	} else {
+		sc = &defaultStatsCollector{}
+	}
+	return &pgmetrics{
+		queryTimeout:   10 * time.Second,
+		statsCollector: sc,
 	}
 }
 
-func (pgm pgmetrics) Collect(cred credential.Credential) (metrics.PostgreSQLDatabaseMetrics, error) {
+func (pgm *pgmetrics) Collect(cred credential.Credential) (metrics.PostgreSQLDatabaseMetrics, error) {
 	password := ""
 	if cred.Password != nil {
 		password = *cred.Password
@@ -62,7 +91,7 @@ func (pgm pgmetrics) Collect(cred credential.Credential) (metrics.PostgreSQLData
 	return m, nil
 }
 
-func (pgm pgmetrics) collectDatabaseMetrics(ctx context.Context, db *sql.DB, m *metrics.PostgreSQLDatabaseMetrics) error {
+func (pgm *pgmetrics) collectDatabaseMetrics(ctx context.Context, db *sql.DB, m *metrics.PostgreSQLDatabaseMetrics) error {
 	// Total connections
 	connQuery := `
 		SELECT COUNT(*)
@@ -92,52 +121,43 @@ func (pgm pgmetrics) collectDatabaseMetrics(ctx context.Context, db *sql.DB, m *
 		return fmt.Errorf("cache hit ratio: %w", err)
 	}
 
-	// Transactions per second (commit + rollback)
-	tpsQuery := `
-		SELECT
-			COALESCE(ROUND(
-				(sum(xact_commit) + sum(xact_rollback))::numeric /
-				NULLIF(EXTRACT(EPOCH FROM (now() - min(stats_reset))), 0)
-			, 2), 0) as tps
-		FROM pg_stat_database
-		WHERE stats_reset IS NOT NULL;
-	`
-	if err := db.QueryRowContext(ctx, tpsQuery).Scan(&m.TransactionsPerSecond); err != nil {
-		m.TransactionsPerSecond = 0
+	// Delta-based rate metrics (TPS, blocks read/sec)
+	currentStats, err := pgm.statsCollector.QueryStats(ctx, db)
+	if err != nil {
+		return fmt.Errorf("stats query: %w", err)
 	}
 
-	// Committed transactions per second
-	commitTpsQuery := `
-		SELECT
-			COALESCE(ROUND(
-				sum(xact_commit)::numeric /
-				NULLIF(EXTRACT(EPOCH FROM (now() - min(stats_reset))), 0)
-			, 2), 0) as commit_tps
-		FROM pg_stat_database
-		WHERE stats_reset IS NOT NULL;
-	`
-	if err := db.QueryRowContext(ctx, commitTpsQuery).Scan(&m.CommittedTxPerSecond); err != nil {
-		m.CommittedTxPerSecond = 0
+	now := time.Now()
+
+	// First collection or stats reset: store baseline, return zeros
+	if pgm.lastStats == nil || !pgm.lastStats.StatsReset.Equal(currentStats.StatsReset) {
+		pgm.lastStats = &currentStats
+		pgm.lastTime = now
+		return nil
 	}
 
-	// Blocks read per second
-	blocksQuery := `
-		SELECT
-			COALESCE(ROUND(
-				sum(blks_read)::numeric /
-				NULLIF(EXTRACT(EPOCH FROM (now() - min(stats_reset))), 0)
-			, 2), 0) as blocks_read_per_sec
-		FROM pg_stat_database
-		WHERE stats_reset IS NOT NULL;
-	`
-	if err := db.QueryRowContext(ctx, blocksQuery).Scan(&m.BlocksReadPerSecond); err != nil {
-		m.BlocksReadPerSecond = 0
+	elapsed := now.Sub(pgm.lastTime).Seconds()
+	if elapsed <= 0 {
+		return nil
 	}
+
+	// Calculate deltas
+	deltaCommit := currentStats.XactCommit - pgm.lastStats.XactCommit
+	deltaRollback := currentStats.XactRollback - pgm.lastStats.XactRollback
+	deltaBlksRead := currentStats.BlksRead - pgm.lastStats.BlksRead
+
+	m.TransactionsPerSecond = float64(deltaCommit+deltaRollback) / elapsed
+	m.CommittedTxPerSecond = float64(deltaCommit) / elapsed
+	m.BlocksReadPerSecond = float64(deltaBlksRead) / elapsed
+
+	// Update baseline
+	pgm.lastStats = &currentStats
+	pgm.lastTime = now
 
 	return nil
 }
 
-func (pgm pgmetrics) collectReplicationMetrics(ctx context.Context, db *sql.DB, m *metrics.PostgreSQLDatabaseMetrics) error {
+func (pgm *pgmetrics) collectReplicationMetrics(ctx context.Context, db *sql.DB, m *metrics.PostgreSQLDatabaseMetrics) error {
 	replQuery := `
 		SELECT
 			COALESCE(
@@ -163,4 +183,29 @@ func (pgm pgmetrics) collectReplicationMetrics(ctx context.Context, db *sql.DB, 
 	}
 
 	return nil
+}
+
+type defaultStatsCollector struct{}
+
+func (d *defaultStatsCollector) QueryStats(ctx context.Context, db *sql.DB) (PostgresStats, error) {
+	query := `
+		SELECT
+			COALESCE(SUM(xact_commit), 0) AS xact_commit,
+			COALESCE(SUM(xact_rollback), 0) AS xact_rollback,
+			COALESCE(SUM(blks_read), 0) AS blks_read,
+			COALESCE(MIN(stats_reset), now()) AS stats_reset
+		FROM pg_stat_database
+		WHERE stats_reset IS NOT NULL;
+	`
+	var stats PostgresStats
+	err := db.QueryRowContext(ctx, query).Scan(
+		&stats.XactCommit,
+		&stats.XactRollback,
+		&stats.BlksRead,
+		&stats.StatsReset,
+	)
+	if err != nil {
+		return PostgresStats{}, fmt.Errorf("query stats: %w", err)
+	}
+	return stats, nil
 }
