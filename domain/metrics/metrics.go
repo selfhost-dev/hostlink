@@ -5,6 +5,7 @@ const (
 	MetricTypeSystem             = "system"
 	MetricTypeNetwork            = "network"
 	MetricTypePostgreSQLDatabase = "postgresql.database"
+	MetricTypeStorage            = "storage"
 )
 
 type MetricPayload struct {
@@ -49,4 +50,31 @@ type PostgreSQLDatabaseMetrics struct {
 	CommittedTxPerSecond  float64 `json:"committed_tx_per_second"`
 	BlocksReadPerSecond   float64 `json:"blocks_read_per_second"`
 	ReplicationLagSeconds int     `json:"replication_lag_seconds"`
+}
+
+type StorageMetrics struct {
+	DiskUsedBytes           float64 `json:"disk_used_bytes"`
+	DiskFreeBytes           float64 `json:"disk_free_bytes"`
+	DiskTotalBytes          float64 `json:"disk_total_bytes"`
+	DiskUsedPercent         float64 `json:"disk_used_percent"`
+	DiskFreePercent         float64 `json:"disk_free_percent"`
+	TotalUtilizationPercent float64 `json:"total_utilization_percent"`
+	ReadUtilizationPercent  float64 `json:"read_utilization_percent"`
+	WriteUtilizationPercent float64 `json:"write_utilization_percent"`
+	ReadBytesPerSecond      float64 `json:"read_bytes_per_second"`
+	WriteBytesPerSecond     float64 `json:"write_bytes_per_second"`
+	ReadWriteBytesPerSecond float64 `json:"read_write_bytes_per_second"`
+	ReadIOPerSecond         float64 `json:"read_io_per_second"`
+	WriteIOPerSecond        float64 `json:"write_io_per_second"`
+	InodesUsed              uint64  `json:"inodes_used"`
+	InodesFree              uint64  `json:"inodes_free"`
+	InodesTotal             uint64  `json:"inodes_total"`
+	InodesUsedPercent       float64 `json:"inodes_used_percent"`
+}
+
+type StorageAttributes struct {
+	MountPoint     string `json:"mount_point"`
+	Device         string `json:"device"`
+	FilesystemType string `json:"filesystem_type"`
+	IsReadOnly     bool   `json:"is_read_only"`
 }

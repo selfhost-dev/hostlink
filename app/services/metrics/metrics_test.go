@@ -9,6 +9,7 @@ import (
 
 	"hostlink/domain/credential"
 	domainmetrics "hostlink/domain/metrics"
+	"hostlink/internal/storagemetrics"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -90,6 +91,18 @@ func (m *MockNetCollector) Collect(ctx context.Context) (domainmetrics.NetworkMe
 	return args.Get(0).(domainmetrics.NetworkMetrics), args.Error(1)
 }
 
+type MockStorageCollector struct {
+	mock.Mock
+}
+
+func (m *MockStorageCollector) Collect(ctx context.Context) ([]storagemetrics.StorageMetricSet, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]storagemetrics.StorageMetricSet), args.Error(1)
+}
+
 type MockCrypto struct {
 	mock.Mock
 }
@@ -169,22 +182,24 @@ func (m *MockCrypto) DecryptWithPrivateKey(ciphertextBase64 string, privateKey *
 
 // Test helpers
 type testMocks struct {
-	apiserver    *MockAPIServer
-	agentstate   *MockAgentState
-	collector    *MockCollector
-	syscollector *MockSysCollector
-	netcollector *MockNetCollector
-	crypto       *MockCrypto
+	apiserver        *MockAPIServer
+	agentstate       *MockAgentState
+	collector        *MockCollector
+	syscollector     *MockSysCollector
+	netcollector     *MockNetCollector
+	storagecollector *MockStorageCollector
+	crypto           *MockCrypto
 }
 
 func setupTestMetricsPusher() (*metricspusher, *testMocks) {
 	mocks := &testMocks{
-		apiserver:    new(MockAPIServer),
-		agentstate:   new(MockAgentState),
-		collector:    new(MockCollector),
-		syscollector: new(MockSysCollector),
-		netcollector: new(MockNetCollector),
-		crypto:       new(MockCrypto),
+		apiserver:        new(MockAPIServer),
+		agentstate:       new(MockAgentState),
+		collector:        new(MockCollector),
+		syscollector:     new(MockSysCollector),
+		netcollector:     new(MockNetCollector),
+		storagecollector: new(MockStorageCollector),
+		crypto:           new(MockCrypto),
 	}
 
 	mp := NewWithDependencies(
@@ -193,6 +208,7 @@ func setupTestMetricsPusher() (*metricspusher, *testMocks) {
 		mocks.collector,
 		mocks.syscollector,
 		mocks.netcollector,
+		mocks.storagecollector,
 		mocks.crypto,
 		"/test/key/path",
 	)
@@ -441,11 +457,13 @@ func TestPush_SystemMetricsFailure_StillPushesDbMetrics(t *testing.T) {
 	mocks.syscollector.On("Collect", mock.Anything).
 		Return(domainmetrics.SystemMetrics{}, errors.New("collection failed"))
 	setupNetCollectorMocks(mocks.netcollector)
+	setupStorageCollectorMocks(mocks.storagecollector)
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{ConnectionsTotal: 5}, nil)
 	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {
 		hasNetwork := false
 		hasDb := false
+		hasStorage := false
 		for _, ms := range p.MetricSets {
 			if ms.Type == domainmetrics.MetricTypeNetwork {
 				hasNetwork = true
@@ -453,8 +471,11 @@ func TestPush_SystemMetricsFailure_StillPushesDbMetrics(t *testing.T) {
 			if ms.Type == domainmetrics.MetricTypePostgreSQLDatabase {
 				hasDb = true
 			}
+			if ms.Type == domainmetrics.MetricTypeStorage {
+				hasStorage = true
+			}
 		}
-		return len(p.MetricSets) == 2 && hasNetwork && hasDb
+		return hasNetwork && hasDb && hasStorage
 	})).Return(nil)
 
 	err := mp.Push(testCred)
@@ -473,11 +494,13 @@ func TestPush_DatabaseMetricsFailure_StillPushesSystemMetrics(t *testing.T) {
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
 	setupSysCollectorMocks(mocks.syscollector)
 	setupNetCollectorMocks(mocks.netcollector)
+	setupStorageCollectorMocks(mocks.storagecollector)
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{}, collectErr)
 	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {
 		hasSys := false
 		hasNetwork := false
+		hasStorage := false
 		for _, ms := range p.MetricSets {
 			if ms.Type == domainmetrics.MetricTypeSystem {
 				hasSys = true
@@ -485,8 +508,11 @@ func TestPush_DatabaseMetricsFailure_StillPushesSystemMetrics(t *testing.T) {
 			if ms.Type == domainmetrics.MetricTypeNetwork {
 				hasNetwork = true
 			}
+			if ms.Type == domainmetrics.MetricTypeStorage {
+				hasStorage = true
+			}
 		}
-		return len(p.MetricSets) == 2 && hasSys && hasNetwork
+		return hasSys && hasNetwork && hasStorage
 	})).Return(nil)
 
 	err := mp.Push(testCred)
@@ -506,6 +532,8 @@ func TestPush_AllCollectionsFail(t *testing.T) {
 		Return(domainmetrics.SystemMetrics{}, errors.New("collection failed"))
 	mocks.netcollector.On("Collect", mock.Anything).
 		Return(domainmetrics.NetworkMetrics{}, errors.New("network failed"))
+	mocks.storagecollector.On("Collect", mock.Anything).
+		Return(nil, errors.New("storage failed"))
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{}, errors.New("connection refused"))
 
@@ -524,6 +552,7 @@ func TestPush_APIServerPushFailure(t *testing.T) {
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
 	setupSysCollectorMocks(mocks.syscollector)
 	setupNetCollectorMocks(mocks.netcollector)
+	setupStorageCollectorMocks(mocks.storagecollector)
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{ConnectionsTotal: 5}, nil)
 	mocks.apiserver.On("PushMetrics", mock.Anything, mock.Anything).
@@ -547,6 +576,7 @@ func TestPush_Success_ValidatesPayloadSchema(t *testing.T) {
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
 	setupSysCollectorMocks(mocks.syscollector)
 	setupNetCollectorMocks(mocks.netcollector)
+	setupStorageCollectorMocks(mocks.storagecollector)
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{
 			ConnectionsTotal:      10,
@@ -571,7 +601,7 @@ func TestPush_Success_ValidatesPayloadSchema(t *testing.T) {
 		if p.Resource.HostName == "" {
 			return false
 		}
-		if len(p.MetricSets) != 3 {
+		if len(p.MetricSets) != 4 {
 			return false
 		}
 
@@ -663,6 +693,7 @@ func TestPush_ContextPropagation(t *testing.T) {
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
 	setupSysCollectorMocks(mocks.syscollector)
 	setupNetCollectorMocks(mocks.netcollector)
+	setupStorageCollectorMocks(mocks.storagecollector)
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{}, nil)
 	mocks.apiserver.On("PushMetrics", mock.MatchedBy(func(ctx context.Context) bool {
@@ -705,6 +736,7 @@ func TestPush_CredentialPassedCorrectly(t *testing.T) {
 	mocks.agentstate.On("GetAgentID").Return("agent-456")
 	setupSysCollectorMocks(mocks.syscollector)
 	setupNetCollectorMocks(mocks.netcollector)
+	setupStorageCollectorMocks(mocks.storagecollector)
 	mocks.collector.On("Collect", mock.MatchedBy(func(c credential.Credential) bool {
 		return c.Host == testCred.Host &&
 			c.Port == testCred.Port &&
@@ -738,4 +770,174 @@ func setupNetCollectorMocks(collector *MockNetCollector) {
 		RecvBytesPerSec: 1000.0,
 		SentBytesPerSec: 500.0,
 	}, nil)
+}
+
+func setupStorageCollectorMocks(collector *MockStorageCollector) {
+	collector.On("Collect", mock.Anything).Return([]storagemetrics.StorageMetricSet{
+		{
+			Attributes: domainmetrics.StorageAttributes{
+				MountPoint:     "/",
+				Device:         "/dev/sda1",
+				FilesystemType: "ext4",
+				IsReadOnly:     false,
+			},
+			Metrics: domainmetrics.StorageMetrics{
+				DiskTotalBytes:          100000000000,
+				DiskUsedBytes:           60000000000,
+				DiskFreeBytes:           40000000000,
+				DiskUsedPercent:         60.0,
+				DiskFreePercent:         40.0,
+				TotalUtilizationPercent: 25.0,
+			},
+		},
+	}, nil)
+}
+
+// Verifies storage metrics are included in the payload
+func TestPush_IncludesStorageMetrics(t *testing.T) {
+	mp, mocks := setupTestMetricsPusher()
+	testCred := credential.Credential{DataDirectory: "/data"}
+
+	mocks.agentstate.On("GetAgentID").Return("agent-123")
+	setupSysCollectorMocks(mocks.syscollector)
+	setupNetCollectorMocks(mocks.netcollector)
+	setupStorageCollectorMocks(mocks.storagecollector)
+	mocks.collector.On("Collect", testCred).
+		Return(domainmetrics.PostgreSQLDatabaseMetrics{}, nil)
+	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {
+		hasStorage := false
+		for _, ms := range p.MetricSets {
+			if ms.Type == domainmetrics.MetricTypeStorage {
+				hasStorage = true
+			}
+		}
+		return hasStorage
+	})).Return(nil)
+
+	err := mp.Push(testCred)
+
+	assert.NoError(t, err)
+	mocks.storagecollector.AssertExpectations(t)
+	mocks.apiserver.AssertExpectations(t)
+}
+
+// Verifies when storage collection fails, other metrics still pushed
+func TestPush_StorageMetricsFailure_StillPushesOtherMetrics(t *testing.T) {
+	mp, mocks := setupTestMetricsPusher()
+	testCred := credential.Credential{DataDirectory: "/data"}
+
+	mocks.agentstate.On("GetAgentID").Return("agent-123")
+	setupSysCollectorMocks(mocks.syscollector)
+	setupNetCollectorMocks(mocks.netcollector)
+	mocks.storagecollector.On("Collect", mock.Anything).
+		Return(nil, errors.New("storage collection failed"))
+	mocks.collector.On("Collect", testCred).
+		Return(domainmetrics.PostgreSQLDatabaseMetrics{}, nil)
+	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {
+		hasSys := false
+		hasNet := false
+		hasDb := false
+		for _, ms := range p.MetricSets {
+			if ms.Type == domainmetrics.MetricTypeSystem {
+				hasSys = true
+			}
+			if ms.Type == domainmetrics.MetricTypeNetwork {
+				hasNet = true
+			}
+			if ms.Type == domainmetrics.MetricTypePostgreSQLDatabase {
+				hasDb = true
+			}
+		}
+		return hasSys && hasNet && hasDb
+	})).Return(nil)
+
+	err := mp.Push(testCred)
+
+	assert.NoError(t, err)
+	mocks.apiserver.AssertExpectations(t)
+}
+
+// Verifies each mount becomes a separate MetricSet
+func TestPush_StorageMetricsMultipleMounts(t *testing.T) {
+	mp, mocks := setupTestMetricsPusher()
+	testCred := credential.Credential{DataDirectory: "/data"}
+
+	mocks.agentstate.On("GetAgentID").Return("agent-123")
+	setupSysCollectorMocks(mocks.syscollector)
+	setupNetCollectorMocks(mocks.netcollector)
+	mocks.storagecollector.On("Collect", mock.Anything).Return([]storagemetrics.StorageMetricSet{
+		{
+			Attributes: domainmetrics.StorageAttributes{MountPoint: "/", Device: "/dev/sda1"},
+			Metrics:    domainmetrics.StorageMetrics{DiskUsedPercent: 50.0},
+		},
+		{
+			Attributes: domainmetrics.StorageAttributes{MountPoint: "/home", Device: "/dev/sda2"},
+			Metrics:    domainmetrics.StorageMetrics{DiskUsedPercent: 75.0},
+		},
+	}, nil)
+	mocks.collector.On("Collect", testCred).
+		Return(domainmetrics.PostgreSQLDatabaseMetrics{}, nil)
+	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {
+		storageCount := 0
+		for _, ms := range p.MetricSets {
+			if ms.Type == domainmetrics.MetricTypeStorage {
+				storageCount++
+			}
+		}
+		return storageCount == 2
+	})).Return(nil)
+
+	err := mp.Push(testCred)
+
+	assert.NoError(t, err)
+	mocks.apiserver.AssertExpectations(t)
+}
+
+// Verifies attributes are set correctly
+func TestPush_StorageMetricsWithAttributes(t *testing.T) {
+	mp, mocks := setupTestMetricsPusher()
+	testCred := credential.Credential{DataDirectory: "/data"}
+
+	mocks.agentstate.On("GetAgentID").Return("agent-123")
+	setupSysCollectorMocks(mocks.syscollector)
+	setupNetCollectorMocks(mocks.netcollector)
+	mocks.storagecollector.On("Collect", mock.Anything).Return([]storagemetrics.StorageMetricSet{
+		{
+			Attributes: domainmetrics.StorageAttributes{
+				MountPoint:     "/data",
+				Device:         "/dev/nvme0n1p1",
+				FilesystemType: "xfs",
+				IsReadOnly:     true,
+			},
+			Metrics: domainmetrics.StorageMetrics{DiskUsedPercent: 80.0},
+		},
+	}, nil)
+	mocks.collector.On("Collect", testCred).
+		Return(domainmetrics.PostgreSQLDatabaseMetrics{}, nil)
+	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {
+		for _, ms := range p.MetricSets {
+			if ms.Type == domainmetrics.MetricTypeStorage {
+				attrs := ms.Attributes
+				if attrs["mount_point"] != "/data" {
+					return false
+				}
+				if attrs["device"] != "/dev/nvme0n1p1" {
+					return false
+				}
+				if attrs["filesystem_type"] != "xfs" {
+					return false
+				}
+				if attrs["is_read_only"] != true {
+					return false
+				}
+				return true
+			}
+		}
+		return false
+	})).Return(nil)
+
+	err := mp.Push(testCred)
+
+	assert.NoError(t, err)
+	mocks.apiserver.AssertExpectations(t)
 }

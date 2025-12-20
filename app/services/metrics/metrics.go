@@ -14,6 +14,7 @@ import (
 	"hostlink/internal/crypto"
 	"hostlink/internal/networkmetrics"
 	"hostlink/internal/pgmetrics"
+	"hostlink/internal/storagemetrics"
 	"hostlink/internal/sysmetrics"
 )
 
@@ -26,13 +27,14 @@ type Pusher interface {
 }
 
 type metricspusher struct {
-	apiserver        apiserver.MetricsOperations
-	agentstate       agentstate.Operations
-	metricscollector pgmetrics.Collector
-	syscollector     sysmetrics.Collector
-	netcollector     networkmetrics.Collector
-	crypto           crypto.Service
-	privateKeyPath   string
+	apiserver         apiserver.MetricsOperations
+	agentstate        agentstate.Operations
+	metricscollector  pgmetrics.Collector
+	syscollector      sysmetrics.Collector
+	netcollector      networkmetrics.Collector
+	storagecollector  storagemetrics.Collector
+	crypto            crypto.Service
+	privateKeyPath    string
 }
 
 func NewWithConf() (*metricspusher, error) {
@@ -51,6 +53,7 @@ func NewWithConf() (*metricspusher, error) {
 		metricscollector: pgmetrics.New(),
 		syscollector:     sysmetrics.New(),
 		netcollector:     networkmetrics.New(),
+		storagecollector: storagemetrics.New(),
 		crypto:           crypto.NewService(),
 		privateKeyPath:   appconf.AgentPrivateKeyPath(),
 	}, nil
@@ -67,6 +70,7 @@ func NewWithDependencies(
 	pgcollector pgmetrics.Collector,
 	syscollector sysmetrics.Collector,
 	netcollector networkmetrics.Collector,
+	storagecollector storagemetrics.Collector,
 	crypto crypto.Service,
 	privateKeyPath string,
 ) *metricspusher {
@@ -76,6 +80,7 @@ func NewWithDependencies(
 		metricscollector: pgcollector,
 		syscollector:     syscollector,
 		netcollector:     netcollector,
+		storagecollector: storagecollector,
 		crypto:           crypto,
 		privateKeyPath:   privateKeyPath,
 	}
@@ -155,6 +160,24 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 			Type:    domainmetrics.MetricTypePostgreSQLDatabase,
 			Metrics: dbMetrics,
 		})
+	}
+
+	storageMetrics, err := mp.storagecollector.Collect(ctx)
+	if err != nil {
+		collectionErrors = append(collectionErrors, fmt.Errorf("storage metrics: %w", err))
+	} else {
+		for _, sm := range storageMetrics {
+			metricSets = append(metricSets, domainmetrics.MetricSet{
+				Type: domainmetrics.MetricTypeStorage,
+				Attributes: map[string]any{
+					"mount_point":     sm.Attributes.MountPoint,
+					"device":          sm.Attributes.Device,
+					"filesystem_type": sm.Attributes.FilesystemType,
+					"is_read_only":    sm.Attributes.IsReadOnly,
+				},
+				Metrics: sm.Metrics,
+			})
+		}
 	}
 
 	if len(metricSets) == 0 {
