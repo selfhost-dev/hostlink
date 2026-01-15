@@ -4,11 +4,12 @@ After=network-online.target
 
 [Service]
 Type=simple
+KillMode=process
 WorkingDirectory=/usr/bin/
 EnvironmentFile=/etc/hostlink/hostlink.env
 ExecStart=/usr/bin/hostlink
 Restart=always
-RestartSec=60
+RestartSec=90
 
 [Install]
 WantedBy=multi-user.target
