@@ -1,0 +1,4 @@
+- ALWAYS USE PARALLEL TASKS SUBAGENTS FOR CODE EXPLORATION, DEEP DIVES, AND SO ON
+- I use jj instead of git
+- ALWAYS FOLLOW TDD, red phase to green phase
+- Use ripgrep instead of grep, use fd instead of find
