@@ -211,6 +211,48 @@ func TestServiceController_Start_UsesConfiguredTimeout(t *testing.T) {
 	assert.WithinDuration(t, time.Now().Add(20*time.Second), deadline, 2*time.Second)
 }
 
+func TestServiceController_Exists_ReturnsTrueWhenLoaded(t *testing.T) {
+	recorder := newRecordingExec(mockExecResult{output: "LoadState=loaded\n", err: nil})
+	sc := NewServiceController(ServiceConfig{
+		ServiceName: "hostlink",
+		ExecFunc:    recorder.exec,
+	})
+
+	exists, err := sc.Exists(context.Background())
+
+	require.NoError(t, err)
+	assert.True(t, exists)
+	require.Len(t, recorder.calls, 1)
+	assert.Equal(t, "systemctl", recorder.calls[0].name)
+	assert.Equal(t, []string{"show", "--property=LoadState", "hostlink"}, recorder.calls[0].args)
+}
+
+func TestServiceController_Exists_ReturnsFalseWhenNotFound(t *testing.T) {
+	recorder := newRecordingExec(mockExecResult{output: "LoadState=not-found\n", err: nil})
+	sc := NewServiceController(ServiceConfig{
+		ServiceName: "hostlink",
+		ExecFunc:    recorder.exec,
+	})
+
+	exists, err := sc.Exists(context.Background())
+
+	require.NoError(t, err)
+	assert.False(t, exists)
+}
+
+func TestServiceController_Exists_ReturnsErrorOnExecFailure(t *testing.T) {
+	recorder := newRecordingExec(mockExecResult{output: "", err: errors.New("exec failed")})
+	sc := NewServiceController(ServiceConfig{
+		ServiceName: "hostlink",
+		ExecFunc:    recorder.exec,
+	})
+
+	_, err := sc.Exists(context.Background())
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to check service")
+}
+
 func TestServiceController_DefaultTimeouts(t *testing.T) {
 	sc := NewServiceController(ServiceConfig{
 		ServiceName: "hostlink",

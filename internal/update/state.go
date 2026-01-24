@@ -32,7 +32,15 @@ type StateData struct {
 	Error         *string    `json:"error,omitempty"`
 }
 
+// StateWriterInterface defines the interface for state persistence.
+// This interface allows mocking in tests.
+type StateWriterInterface interface {
+	Write(data StateData) error
+	Read() (StateData, error)
+}
+
 // StateWriter manages the update state file for observability.
+// Implements StateWriterInterface.
 type StateWriter struct {
 	statePath string
 }

@@ -26,7 +26,7 @@ func TestHealthChecker_WaitForHealth_Success(t *testing.T) {
 		MaxRetries:    5,
 		RetryInterval: 10 * time.Millisecond,
 		InitialWait:   0,
-		SleepFunc:     func(d time.Duration) {},
+		SleepFunc:     func(_ context.Context, _ time.Duration) error { return nil },
 	})
 
 	err := hc.WaitForHealth(context.Background())
@@ -54,7 +54,7 @@ func TestHealthChecker_WaitForHealth_RetriesOnHttpError(t *testing.T) {
 		MaxRetries:    5,
 		RetryInterval: 10 * time.Millisecond,
 		InitialWait:   0,
-		SleepFunc:     func(d time.Duration) {},
+		SleepFunc:     func(_ context.Context, _ time.Duration) error { return nil },
 	})
 
 	err := hc.WaitForHealth(context.Background())
@@ -82,7 +82,7 @@ func TestHealthChecker_WaitForHealth_RetriesOnOkFalse(t *testing.T) {
 		MaxRetries:    5,
 		RetryInterval: 10 * time.Millisecond,
 		InitialWait:   0,
-		SleepFunc:     func(d time.Duration) {},
+		SleepFunc:     func(_ context.Context, _ time.Duration) error { return nil },
 	})
 
 	err := hc.WaitForHealth(context.Background())
@@ -106,7 +106,7 @@ func TestHealthChecker_WaitForHealth_FailsAfterMaxRetries(t *testing.T) {
 		MaxRetries:    3,
 		RetryInterval: 10 * time.Millisecond,
 		InitialWait:   0,
-		SleepFunc:     func(d time.Duration) {},
+		SleepFunc:     func(_ context.Context, _ time.Duration) error { return nil },
 	})
 
 	err := hc.WaitForHealth(context.Background())
@@ -137,7 +137,7 @@ func TestHealthChecker_WaitForHealth_RetriesOnVersionMismatch(t *testing.T) {
 		MaxRetries:    5,
 		RetryInterval: 10 * time.Millisecond,
 		InitialWait:   0,
-		SleepFunc:     func(d time.Duration) {},
+		SleepFunc:     func(_ context.Context, _ time.Duration) error { return nil },
 	})
 
 	err := hc.WaitForHealth(context.Background())
@@ -161,7 +161,7 @@ func TestHealthChecker_WaitForHealth_FailsOnVersionMismatch(t *testing.T) {
 		MaxRetries:    3,
 		RetryInterval: 10 * time.Millisecond,
 		InitialWait:   0,
-		SleepFunc:     func(d time.Duration) {},
+		SleepFunc:     func(_ context.Context, _ time.Duration) error { return nil },
 	})
 
 	err := hc.WaitForHealth(context.Background())
@@ -186,8 +186,9 @@ func TestHealthChecker_WaitForHealth_RespectsContext(t *testing.T) {
 		MaxRetries:    10,
 		RetryInterval: 10 * time.Millisecond,
 		InitialWait:   0,
-		SleepFunc: func(d time.Duration) {
+		SleepFunc: func(_ context.Context, _ time.Duration) error {
 			cancel() // Cancel context during sleep
+			return nil
 		},
 	})
 
@@ -210,8 +211,9 @@ func TestHealthChecker_WaitForHealth_InitialWait(t *testing.T) {
 		MaxRetries:    5,
 		RetryInterval: 100 * time.Millisecond,
 		InitialWait:   500 * time.Millisecond,
-		SleepFunc: func(d time.Duration) {
+		SleepFunc: func(_ context.Context, d time.Duration) error {
 			sleepDurations = append(sleepDurations, d)
+			return nil
 		},
 	})
 
@@ -255,10 +257,46 @@ func TestHealthChecker_WaitForHealth_HandlesInvalidJSON(t *testing.T) {
 		MaxRetries:    5,
 		RetryInterval: 10 * time.Millisecond,
 		InitialWait:   0,
-		SleepFunc:     func(d time.Duration) {},
+		SleepFunc:     func(_ context.Context, _ time.Duration) error { return nil },
 	})
 
 	err := hc.WaitForHealth(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, int32(2), attempts.Load())
+}
+
+func TestHealthChecker_WaitForHealth_ContextCancelledDuringSleep_ReturnsImmediately(t *testing.T) {
+	// This test verifies that when context is cancelled during a sleep,
+	// WaitForHealth returns immediately without waiting for the full sleep duration.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(HealthResponse{Ok: false, Version: "v1.0.0"}) // Always fail to trigger retry sleep
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Use the real sleepWithContext (default) to test actual behavior
+	hc := NewHealthChecker(HealthConfig{
+		URL:           server.URL,
+		TargetVersion: "v1.0.0",
+		MaxRetries:    10,
+		RetryInterval: 10 * time.Second, // Very long sleep - would timeout test if not cancelled
+		InitialWait:   0,
+		// SleepFunc not set - uses default sleepWithContext
+	})
+
+	// Cancel context after a short delay
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	err := hc.WaitForHealth(ctx)
+	elapsed := time.Since(start)
+
+	assert.ErrorIs(t, err, context.Canceled)
+	// Should return quickly (< 1s), not wait for the 10s retry interval
+	assert.Less(t, elapsed, 1*time.Second, "should return immediately on context cancel, not wait for sleep")
 }

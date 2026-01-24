@@ -76,3 +76,13 @@ func TestUpdateLockTimeout_InvalidFallsToDefault(t *testing.T) {
 	t.Setenv("HOSTLINK_UPDATE_LOCK_TIMEOUT", "garbage")
 	assert.Equal(t, 5*time.Minute, UpdateLockTimeout())
 }
+
+func TestInstallPath_Default(t *testing.T) {
+	t.Setenv("HOSTLINK_INSTALL_PATH", "")
+	assert.Equal(t, "/usr/bin/hostlink", InstallPath())
+}
+
+func TestInstallPath_CustomValue(t *testing.T) {
+	t.Setenv("HOSTLINK_INSTALL_PATH", "/opt/hostlink/bin/hostlink")
+	assert.Equal(t, "/opt/hostlink/bin/hostlink", InstallPath())
+}
