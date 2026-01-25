@@ -7,6 +7,10 @@ import (
 	"net/http"
 )
 
+// ErrUnsupportedPlatform is returned when the control plane returns 400,
+// indicating no binary exists for the agent's OS/architecture combination.
+var ErrUnsupportedPlatform = errors.New("unsupported platform")
+
 // UpdateInfo represents the response from the update check endpoint.
 type UpdateInfo struct {
 	UpdateAvailable bool   `json:"update_available"`
@@ -43,15 +47,14 @@ func New(client *http.Client, controlPlaneURL, agentID string, signer RequestSig
 }
 
 // Check queries the control plane for available updates.
-func (c *UpdateChecker) Check(currentVersion string) (*UpdateInfo, error) {
+// Agent headers (X-Agent-Version, X-Agent-OS, X-Agent-Arch) are set by the HTTP transport.
+func (c *UpdateChecker) Check() (*UpdateInfo, error) {
 	url := fmt.Sprintf("%s/api/v1/agents/%s/update", c.controlPlaneURL, c.agentID)
 
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-
-	req.Header.Set("X-Agent-Version", currentVersion)
 
 	if c.signer != nil {
 		if err := c.signer.SignRequest(req); err != nil {
@@ -65,6 +68,9 @@ func (c *UpdateChecker) Check(currentVersion string) (*UpdateInfo, error) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusBadRequest {
+		return nil, fmt.Errorf("update check returned status %d: %w", resp.StatusCode, ErrUnsupportedPlatform)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("update check returned status %d", resp.StatusCode)
 	}

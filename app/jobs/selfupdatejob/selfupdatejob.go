@@ -2,8 +2,10 @@ package selfupdatejob
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -27,7 +29,7 @@ type TriggerFunc func(context.Context, func() error)
 
 // UpdateCheckerInterface abstracts the update check client.
 type UpdateCheckerInterface interface {
-	Check(currentVersion string) (*updatecheck.UpdateInfo, error)
+	Check() (*updatecheck.UpdateInfo, error)
 }
 
 // DownloaderInterface abstracts the download and verify functionality.
@@ -125,8 +127,13 @@ func (j *SelfUpdateJob) Shutdown() {
 // runUpdate performs a single update check and apply cycle.
 func (j *SelfUpdateJob) runUpdate(ctx context.Context) error {
 	// Step 1: Check for updates
-	info, err := j.config.UpdateChecker.Check(j.config.CurrentVersion)
+	info, err := j.config.UpdateChecker.Check()
 	if err != nil {
+		// Log unsupported platform at WARN level and return nil (not an error condition)
+		if errors.Is(err, updatecheck.ErrUnsupportedPlatform) {
+			log.Warnf("update check failed: unsupported platform %s/%s", runtime.GOOS, runtime.GOARCH)
+			return nil
+		}
 		return fmt.Errorf("update check failed: %w", err)
 	}
 	if !info.UpdateAvailable {
