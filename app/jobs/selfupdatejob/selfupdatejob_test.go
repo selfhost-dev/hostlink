@@ -206,6 +206,30 @@ func TestUpdateFlow_SkipsWhenNoUpdate(t *testing.T) {
 	}
 }
 
+func TestUpdateFlow_UnsupportedPlatform_ReturnsNilError(t *testing.T) {
+	// When the control plane returns 400 (unsupported platform),
+	// runUpdate should log WARN and return nil (not an error).
+	checker := &mockUpdateChecker{
+		err: updatecheck.ErrUnsupportedPlatform,
+	}
+	downloader := &mockDownloader{}
+
+	job := NewWithConfig(SelfUpdateJobConfig{
+		UpdateChecker:  checker,
+		Downloader:     downloader,
+		CurrentVersion: "1.0.0",
+	})
+
+	err := job.runUpdate(context.Background())
+
+	if err != nil {
+		t.Errorf("expected nil error for unsupported platform, got %v", err)
+	}
+	if downloader.callCount.Load() > 0 {
+		t.Error("downloader should not be called when platform unsupported")
+	}
+}
+
 func TestUpdateFlow_SkipsWhenPreflightFails(t *testing.T) {
 	checker := &mockUpdateChecker{
 		result: &updatecheck.UpdateInfo{
@@ -1112,7 +1136,7 @@ type mockUpdateChecker struct {
 	callCount atomic.Int32
 }
 
-func (m *mockUpdateChecker) Check(currentVersion string) (*updatecheck.UpdateInfo, error) {
+func (m *mockUpdateChecker) Check() (*updatecheck.UpdateInfo, error) {
 	m.callCount.Add(1)
 	return m.result, m.err
 }

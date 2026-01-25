@@ -2,6 +2,7 @@ package updatecheck
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -23,7 +24,7 @@ func TestCheck_UpdateAvailable(t *testing.T) {
 	defer server.Close()
 
 	checker := newTestChecker(t, server.Client(), server.URL, nil)
-	info, err := checker.Check("1.0.0")
+	info, err := checker.Check()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -54,7 +55,7 @@ func TestCheck_NoUpdateAvailable(t *testing.T) {
 	defer server.Close()
 
 	checker := newTestChecker(t, server.Client(), server.URL, nil)
-	info, err := checker.Check("2.0.0")
+	info, err := checker.Check()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -65,7 +66,7 @@ func TestCheck_NoUpdateAvailable(t *testing.T) {
 
 func TestCheck_NetworkError(t *testing.T) {
 	checker := newTestChecker(t, http.DefaultClient, "http://localhost:1", nil)
-	_, err := checker.Check("1.0.0")
+	_, err := checker.Check()
 	if err == nil {
 		t.Fatal("expected error for bad URL, got nil")
 	}
@@ -82,7 +83,7 @@ func TestCheck_SignsRequest(t *testing.T) {
 
 	signer := &mockSigner{agentID: "agent-123"}
 	checker := newTestChecker(t, server.Client(), server.URL, signer)
-	_, err := checker.Check("1.0.0")
+	_, err := checker.Check()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -101,23 +102,25 @@ func TestCheck_SignsRequest(t *testing.T) {
 	}
 }
 
-func TestCheck_SendsCurrentVersionAsHeader(t *testing.T) {
-	var receivedVersion string
+func TestCheck_MakesRequest(t *testing.T) {
+	// Note: X-Agent-Version, X-Agent-OS, X-Agent-Arch headers are now set by the transport.
+	// Header verification is done in internal/httpclient tests.
+	var requestMade bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		receivedVersion = r.Header.Get("X-Agent-Version")
+		requestMade = true
 		resp := UpdateInfo{UpdateAvailable: false}
 		json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
 	checker := newTestChecker(t, server.Client(), server.URL, nil)
-	_, err := checker.Check("1.5.3")
+	_, err := checker.Check()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if receivedVersion != "1.5.3" {
-		t.Errorf("expected X-Agent-Version header 1.5.3, got %s", receivedVersion)
+	if !requestMade {
+		t.Error("expected request to be made")
 	}
 }
 
@@ -131,7 +134,7 @@ func TestCheck_NoQueryParams(t *testing.T) {
 	defer server.Close()
 
 	checker := newTestChecker(t, server.Client(), server.URL, nil)
-	checker.Check("1.5.3")
+	checker.Check()
 
 	if receivedRawQuery != "" {
 		t.Errorf("expected no query params, got %s", receivedRawQuery)
@@ -145,9 +148,27 @@ func TestCheck_HTTPErrorStatus(t *testing.T) {
 	defer server.Close()
 
 	checker := newTestChecker(t, server.Client(), server.URL, nil)
-	_, err := checker.Check("1.0.0")
+	_, err := checker.Check()
 	if err == nil {
 		t.Fatal("expected error for 500 status, got nil")
+	}
+}
+
+func TestCheck_UnsupportedPlatform_Returns400(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	checker := newTestChecker(t, server.Client(), server.URL, nil)
+	_, err := checker.Check()
+	if err == nil {
+		t.Fatal("expected error for 400 status, got nil")
+	}
+
+	// Verify we get the specific ErrUnsupportedPlatform error
+	if !errors.Is(err, ErrUnsupportedPlatform) {
+		t.Errorf("expected ErrUnsupportedPlatform, got %v", err)
 	}
 }
 
@@ -158,7 +179,7 @@ func TestCheck_InvalidJSON(t *testing.T) {
 	defer server.Close()
 
 	checker := newTestChecker(t, server.Client(), server.URL, nil)
-	_, err := checker.Check("1.0.0")
+	_, err := checker.Check()
 	if err == nil {
 		t.Fatal("expected error for invalid JSON, got nil")
 	}
@@ -174,7 +195,7 @@ func TestCheck_UsesGETMethod(t *testing.T) {
 	defer server.Close()
 
 	checker := newTestChecker(t, server.Client(), server.URL, nil)
-	checker.Check("1.0.0")
+	checker.Check()
 
 	if receivedMethod != http.MethodGet {
 		t.Errorf("expected GET method, got %s", receivedMethod)
@@ -194,7 +215,7 @@ func TestCheck_UsesCorrectPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	checker.Check("1.0.0")
+	checker.Check()
 
 	if receivedPath != "/api/v1/agents/agent-123/update" {
 		t.Errorf("expected path /api/v1/agents/agent-123/update, got %s", receivedPath)

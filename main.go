@@ -22,11 +22,11 @@ import (
 	"hostlink/config"
 	"hostlink/config/appconf"
 	"hostlink/internal/dbconn"
+	"hostlink/internal/httpclient"
 	"hostlink/internal/update"
 	"hostlink/internal/validator"
 	"hostlink/version"
 	"log"
-	"net/http"
 	"os"
 	"syscall"
 	"time"
@@ -289,7 +289,7 @@ func startSelfUpdateJob(ctx context.Context) {
 
 	// Create update checker
 	checker, err := updatecheck.New(
-		&http.Client{Timeout: 30 * time.Second},
+		httpclient.NewClient(30*time.Second),
 		appconf.ControlPlaneURL(),
 		agentID,
 		signer,
