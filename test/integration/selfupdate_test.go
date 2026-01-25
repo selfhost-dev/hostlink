@@ -77,6 +77,12 @@ func createDummyBinary(t *testing.T, dir string) string {
 	return path
 }
 
+// testEnv returns the environment variables for running hostlink in test mode.
+// This sets HOSTLINK_ENV=test to skip auto-download behavior.
+func testEnv() []string {
+	return append(os.Environ(), "HOSTLINK_ENV=test")
+}
+
 func TestUpgrade_LockPreventsConcurrent(t *testing.T) {
 	baseDir := setupUpdateDirs(t)
 	paths := update.NewPaths(baseDir)
@@ -99,6 +105,7 @@ func TestUpgrade_LockPreventsConcurrent(t *testing.T) {
 		"--base-dir", baseDir,
 		"--install-path", "/tmp/fake-hostlink",
 	)
+	cmd.Env = testEnv()
 	output, err := cmd.CombinedOutput()
 	require.Error(t, err, "upgrade should fail when lock is held")
 	assert.Contains(t, string(output), "lock", "error should mention lock")
@@ -132,6 +139,7 @@ func TestUpgrade_SignalHandling(t *testing.T) {
 		"--base-dir", baseDir,
 		"--install-path", installPath,
 	)
+	cmd.Env = testEnv()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	err := cmd.Start()
@@ -176,6 +184,7 @@ func TestUpgrade_MissingInstallPathFails(t *testing.T) {
 		"--base-dir", baseDir,
 		"--install-path", "/nonexistent/path/hostlink",
 	)
+	cmd.Env = testEnv()
 	output, err := cmd.CombinedOutput()
 	require.Error(t, err, "upgrade should fail with non-existent install-path")
 	assert.Contains(t, string(output), "no such file",
@@ -198,6 +207,7 @@ func TestUpgrade_DryRun(t *testing.T) {
 		"--base-dir", baseDir,
 		"--install-path", "/nonexistent/path/hostlink",
 	)
+	cmd.Env = testEnv()
 	output, err := cmd.CombinedOutput()
 	outputStr := string(output)
 
@@ -229,6 +239,7 @@ func TestUpgrade_DryRunPassesWithValidPath(t *testing.T) {
 		"--base-dir", baseDir,
 		"--install-path", installPath,
 	)
+	cmd.Env = testEnv()
 	output, err := cmd.CombinedOutput()
 	outputStr := string(output)
 
