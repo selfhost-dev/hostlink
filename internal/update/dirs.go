@@ -19,7 +19,6 @@ type Paths struct {
 	BaseDir    string // /var/lib/hostlink/updates
 	BackupDir  string // /var/lib/hostlink/updates/backup
 	StagingDir string // /var/lib/hostlink/updates/staging
-	UpdaterDir string // /var/lib/hostlink/updates/updater
 	LockFile   string // /var/lib/hostlink/updates/update.lock
 	StateFile  string // /var/lib/hostlink/updates/state.json
 }
@@ -35,7 +34,6 @@ func NewPaths(baseDir string) Paths {
 		BaseDir:    baseDir,
 		BackupDir:  filepath.Join(baseDir, "backup"),
 		StagingDir: filepath.Join(baseDir, "staging"),
-		UpdaterDir: filepath.Join(baseDir, "updater"),
 		LockFile:   filepath.Join(baseDir, "update.lock"),
 		StateFile:  filepath.Join(baseDir, "state.json"),
 	}
@@ -50,7 +48,6 @@ func InitDirectories(baseDir string) error {
 		paths.BaseDir,
 		paths.BackupDir,
 		paths.StagingDir,
-		paths.UpdaterDir,
 	}
 
 	for _, dir := range dirs {

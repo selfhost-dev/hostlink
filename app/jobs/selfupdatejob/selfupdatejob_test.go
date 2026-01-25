@@ -3,6 +3,7 @@ package selfupdatejob
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -243,8 +244,6 @@ func TestUpdateFlow_FullFlow(t *testing.T) {
 			TargetVersion:   "2.0.0",
 			AgentURL:        "https://example.com/agent.tar.gz",
 			AgentSHA256:     "abc123",
-			UpdaterURL:      "https://example.com/updater.tar.gz",
-			UpdaterSHA256:   "def456",
 		},
 	}
 	preflight := &mockPreflight{
@@ -254,6 +253,7 @@ func TestUpdateFlow_FullFlow(t *testing.T) {
 	state := &mockStateWriter{}
 	downloader := &mockDownloader{}
 	spawner := &mockSpawner{}
+	installer := &mockBinaryInstaller{}
 
 	job := NewWithConfig(SelfUpdateJobConfig{
 		UpdateChecker:    checker,
@@ -262,11 +262,10 @@ func TestUpdateFlow_FullFlow(t *testing.T) {
 		LockManager:      lock,
 		StateWriter:      state,
 		Spawn:            spawner.spawn,
-		InstallUpdater:   noopInstaller,
+		InstallBinary:    installer.install,
 		CurrentVersion:   "1.0.0",
-		UpdaterPath:      "/tmp/updater",
+		InstallPath:      "/usr/bin/hostlink",
 		StagingDir:       "/tmp/staging",
-		BaseDir:          "/var/lib/hostlink/updates",
 	})
 
 	err := job.runUpdate(context.Background())
@@ -274,7 +273,7 @@ func TestUpdateFlow_FullFlow(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify full flow: check → preflight → lock → state(init) → download agent → download updater → state(staged) → unlock → spawn
+	// Verify full flow: check → preflight → lock → state(init) → download agent → extract binary → state(staged) → unlock → spawn
 	if checker.callCount.Load() != 1 {
 		t.Errorf("expected 1 check call, got %d", checker.callCount.Load())
 	}
@@ -284,8 +283,11 @@ func TestUpdateFlow_FullFlow(t *testing.T) {
 	if lock.lockCount.Load() != 1 {
 		t.Errorf("expected 1 lock call, got %d", lock.lockCount.Load())
 	}
-	if downloader.callCount.Load() != 2 {
-		t.Errorf("expected 2 download calls (agent + updater), got %d", downloader.callCount.Load())
+	if downloader.callCount.Load() != 1 {
+		t.Errorf("expected 1 download call (agent only), got %d", downloader.callCount.Load())
+	}
+	if installer.callCount.Load() != 1 {
+		t.Errorf("expected 1 install call (extract from tarball), got %d", installer.callCount.Load())
 	}
 	if lock.unlockCount.Load() != 1 {
 		t.Errorf("expected 1 unlock call, got %d", lock.unlockCount.Load())
@@ -317,8 +319,6 @@ func TestUpdateFlow_UnlocksBeforeSpawn(t *testing.T) {
 			TargetVersion:   "2.0.0",
 			AgentURL:        "https://example.com/agent.tar.gz",
 			AgentSHA256:     "abc",
-			UpdaterURL:      "https://example.com/updater.tar.gz",
-			UpdaterSHA256:   "def",
 		},
 	}
 	preflight := &mockPreflight{
@@ -348,11 +348,10 @@ func TestUpdateFlow_UnlocksBeforeSpawn(t *testing.T) {
 		LockManager:      lock,
 		StateWriter:      state,
 		Spawn:            spawner.spawn,
-		InstallUpdater:   noopInstaller,
+		InstallBinary:    noopInstaller,
 		CurrentVersion:   "1.0.0",
-		UpdaterPath:      "/tmp/updater",
+		InstallPath:      "/usr/bin/hostlink",
 		StagingDir:       "/tmp/staging",
-		BaseDir:          "/var/lib/hostlink/updates",
 	})
 
 	err := job.runUpdate(context.Background())
@@ -390,8 +389,6 @@ func TestUpdateFlow_DownloadFailure(t *testing.T) {
 			TargetVersion:   "2.0.0",
 			AgentURL:        "https://example.com/agent.tar.gz",
 			AgentSHA256:     "abc",
-			UpdaterURL:      "https://example.com/updater.tar.gz",
-			UpdaterSHA256:   "def",
 		},
 	}
 	preflight := &mockPreflight{
@@ -409,11 +406,10 @@ func TestUpdateFlow_DownloadFailure(t *testing.T) {
 		LockManager:      lock,
 		StateWriter:      state,
 		Spawn:            spawner.spawn,
-		InstallUpdater:   noopInstaller,
+		InstallBinary:    noopInstaller,
 		CurrentVersion:   "1.0.0",
-		UpdaterPath:      "/tmp/updater",
+		InstallPath:      "/usr/bin/hostlink",
 		StagingDir:       "/tmp/staging",
-		BaseDir:          "/var/lib/hostlink/updates",
 	})
 
 	job.runUpdate(context.Background())
@@ -427,15 +423,13 @@ func TestUpdateFlow_DownloadFailure(t *testing.T) {
 	}
 }
 
-func TestUpdateFlow_ChecksumMismatch(t *testing.T) {
+func TestUpdateFlow_ExtractFailure_PreventsSpawn(t *testing.T) {
 	checker := &mockUpdateChecker{
 		result: &updatecheck.UpdateInfo{
 			UpdateAvailable: true,
 			TargetVersion:   "2.0.0",
 			AgentURL:        "https://example.com/agent.tar.gz",
 			AgentSHA256:     "abc",
-			UpdaterURL:      "https://example.com/updater.tar.gz",
-			UpdaterSHA256:   "def",
 		},
 	}
 	preflight := &mockPreflight{
@@ -443,9 +437,9 @@ func TestUpdateFlow_ChecksumMismatch(t *testing.T) {
 	}
 	lock := &mockLockManager{}
 	state := &mockStateWriter{}
-	// First call (agent) succeeds, second (updater) fails
-	downloader := &mockDownloader{failOnCall: 2, err: errors.New("checksum mismatch")}
+	downloader := &mockDownloader{}
 	spawner := &mockSpawner{}
+	installer := &mockBinaryInstaller{err: errors.New("extraction failed")}
 
 	job := NewWithConfig(SelfUpdateJobConfig{
 		UpdateChecker:    checker,
@@ -454,17 +448,16 @@ func TestUpdateFlow_ChecksumMismatch(t *testing.T) {
 		LockManager:      lock,
 		StateWriter:      state,
 		Spawn:            spawner.spawn,
-		InstallUpdater:   noopInstaller,
+		InstallBinary:    installer.install,
 		CurrentVersion:   "1.0.0",
-		UpdaterPath:      "/tmp/updater",
+		InstallPath:      "/usr/bin/hostlink",
 		StagingDir:       "/tmp/staging",
-		BaseDir:          "/var/lib/hostlink/updates",
 	})
 
 	job.runUpdate(context.Background())
 
 	if spawner.callCount.Load() > 0 {
-		t.Error("spawner should not be called when checksum fails")
+		t.Error("spawner should not be called when extraction fails")
 	}
 	if lock.unlockCount.Load() != 1 {
 		t.Errorf("expected lock to be released on failure, unlock count: %d", lock.unlockCount.Load())
@@ -478,8 +471,6 @@ func TestUpdateFlow_SpawnArgs(t *testing.T) {
 			TargetVersion:   "2.0.0",
 			AgentURL:        "https://example.com/agent.tar.gz",
 			AgentSHA256:     "abc",
-			UpdaterURL:      "https://example.com/updater.tar.gz",
-			UpdaterSHA256:   "def",
 		},
 	}
 	preflight := &mockPreflight{
@@ -497,11 +488,10 @@ func TestUpdateFlow_SpawnArgs(t *testing.T) {
 		LockManager:      lock,
 		StateWriter:      state,
 		Spawn:            spawner.spawn,
-		InstallUpdater:   noopInstaller,
+		InstallBinary:    noopInstaller,
 		CurrentVersion:   "1.0.0",
-		UpdaterPath:      "/opt/updater/hostlink-updater",
+		InstallPath:      "/usr/bin/hostlink",
 		StagingDir:       "/tmp/staging",
-		BaseDir:          "/var/lib/hostlink/updates",
 	})
 
 	err := job.runUpdate(context.Background())
@@ -509,25 +499,42 @@ func TestUpdateFlow_SpawnArgs(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if spawner.lastPath != "/opt/updater/hostlink-updater" {
-		t.Errorf("expected updater path /opt/updater/hostlink-updater, got %s", spawner.lastPath)
+	// Spawn path should be the extracted binary in staging dir
+	expectedSpawnPath := "/tmp/staging/hostlink"
+	if spawner.lastPath != expectedSpawnPath {
+		t.Errorf("expected spawn path %s, got %s", expectedSpawnPath, spawner.lastPath)
 	}
-	// Verify args contain -version and -base-dir
-	foundVersion := false
-	foundDir := false
-	for i, arg := range spawner.lastArgs {
-		if arg == "-version" && i+1 < len(spawner.lastArgs) && spawner.lastArgs[i+1] == "2.0.0" {
-			foundVersion = true
-		}
-		if arg == "-base-dir" && i+1 < len(spawner.lastArgs) && spawner.lastArgs[i+1] == "/var/lib/hostlink/updates" {
-			foundDir = true
-		}
+	// Verify args are: upgrade --install-path <path> --update-id <uuid> --source-version <ver>
+	if len(spawner.lastArgs) != 7 {
+		t.Fatalf("expected 7 args, got %v", spawner.lastArgs)
 	}
-	if !foundVersion {
-		t.Errorf("expected -version 2.0.0 in spawn args, got %v", spawner.lastArgs)
+	if spawner.lastArgs[0] != "upgrade" {
+		t.Errorf("arg[0]: expected 'upgrade', got %q", spawner.lastArgs[0])
 	}
-	if !foundDir {
-		t.Errorf("expected -base-dir /var/lib/hostlink/updates in spawn args, got %v", spawner.lastArgs)
+	if spawner.lastArgs[1] != "--install-path" || spawner.lastArgs[2] != "/usr/bin/hostlink" {
+		t.Errorf("expected --install-path /usr/bin/hostlink, got %v", spawner.lastArgs[1:3])
+	}
+	if spawner.lastArgs[3] != "--update-id" {
+		t.Errorf("arg[3]: expected '--update-id', got %q", spawner.lastArgs[3])
+	}
+	if spawner.lastArgs[4] == "" {
+		t.Error("update-id should not be empty")
+	}
+	if spawner.lastArgs[5] != "--source-version" || spawner.lastArgs[6] != "1.0.0" {
+		t.Errorf("expected --source-version 1.0.0, got %v", spawner.lastArgs[5:7])
+	}
+
+	// Verify UpdateID is consistent across state writes and spawn args
+	writes := state.getWrites()
+	if len(writes) < 2 {
+		t.Fatalf("expected at least 2 state writes, got %d", len(writes))
+	}
+	updateID := spawner.lastArgs[4]
+	if writes[0].UpdateID != updateID {
+		t.Errorf("Initialized state UpdateID: expected %q, got %q", updateID, writes[0].UpdateID)
+	}
+	if writes[1].UpdateID != updateID {
+		t.Errorf("Staged state UpdateID: expected %q, got %q", updateID, writes[1].UpdateID)
 	}
 }
 
@@ -539,9 +546,6 @@ func TestUpdateFlow_PassesDownloadSizeToPreflight(t *testing.T) {
 			AgentURL:        "https://example.com/agent.tar.gz",
 			AgentSHA256:     "abc",
 			AgentSize:       30 * 1024 * 1024, // 30MB
-			UpdaterURL:      "https://example.com/updater.tar.gz",
-			UpdaterSHA256:   "def",
-			UpdaterSize:     5 * 1024 * 1024, // 5MB
 		},
 	}
 	preflight := &mockPreflight{
@@ -559,11 +563,10 @@ func TestUpdateFlow_PassesDownloadSizeToPreflight(t *testing.T) {
 		LockManager:      lock,
 		StateWriter:      state,
 		Spawn:            spawner.spawn,
-		InstallUpdater:   noopInstaller,
+		InstallBinary:    noopInstaller,
 		CurrentVersion:   "1.0.0",
-		UpdaterPath:      "/tmp/updater",
+		InstallPath:      "/usr/bin/hostlink",
 		StagingDir:       "/tmp/staging",
-		BaseDir:          "/var/lib/hostlink/updates",
 	})
 
 	err := job.runUpdate(context.Background())
@@ -571,22 +574,20 @@ func TestUpdateFlow_PassesDownloadSizeToPreflight(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	expected := int64(35 * 1024 * 1024) // 30MB + 5MB
+	expected := int64(30 * 1024 * 1024) // 30MB (agent only)
 	if preflight.getLastRequiredSpace() != expected {
 		t.Errorf("expected preflight requiredSpace %d, got %d", expected, preflight.getLastRequiredSpace())
 	}
 }
 
-func TestUpdateFlow_FallsBackTo50MB_WhenSizesZero(t *testing.T) {
+func TestUpdateFlow_FallsBackTo50MB_WhenSizeZero(t *testing.T) {
 	checker := &mockUpdateChecker{
 		result: &updatecheck.UpdateInfo{
 			UpdateAvailable: true,
 			TargetVersion:   "2.0.0",
 			AgentURL:        "https://example.com/agent.tar.gz",
 			AgentSHA256:     "abc",
-			UpdaterURL:      "https://example.com/updater.tar.gz",
-			UpdaterSHA256:   "def",
-			// AgentSize and UpdaterSize are zero (not provided by control plane)
+			// AgentSize is zero (not provided by control plane)
 		},
 	}
 	preflight := &mockPreflight{
@@ -604,11 +605,10 @@ func TestUpdateFlow_FallsBackTo50MB_WhenSizesZero(t *testing.T) {
 		LockManager:      lock,
 		StateWriter:      state,
 		Spawn:            spawner.spawn,
-		InstallUpdater:   noopInstaller,
+		InstallBinary:    noopInstaller,
 		CurrentVersion:   "1.0.0",
-		UpdaterPath:      "/tmp/updater",
+		InstallPath:      "/usr/bin/hostlink",
 		StagingDir:       "/tmp/staging",
-		BaseDir:          "/var/lib/hostlink/updates",
 	})
 
 	err := job.runUpdate(context.Background())
@@ -629,8 +629,6 @@ func TestUpdateFlow_AgentDestUsesCanonicalTarballName(t *testing.T) {
 			TargetVersion:   "2.0.0",
 			AgentURL:        "https://example.com/agent.tar.gz",
 			AgentSHA256:     "abc",
-			UpdaterURL:      "https://example.com/updater.tar.gz",
-			UpdaterSHA256:   "def",
 		},
 	}
 	preflight := &mockPreflight{
@@ -648,11 +646,10 @@ func TestUpdateFlow_AgentDestUsesCanonicalTarballName(t *testing.T) {
 		LockManager:      lock,
 		StateWriter:      state,
 		Spawn:            spawner.spawn,
-		InstallUpdater:   noopInstaller,
+		InstallBinary:    noopInstaller,
 		CurrentVersion:   "1.0.0",
-		UpdaterPath:      "/tmp/updater",
+		InstallPath:      "/usr/bin/hostlink",
 		StagingDir:       "/tmp/staging",
-		BaseDir:          "/var/lib/hostlink/updates",
 	})
 
 	err := job.runUpdate(context.Background())
@@ -660,22 +657,20 @@ func TestUpdateFlow_AgentDestUsesCanonicalTarballName(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Agent tarball must use the canonical name expected by the updater
+	// Agent tarball must use the canonical name
 	expectedAgentDest := "/tmp/staging/" + updatedownload.AgentTarballName
 	if len(downloader.destPaths) < 1 || downloader.destPaths[0] != expectedAgentDest {
 		t.Errorf("expected agent dest path %q, got %v", expectedAgentDest, downloader.destPaths)
 	}
 }
 
-func TestUpdateFlow_ExtractsUpdaterBeforeSpawn(t *testing.T) {
+func TestUpdateFlow_InstallBinaryArgs(t *testing.T) {
 	checker := &mockUpdateChecker{
 		result: &updatecheck.UpdateInfo{
 			UpdateAvailable: true,
 			TargetVersion:   "2.0.0",
 			AgentURL:        "https://example.com/agent.tar.gz",
 			AgentSHA256:     "abc",
-			UpdaterURL:      "https://example.com/updater.tar.gz",
-			UpdaterSHA256:   "def",
 		},
 	}
 	preflight := &mockPreflight{
@@ -685,7 +680,7 @@ func TestUpdateFlow_ExtractsUpdaterBeforeSpawn(t *testing.T) {
 	state := &mockStateWriter{}
 	downloader := &mockDownloader{}
 	spawner := &mockSpawner{}
-	installer := &mockUpdaterInstaller{}
+	installer := &mockBinaryInstaller{}
 
 	job := NewWithConfig(SelfUpdateJobConfig{
 		UpdateChecker:    checker,
@@ -694,11 +689,10 @@ func TestUpdateFlow_ExtractsUpdaterBeforeSpawn(t *testing.T) {
 		LockManager:      lock,
 		StateWriter:      state,
 		Spawn:            spawner.spawn,
-		InstallUpdater:   installer.install,
+		InstallBinary:    installer.install,
 		CurrentVersion:   "1.0.0",
-		UpdaterPath:      "/opt/updater/hostlink-updater",
+		InstallPath:      "/usr/bin/hostlink",
 		StagingDir:       "/tmp/staging",
-		BaseDir:          "/var/lib/hostlink/updates",
 	})
 
 	err := job.runUpdate(context.Background())
@@ -706,70 +700,22 @@ func TestUpdateFlow_ExtractsUpdaterBeforeSpawn(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify InstallUpdater was called with correct args
+	// Verify InstallBinary was called with tarball path and staging dest
 	if installer.callCount.Load() != 1 {
 		t.Fatalf("expected 1 install call, got %d", installer.callCount.Load())
 	}
-	expectedTarPath := "/tmp/staging/" + updatedownload.UpdaterTarballName
+	expectedTarPath := "/tmp/staging/" + updatedownload.AgentTarballName
 	if installer.lastTarPath != expectedTarPath {
 		t.Errorf("expected tarPath %q, got %q", expectedTarPath, installer.lastTarPath)
 	}
-	if installer.lastDestPath != "/opt/updater/hostlink-updater" {
-		t.Errorf("expected destPath %q, got %q", "/opt/updater/hostlink-updater", installer.lastDestPath)
-	}
-	// Verify spawn was still called (extraction didn't block it)
-	if spawner.callCount.Load() != 1 {
-		t.Errorf("expected 1 spawn call, got %d", spawner.callCount.Load())
+	// destPath should be staging/hostlink (the extracted binary to spawn)
+	expectedDestPath := "/tmp/staging/hostlink"
+	if installer.lastDestPath != expectedDestPath {
+		t.Errorf("expected destPath %q, got %q", expectedDestPath, installer.lastDestPath)
 	}
 }
 
-func TestUpdateFlow_ExtractFailure_PreventsSpawn(t *testing.T) {
-	checker := &mockUpdateChecker{
-		result: &updatecheck.UpdateInfo{
-			UpdateAvailable: true,
-			TargetVersion:   "2.0.0",
-			AgentURL:        "https://example.com/agent.tar.gz",
-			AgentSHA256:     "abc",
-			UpdaterURL:      "https://example.com/updater.tar.gz",
-			UpdaterSHA256:   "def",
-		},
-	}
-	preflight := &mockPreflight{
-		result: &updatepreflight.PreflightResult{Passed: true},
-	}
-	lock := &mockLockManager{}
-	state := &mockStateWriter{}
-	downloader := &mockDownloader{}
-	spawner := &mockSpawner{}
-	installer := &mockUpdaterInstaller{err: errors.New("extraction failed")}
-
-	job := NewWithConfig(SelfUpdateJobConfig{
-		UpdateChecker:    checker,
-		Downloader:       downloader,
-		PreflightChecker: preflight,
-		LockManager:      lock,
-		StateWriter:      state,
-		Spawn:            spawner.spawn,
-		InstallUpdater:   installer.install,
-		CurrentVersion:   "1.0.0",
-		UpdaterPath:      "/opt/updater/hostlink-updater",
-		StagingDir:       "/tmp/staging",
-		BaseDir:          "/var/lib/hostlink/updates",
-	})
-
-	job.runUpdate(context.Background())
-
-	// Extraction failed, so spawn should NOT be called
-	if spawner.callCount.Load() != 0 {
-		t.Error("spawner should not be called when extraction fails")
-	}
-	// Lock should still be released
-	if lock.unlockCount.Load() != 1 {
-		t.Errorf("expected lock to be released on failure, unlock count: %d", lock.unlockCount.Load())
-	}
-}
-
-func TestUpdateFlow_ContextCancelledBetweenDownloads(t *testing.T) {
+func TestUpdateFlow_ContextCancelledAfterDownload(t *testing.T) {
 	var cancelCtx context.CancelFunc
 
 	checker := &mockUpdateChecker{
@@ -778,8 +724,6 @@ func TestUpdateFlow_ContextCancelledBetweenDownloads(t *testing.T) {
 			TargetVersion:   "2.0.0",
 			AgentURL:        "https://example.com/agent.tar.gz",
 			AgentSHA256:     "abc",
-			UpdaterURL:      "https://example.com/updater.tar.gz",
-			UpdaterSHA256:   "def",
 		},
 	}
 	preflight := &mockPreflight{
@@ -790,7 +734,7 @@ func TestUpdateFlow_ContextCancelledBetweenDownloads(t *testing.T) {
 	downloader := &mockDownloader{
 		onCall: func(count int32) {
 			if count == 1 {
-				// Cancel context after first download (agent) completes
+				// Cancel context after download completes
 				cancelCtx()
 			}
 		},
@@ -804,11 +748,10 @@ func TestUpdateFlow_ContextCancelledBetweenDownloads(t *testing.T) {
 		LockManager:      lock,
 		StateWriter:      state,
 		Spawn:            spawner.spawn,
-		InstallUpdater:   noopInstaller,
+		InstallBinary:    noopInstaller,
 		CurrentVersion:   "1.0.0",
-		UpdaterPath:      "/tmp/updater",
+		InstallPath:      "/usr/bin/hostlink",
 		StagingDir:       "/tmp/staging",
-		BaseDir:          "/var/lib/hostlink/updates",
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -823,19 +766,333 @@ func TestUpdateFlow_ContextCancelledBetweenDownloads(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("expected context.Canceled error, got: %v", err)
 	}
-	// Second download (updater) should NOT have been called
-	if downloader.callCount.Load() != 1 {
-		t.Errorf("expected only 1 download call (agent), got %d", downloader.callCount.Load())
-	}
 	// Spawn should NOT have been called
 	if spawner.callCount.Load() != 0 {
 		t.Error("spawner should not be called when context is cancelled")
 	}
 }
 
+func TestUpdateFlow_ContextCancelledAfterDownload_WritesErrorState(t *testing.T) {
+	var cancelCtx context.CancelFunc
+
+	checker := &mockUpdateChecker{
+		result: &updatecheck.UpdateInfo{
+			UpdateAvailable: true,
+			TargetVersion:   "2.0.0",
+			AgentURL:        "https://example.com/agent.tar.gz",
+			AgentSHA256:     "abc",
+		},
+	}
+	preflight := &mockPreflight{
+		result: &updatepreflight.PreflightResult{Passed: true},
+	}
+	lock := &mockLockManager{}
+	state := &mockStateWriter{}
+	downloader := &mockDownloader{
+		onCall: func(count int32) {
+			if count == 1 {
+				cancelCtx()
+			}
+		},
+	}
+
+	job := NewWithConfig(SelfUpdateJobConfig{
+		UpdateChecker:    checker,
+		Downloader:       downloader,
+		PreflightChecker: preflight,
+		LockManager:      lock,
+		StateWriter:      state,
+		Spawn:            func(string, []string) error { return nil },
+		InstallBinary:    noopInstaller,
+		CurrentVersion:   "1.0.0",
+		InstallPath:      "/usr/bin/hostlink",
+		StagingDir:       "/tmp/staging",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancelCtx = cancel
+
+	job.runUpdate(ctx)
+
+	// Verify error state was written
+	writes := state.getWrites()
+	if len(writes) < 2 {
+		t.Fatalf("expected at least 2 state writes (init + error), got %d", len(writes))
+	}
+	lastWrite := writes[len(writes)-1]
+	if lastWrite.State != update.StateInitialized {
+		t.Errorf("expected last state to be Initialized, got %s", lastWrite.State)
+	}
+	if lastWrite.Error == nil {
+		t.Error("expected Error field to be set on last state write")
+	} else if *lastWrite.Error != context.Canceled.Error() {
+		t.Errorf("expected error message %q, got %q", context.Canceled.Error(), *lastWrite.Error)
+	}
+}
+
+func TestUpdateFlow_ExtractFailure_WritesErrorState(t *testing.T) {
+	checker := &mockUpdateChecker{
+		result: &updatecheck.UpdateInfo{
+			UpdateAvailable: true,
+			TargetVersion:   "2.0.0",
+			AgentURL:        "https://example.com/agent.tar.gz",
+			AgentSHA256:     "abc",
+		},
+	}
+	preflight := &mockPreflight{
+		result: &updatepreflight.PreflightResult{Passed: true},
+	}
+	lock := &mockLockManager{}
+	state := &mockStateWriter{}
+	downloader := &mockDownloader{}
+	installer := &mockBinaryInstaller{err: errors.New("extraction failed: corrupt tarball")}
+
+	job := NewWithConfig(SelfUpdateJobConfig{
+		UpdateChecker:    checker,
+		Downloader:       downloader,
+		PreflightChecker: preflight,
+		LockManager:      lock,
+		StateWriter:      state,
+		Spawn:            func(string, []string) error { return nil },
+		InstallBinary:    installer.install,
+		CurrentVersion:   "1.0.0",
+		InstallPath:      "/usr/bin/hostlink",
+		StagingDir:       "/tmp/staging",
+	})
+
+	job.runUpdate(context.Background())
+
+	// Verify error state was written
+	writes := state.getWrites()
+	if len(writes) < 2 {
+		t.Fatalf("expected at least 2 state writes (init + error), got %d", len(writes))
+	}
+	lastWrite := writes[len(writes)-1]
+	if lastWrite.State != update.StateInitialized {
+		t.Errorf("expected last state to be Initialized, got %s", lastWrite.State)
+	}
+	if lastWrite.Error == nil {
+		t.Error("expected Error field to be set on last state write")
+	} else if !strings.Contains(*lastWrite.Error, "extraction failed") {
+		t.Errorf("expected error message to contain 'extraction failed', got %q", *lastWrite.Error)
+	}
+}
+
+func TestUpdateFlow_DownloadFailure_WritesErrorState(t *testing.T) {
+	checker := &mockUpdateChecker{
+		result: &updatecheck.UpdateInfo{
+			UpdateAvailable: true,
+			TargetVersion:   "2.0.0",
+			AgentURL:        "https://example.com/agent.tar.gz",
+			AgentSHA256:     "abc",
+		},
+	}
+	preflight := &mockPreflight{
+		result: &updatepreflight.PreflightResult{Passed: true},
+	}
+	lock := &mockLockManager{}
+	state := &mockStateWriter{}
+	downloader := &mockDownloader{err: errors.New("download failed: connection timeout")}
+
+	job := NewWithConfig(SelfUpdateJobConfig{
+		UpdateChecker:    checker,
+		Downloader:       downloader,
+		PreflightChecker: preflight,
+		LockManager:      lock,
+		StateWriter:      state,
+		Spawn:            func(string, []string) error { return nil },
+		InstallBinary:    noopInstaller,
+		CurrentVersion:   "1.0.0",
+		InstallPath:      "/usr/bin/hostlink",
+		StagingDir:       "/tmp/staging",
+	})
+
+	job.runUpdate(context.Background())
+
+	// Verify error state was written
+	writes := state.getWrites()
+	if len(writes) < 2 {
+		t.Fatalf("expected at least 2 state writes (init + error), got %d", len(writes))
+	}
+	lastWrite := writes[len(writes)-1]
+	if lastWrite.State != update.StateInitialized {
+		t.Errorf("expected last state to be Initialized, got %s", lastWrite.State)
+	}
+	if lastWrite.Error == nil {
+		t.Error("expected Error field to be set on last state write")
+	} else if !strings.Contains(*lastWrite.Error, "download") {
+		t.Errorf("expected error message to contain 'download', got %q", *lastWrite.Error)
+	}
+}
+
+func TestUpdateFlow_ContextCancelledAfterExtract_WritesErrorState(t *testing.T) {
+	checker := &mockUpdateChecker{
+		result: &updatecheck.UpdateInfo{
+			UpdateAvailable: true,
+			TargetVersion:   "2.0.0",
+			AgentURL:        "https://example.com/agent.tar.gz",
+			AgentSHA256:     "abc",
+		},
+	}
+	preflight := &mockPreflight{
+		result: &updatepreflight.PreflightResult{Passed: true},
+	}
+	lock := &mockLockManager{}
+	state := &mockStateWriter{}
+	downloader := &mockDownloader{}
+
+	var cancelCtx context.CancelFunc
+	installer := &mockBinaryInstaller{
+		onInstall: func() {
+			// Cancel context after extraction succeeds
+			cancelCtx()
+		},
+	}
+
+	job := NewWithConfig(SelfUpdateJobConfig{
+		UpdateChecker:    checker,
+		Downloader:       downloader,
+		PreflightChecker: preflight,
+		LockManager:      lock,
+		StateWriter:      state,
+		Spawn:            func(string, []string) error { return nil },
+		InstallBinary:    installer.install,
+		CurrentVersion:   "1.0.0",
+		InstallPath:      "/usr/bin/hostlink",
+		StagingDir:       "/tmp/staging",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancelCtx = cancel
+
+	job.runUpdate(ctx)
+
+	// Verify error state was written
+	writes := state.getWrites()
+	if len(writes) < 2 {
+		t.Fatalf("expected at least 2 state writes (init + error), got %d", len(writes))
+	}
+	lastWrite := writes[len(writes)-1]
+	if lastWrite.State != update.StateInitialized {
+		t.Errorf("expected last state to be Initialized, got %s", lastWrite.State)
+	}
+	if lastWrite.Error == nil {
+		t.Error("expected Error field to be set on last state write")
+	} else if *lastWrite.Error != context.Canceled.Error() {
+		t.Errorf("expected error message %q, got %q", context.Canceled.Error(), *lastWrite.Error)
+	}
+}
+
+func TestUpdateFlow_ContextCancelledAfterStagedStateWrite_WritesErrorState(t *testing.T) {
+	checker := &mockUpdateChecker{
+		result: &updatecheck.UpdateInfo{
+			UpdateAvailable: true,
+			TargetVersion:   "2.0.0",
+			AgentURL:        "https://example.com/agent.tar.gz",
+			AgentSHA256:     "abc",
+		},
+	}
+	preflight := &mockPreflight{
+		result: &updatepreflight.PreflightResult{Passed: true},
+	}
+	lock := &mockLockManager{}
+	downloader := &mockDownloader{}
+
+	var cancelCtx context.CancelFunc
+	state := &mockStateWriter{
+		onWrite: func(data update.StateData) {
+			// Cancel context after staged state is written
+			if data.State == update.StateStaged {
+				cancelCtx()
+			}
+		},
+	}
+
+	job := NewWithConfig(SelfUpdateJobConfig{
+		UpdateChecker:    checker,
+		Downloader:       downloader,
+		PreflightChecker: preflight,
+		LockManager:      lock,
+		StateWriter:      state,
+		Spawn:            func(string, []string) error { return nil },
+		InstallBinary:    noopInstaller,
+		CurrentVersion:   "1.0.0",
+		InstallPath:      "/usr/bin/hostlink",
+		StagingDir:       "/tmp/staging",
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancelCtx = cancel
+
+	job.runUpdate(ctx)
+
+	// Verify error state was written after staged state
+	writes := state.getWrites()
+	if len(writes) < 3 {
+		t.Fatalf("expected at least 3 state writes (init + staged + error), got %d", len(writes))
+	}
+	lastWrite := writes[len(writes)-1]
+	if lastWrite.State != update.StateInitialized {
+		t.Errorf("expected last state to be Initialized (error state), got %s", lastWrite.State)
+	}
+	if lastWrite.Error == nil {
+		t.Error("expected Error field to be set on last state write")
+	} else if *lastWrite.Error != context.Canceled.Error() {
+		t.Errorf("expected error message %q, got %q", context.Canceled.Error(), *lastWrite.Error)
+	}
+}
+
+func TestUpdateFlow_SpawnFailure_WritesErrorState(t *testing.T) {
+	checker := &mockUpdateChecker{
+		result: &updatecheck.UpdateInfo{
+			UpdateAvailable: true,
+			TargetVersion:   "2.0.0",
+			AgentURL:        "https://example.com/agent.tar.gz",
+			AgentSHA256:     "abc",
+		},
+	}
+	preflight := &mockPreflight{
+		result: &updatepreflight.PreflightResult{Passed: true},
+	}
+	lock := &mockLockManager{}
+	state := &mockStateWriter{}
+	downloader := &mockDownloader{}
+	spawner := &mockSpawner{err: errors.New("spawn failed: exec format error")}
+
+	job := NewWithConfig(SelfUpdateJobConfig{
+		UpdateChecker:    checker,
+		Downloader:       downloader,
+		PreflightChecker: preflight,
+		LockManager:      lock,
+		StateWriter:      state,
+		Spawn:            spawner.spawn,
+		InstallBinary:    noopInstaller,
+		CurrentVersion:   "1.0.0",
+		InstallPath:      "/usr/bin/hostlink",
+		StagingDir:       "/tmp/staging",
+	})
+
+	job.runUpdate(context.Background())
+
+	// Verify error state was written after spawn failure
+	writes := state.getWrites()
+	if len(writes) < 3 {
+		t.Fatalf("expected at least 3 state writes (init + staged + error), got %d", len(writes))
+	}
+	lastWrite := writes[len(writes)-1]
+	if lastWrite.State != update.StateInitialized {
+		t.Errorf("expected last state to be Initialized (error state), got %s", lastWrite.State)
+	}
+	if lastWrite.Error == nil {
+		t.Error("expected Error field to be set on last state write")
+	} else if !strings.Contains(*lastWrite.Error, "spawn") {
+		t.Errorf("expected error message to contain 'spawn', got %q", *lastWrite.Error)
+	}
+}
+
 // --- Helpers ---
 
-// noopInstaller is a no-op InstallUpdaterFunc for tests that don't care about extraction.
+// noopInstaller is a no-op InstallBinaryFunc for tests that don't care about extraction.
 func noopInstaller(tarPath, destPath string) error { return nil }
 
 // immediateTrigger calls fn exactly n times synchronously then returns.
@@ -903,15 +1160,21 @@ func (m *mockLockManager) Unlock() error {
 }
 
 type mockStateWriter struct {
-	mu     sync.Mutex
-	states []update.State
-	err    error
+	mu      sync.Mutex
+	states  []update.State
+	writes  []update.StateData
+	err     error
+	onWrite func(data update.StateData) // Called after each write
 }
 
 func (m *mockStateWriter) Write(data update.StateData) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.states = append(m.states, data.State)
+	m.writes = append(m.writes, data)
+	if m.onWrite != nil {
+		m.onWrite(data)
+	}
 	return m.err
 }
 
@@ -920,6 +1183,14 @@ func (m *mockStateWriter) getStates() []update.State {
 	defer m.mu.Unlock()
 	result := make([]update.State, len(m.states))
 	copy(result, m.states)
+	return result
+}
+
+func (m *mockStateWriter) getWrites() []update.StateData {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make([]update.StateData, len(m.writes))
+	copy(result, m.writes)
 	return result
 }
 
@@ -969,19 +1240,23 @@ func (m *mockSpawner) spawn(updaterPath string, args []string) error {
 	return m.err
 }
 
-type mockUpdaterInstaller struct {
+type mockBinaryInstaller struct {
 	err          error
 	callCount    atomic.Int32
 	lastTarPath  string
 	lastDestPath string
+	onInstall    func()
 	mu           sync.Mutex
 }
 
-func (m *mockUpdaterInstaller) install(tarPath, destPath string) error {
+func (m *mockBinaryInstaller) install(tarPath, destPath string) error {
 	m.callCount.Add(1)
 	m.mu.Lock()
 	m.lastTarPath = tarPath
 	m.lastDestPath = destPath
 	m.mu.Unlock()
+	if m.onInstall != nil {
+		m.onInstall()
+	}
 	return m.err
 }

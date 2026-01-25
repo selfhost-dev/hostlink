@@ -81,41 +81,11 @@ func TestStagingManager_StageAgent(t *testing.T) {
 	assert.Equal(t, content, data)
 }
 
-func TestStagingManager_StageUpdater(t *testing.T) {
-	content := []byte("fake updater tarball content")
-	contentSHA := computeStagingSHA256(content)
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write(content)
-	}))
-	defer server.Close()
-
-	tmpDir := t.TempDir()
-	stagingPath := filepath.Join(tmpDir, "staging")
-
-	downloader := NewDownloaderWithSleep(DefaultDownloadConfig(), noopSleep)
-	sm := NewStagingManager(stagingPath, downloader)
-
-	err := sm.Prepare()
-	require.NoError(t, err)
-
-	err = sm.StageUpdater(context.Background(), server.URL, contentSHA)
-	require.NoError(t, err)
-
-	// Verify file was downloaded
-	updaterPath := sm.GetUpdaterPath()
-	data, err := os.ReadFile(updaterPath)
-	require.NoError(t, err)
-	assert.Equal(t, content, data)
-}
-
-func TestStagingManager_GetPaths(t *testing.T) {
+func TestStagingManager_GetAgentPath(t *testing.T) {
 	stagingPath := "/var/lib/hostlink/updates/staging"
 	sm := NewStagingManager(stagingPath, nil)
 
 	assert.Equal(t, filepath.Join(stagingPath, "hostlink.tar.gz"), sm.GetAgentPath())
-	assert.Equal(t, filepath.Join(stagingPath, UpdaterTarballName), sm.GetUpdaterPath())
 }
 
 func TestStagingManager_Cleanup(t *testing.T) {

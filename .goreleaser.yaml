@@ -30,19 +30,6 @@ builds:
     ldflags:
       - -s -w -X hostlink/version.Version={{.Version}}
 
-  - id: hostlink-updater
-    main: ./cmd/updater
-    binary: hostlink-updater
-    env:
-      - CGO_ENABLED=0
-    goos:
-      - linux
-    goarch:
-      - amd64
-      - arm64
-    ldflags:
-      - -s -w -X hostlink/version.Version={{.Version}}
-
 archives:
   - id: hostlink-archive
     builds: [hostlink]
@@ -60,18 +47,6 @@ archives:
       - src: "scripts/**/*"
         dst: scripts
         strip_parent: true
-
-  - id: updater-archive
-    builds: [hostlink-updater]
-    formats: [tar.gz]
-    name_template: >-
-      hostlink-updater_
-      {{- title .Os }}_
-      {{- if eq .Arch "amd64" }}x86_64
-      {{- else }}{{ .Arch }}{{ end }}
-      {{- if .Arm }}v{{ .Arm }}{{ end }}
-    files:
-      - none*
 
 changelog:
   sort: asc

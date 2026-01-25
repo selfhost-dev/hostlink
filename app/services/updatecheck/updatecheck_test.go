@@ -17,9 +17,6 @@ func TestCheck_UpdateAvailable(t *testing.T) {
 			AgentURL:        "https://example.com/agent.tar.gz",
 			AgentSHA256:     "abc123",
 			AgentSize:       52428800,
-			UpdaterURL:      "https://example.com/updater.tar.gz",
-			UpdaterSHA256:   "def456",
-			UpdaterSize:     10485760,
 		}
 		json.NewEncoder(w).Encode(resp)
 	}))
@@ -42,17 +39,8 @@ func TestCheck_UpdateAvailable(t *testing.T) {
 	if info.AgentSHA256 != "abc123" {
 		t.Errorf("expected AgentSHA256 abc123, got %s", info.AgentSHA256)
 	}
-	if info.UpdaterURL != "https://example.com/updater.tar.gz" {
-		t.Errorf("expected UpdaterURL https://example.com/updater.tar.gz, got %s", info.UpdaterURL)
-	}
 	if info.AgentSize != 52428800 {
 		t.Errorf("expected AgentSize 52428800, got %d", info.AgentSize)
-	}
-	if info.UpdaterSHA256 != "def456" {
-		t.Errorf("expected UpdaterSHA256 def456, got %s", info.UpdaterSHA256)
-	}
-	if info.UpdaterSize != 10485760 {
-		t.Errorf("expected UpdaterSize 10485760, got %d", info.UpdaterSize)
 	}
 }
 

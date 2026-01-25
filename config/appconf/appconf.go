@@ -56,6 +56,15 @@ func AgentStatePath() string {
 	return "/var/lib/hostlink"
 }
 
+// InstallPath returns the target install path for the hostlink binary.
+// Controlled by HOSTLINK_INSTALL_PATH (default: /usr/bin/hostlink).
+func InstallPath() string {
+	if path := os.Getenv("HOSTLINK_INSTALL_PATH"); path != "" {
+		return path
+	}
+	return "/usr/bin/hostlink"
+}
+
 // SelfUpdateEnabled returns whether the self-update feature is enabled.
 // Controlled by HOSTLINK_SELF_UPDATE_ENABLED (default: true).
 func SelfUpdateEnabled() bool {

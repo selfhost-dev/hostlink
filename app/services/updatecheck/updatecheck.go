@@ -14,9 +14,6 @@ type UpdateInfo struct {
 	AgentURL        string `json:"agent_url"`
 	AgentSHA256     string `json:"agent_sha256"`
 	AgentSize       int64  `json:"agent_size"`
-	UpdaterURL      string `json:"updater_url"`
-	UpdaterSHA256   string `json:"updater_sha256"`
-	UpdaterSize     int64  `json:"updater_size"`
 }
 
 // RequestSignerInterface abstracts request signing for testability.

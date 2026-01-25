@@ -21,7 +21,6 @@ func TestInitDirectories_CreatesAllDirs(t *testing.T) {
 		basePath,
 		filepath.Join(basePath, "backup"),
 		filepath.Join(basePath, "staging"),
-		filepath.Join(basePath, "updater"),
 	}
 
 	for _, dir := range expectedDirs {
@@ -43,7 +42,6 @@ func TestInitDirectories_CorrectPermissions(t *testing.T) {
 		basePath,
 		filepath.Join(basePath, "backup"),
 		filepath.Join(basePath, "staging"),
-		filepath.Join(basePath, "updater"),
 	}
 
 	for _, dir := range dirs {
@@ -110,7 +108,6 @@ func TestDefaultPaths(t *testing.T) {
 	assert.Equal(t, "/var/lib/hostlink/updates", paths.BaseDir)
 	assert.Equal(t, "/var/lib/hostlink/updates/backup", paths.BackupDir)
 	assert.Equal(t, "/var/lib/hostlink/updates/staging", paths.StagingDir)
-	assert.Equal(t, "/var/lib/hostlink/updates/updater", paths.UpdaterDir)
 	assert.Equal(t, "/var/lib/hostlink/updates/update.lock", paths.LockFile)
 	assert.Equal(t, "/var/lib/hostlink/updates/state.json", paths.StateFile)
 }
@@ -121,7 +118,6 @@ func TestNewPaths(t *testing.T) {
 	assert.Equal(t, "/custom/path", paths.BaseDir)
 	assert.Equal(t, "/custom/path/backup", paths.BackupDir)
 	assert.Equal(t, "/custom/path/staging", paths.StagingDir)
-	assert.Equal(t, "/custom/path/updater", paths.UpdaterDir)
 	assert.Equal(t, "/custom/path/update.lock", paths.LockFile)
 	assert.Equal(t, "/custom/path/state.json", paths.StateFile)
 }

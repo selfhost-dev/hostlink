@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -70,6 +71,23 @@ func (s *ServiceController) Stop(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// Exists checks whether the systemd service unit is loaded.
+// It runs "systemctl show --property=LoadState <name>" and returns true if
+// the LoadState is "loaded".
+func (s *ServiceController) Exists(ctx context.Context) (bool, error) {
+	output, err := s.config.ExecFunc(ctx, "systemctl", "show", "--property=LoadState", s.config.ServiceName)
+	if err != nil {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		return false, fmt.Errorf("failed to check service %s: %w (output: %s)", s.config.ServiceName, err, string(output))
+	}
+
+	// Parse output: "LoadState=loaded\n" or "LoadState=not-found\n"
+	line := strings.TrimSpace(string(output))
+	return line == "LoadState=loaded", nil
 }
 
 // Start starts the systemd service.

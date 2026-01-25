@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 
 	"hostlink/app/services/updatecheck"
@@ -50,11 +51,11 @@ type StateWriterInterface interface {
 	Write(data update.StateData) error
 }
 
-// SpawnFunc is a function that spawns the updater binary.
-type SpawnFunc func(updaterPath string, args []string) error
+// SpawnFunc is a function that spawns a binary with the given args.
+type SpawnFunc func(binaryPath string, args []string) error
 
-// InstallUpdaterFunc is a function that extracts and installs the updater binary from a tarball.
-type InstallUpdaterFunc func(tarPath, destPath string) error
+// InstallBinaryFunc extracts a binary from a tarball to a destination path.
+type InstallBinaryFunc func(tarPath, destPath string) error
 
 // SelfUpdateJobConfig holds the configuration for the SelfUpdateJob.
 type SelfUpdateJobConfig struct {
@@ -65,11 +66,10 @@ type SelfUpdateJobConfig struct {
 	LockManager      LockManagerInterface
 	StateWriter      StateWriterInterface
 	Spawn            SpawnFunc
-	InstallUpdater   InstallUpdaterFunc
+	InstallBinary    InstallBinaryFunc
 	CurrentVersion   string
-	UpdaterPath      string // Where to install the extracted updater binary
-	StagingDir       string // Where to download tarballs
-	BaseDir          string // Base update directory (for -base-dir flag to updater)
+	InstallPath      string // Target install path (e.g., /usr/bin/hostlink)
+	StagingDir       string // Where to download tarballs and extract binary
 }
 
 // SelfUpdateJob periodically checks for and applies updates.
@@ -133,10 +133,11 @@ func (j *SelfUpdateJob) runUpdate(ctx context.Context) error {
 		return nil
 	}
 
-	log.Infof("update available: %s -> %s", j.config.CurrentVersion, info.TargetVersion)
+	updateID := uuid.NewString()
+	log.Infof("update available: %s -> %s (update_id=%s)", j.config.CurrentVersion, info.TargetVersion, updateID)
 
 	// Step 2: Pre-flight checks
-	requiredSpace := info.AgentSize + info.UpdaterSize
+	requiredSpace := info.AgentSize
 	if requiredSpace == 0 {
 		requiredSpace = defaultRequiredSpace
 	}
@@ -161,10 +162,22 @@ func (j *SelfUpdateJob) runUpdate(ctx context.Context) error {
 	// Step 4: Write initialized state
 	if err := j.config.StateWriter.Write(update.StateData{
 		State:         update.StateInitialized,
+		UpdateID:      updateID,
 		SourceVersion: j.config.CurrentVersion,
 		TargetVersion: info.TargetVersion,
 	}); err != nil {
 		return fmt.Errorf("failed to write initialized state: %w", err)
+	}
+
+	// Helper to write error state (best-effort, errors ignored)
+	writeErrorState := func(errMsg string) {
+		j.config.StateWriter.Write(update.StateData{
+			State:         update.StateInitialized,
+			UpdateID:      updateID,
+			SourceVersion: j.config.CurrentVersion,
+			TargetVersion: info.TargetVersion,
+			Error:         &errMsg,
+		})
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -174,26 +187,31 @@ func (j *SelfUpdateJob) runUpdate(ctx context.Context) error {
 	// Step 5: Download agent tarball
 	agentDest := filepath.Join(j.config.StagingDir, updatedownload.AgentTarballName)
 	if _, err := j.config.Downloader.DownloadAndVerify(ctx, info.AgentURL, agentDest, info.AgentSHA256); err != nil {
+		writeErrorState(fmt.Sprintf("failed to download agent: %s", err))
 		return fmt.Errorf("failed to download agent: %w", err)
 	}
 
 	if err := ctx.Err(); err != nil {
+		writeErrorState(err.Error())
 		return err
 	}
 
-	// Step 6: Download updater tarball
-	updaterDest := filepath.Join(j.config.StagingDir, updatedownload.UpdaterTarballName)
-	if _, err := j.config.Downloader.DownloadAndVerify(ctx, info.UpdaterURL, updaterDest, info.UpdaterSHA256); err != nil {
-		return fmt.Errorf("failed to download updater: %w", err)
+	// Step 6: Extract hostlink binary from tarball to staging dir
+	stagedBinary := filepath.Join(j.config.StagingDir, "hostlink")
+	if err := j.config.InstallBinary(agentDest, stagedBinary); err != nil {
+		writeErrorState(fmt.Sprintf("failed to extract binary from tarball: %s", err))
+		return fmt.Errorf("failed to extract binary from tarball: %w", err)
 	}
 
 	if err := ctx.Err(); err != nil {
+		writeErrorState(err.Error())
 		return err
 	}
 
 	// Step 7: Write staged state
 	if err := j.config.StateWriter.Write(update.StateData{
 		State:         update.StateStaged,
+		UpdateID:      updateID,
 		SourceVersion: j.config.CurrentVersion,
 		TargetVersion: info.TargetVersion,
 	}); err != nil {
@@ -201,24 +219,21 @@ func (j *SelfUpdateJob) runUpdate(ctx context.Context) error {
 	}
 
 	if err := ctx.Err(); err != nil {
+		writeErrorState(err.Error())
 		return err
 	}
 
-	// Step 8: Extract updater binary from tarball
-	if err := j.config.InstallUpdater(updaterDest, j.config.UpdaterPath); err != nil {
-		return fmt.Errorf("failed to install updater binary: %w", err)
-	}
-
-	// Step 9: Release lock before spawning updater
+	// Step 8: Release lock before spawning upgrade
 	j.config.LockManager.Unlock()
 	locked = false
 
-	// Step 10: Spawn updater in its own process group
-	args := []string{"-version", info.TargetVersion, "-base-dir", j.config.BaseDir}
-	if err := j.config.Spawn(j.config.UpdaterPath, args); err != nil {
-		return fmt.Errorf("failed to spawn updater: %w", err)
+	// Step 9: Spawn staged binary with upgrade subcommand
+	args := []string{"upgrade", "--install-path", j.config.InstallPath, "--update-id", updateID, "--source-version", j.config.CurrentVersion}
+	if err := j.config.Spawn(stagedBinary, args); err != nil {
+		writeErrorState(err.Error())
+		return fmt.Errorf("failed to spawn upgrade: %w", err)
 	}
 
-	log.Infof("updater spawned for version %s", info.TargetVersion)
+	log.Infof("upgrade spawned for version %s", info.TargetVersion)
 	return nil
 }

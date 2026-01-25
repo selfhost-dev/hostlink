@@ -10,8 +10,6 @@ import (
 const (
 	// AgentTarballName is the filename for the staged agent tarball.
 	AgentTarballName = "hostlink.tar.gz"
-	// UpdaterTarballName is the filename for the staged updater tarball.
-	UpdaterTarballName = "updater.tar.gz"
 	// StagingDirPermissions is the permission mode for the staging directory.
 	StagingDirPermissions = 0700
 )
@@ -52,23 +50,9 @@ func (s *StagingManager) StageAgent(ctx context.Context, url, sha256 string) err
 	return err
 }
 
-// StageUpdater downloads and verifies the updater tarball to the staging area.
-func (s *StagingManager) StageUpdater(ctx context.Context, url, sha256 string) error {
-	destPath := s.GetUpdaterPath()
-	_, err := s.downloader.DownloadAndVerify(ctx, url, destPath, sha256)
-	return err
-}
-
 // GetAgentPath returns the path to the staged agent tarball.
-// Note: Returns tarball path, not extracted binary. Extraction happens in updater phase.
 func (s *StagingManager) GetAgentPath() string {
 	return filepath.Join(s.basePath, AgentTarballName)
-}
-
-// GetUpdaterPath returns the path to the staged updater tarball.
-// Note: Returns tarball path, not extracted binary. Extraction happens in updater phase.
-func (s *StagingManager) GetUpdaterPath() string {
-	return filepath.Join(s.basePath, UpdaterTarballName)
 }
 
 // Cleanup removes the entire staging directory.

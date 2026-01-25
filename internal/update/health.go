@@ -25,6 +25,17 @@ const (
 	DefaultInitialWait = 5 * time.Second
 )
 
+// sleepWithContext sleeps for the given duration or until context is cancelled.
+// Returns nil on normal completion, or ctx.Err() if cancelled.
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	select {
+	case <-time.After(d):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // HealthResponse represents the response from the health endpoint.
 type HealthResponse struct {
 	Ok      bool   `json:"ok"`
@@ -33,13 +44,13 @@ type HealthResponse struct {
 
 // HealthConfig configures the HealthChecker.
 type HealthConfig struct {
-	URL           string              // Health check URL (e.g., http://localhost:8080/health)
-	TargetVersion string              // Expected version after update
-	MaxRetries    int                 // Max number of retries (default: 5)
-	RetryInterval time.Duration       // Time between retries (default: 5s)
-	InitialWait   time.Duration       // Initial wait before first check (default: 5s)
-	SleepFunc     func(time.Duration) // For testing
-	HTTPClient    *http.Client        // Optional custom HTTP client
+	URL           string                                     // Health check URL (e.g., http://localhost:8080/health)
+	TargetVersion string                                     // Expected version after update
+	MaxRetries    int                                        // Max number of retries (default: 5)
+	RetryInterval time.Duration                              // Time between retries (default: 5s)
+	InitialWait   time.Duration                              // Initial wait before first check (default: 5s)
+	SleepFunc     func(context.Context, time.Duration) error // For testing; returns ctx.Err() if cancelled
+	HTTPClient    *http.Client                               // Optional custom HTTP client
 }
 
 // HealthChecker verifies that the service is healthy after an update.
@@ -61,7 +72,7 @@ func NewHealthChecker(cfg HealthConfig) *HealthChecker {
 		cfg.InitialWait = DefaultInitialWait
 	}
 	if cfg.SleepFunc == nil {
-		cfg.SleepFunc = time.Sleep
+		cfg.SleepFunc = sleepWithContext
 	}
 
 	client := cfg.HTTPClient
@@ -82,9 +93,8 @@ func NewHealthChecker(cfg HealthConfig) *HealthChecker {
 func (h *HealthChecker) WaitForHealth(ctx context.Context) error {
 	// Initial wait before first check
 	if h.config.InitialWait > 0 {
-		h.config.SleepFunc(h.config.InitialWait)
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if err := h.config.SleepFunc(ctx, h.config.InitialWait); err != nil {
+			return err
 		}
 	}
 
@@ -110,9 +120,8 @@ func (h *HealthChecker) WaitForHealth(ctx context.Context) error {
 		}
 
 		if attempt < totalAttempts-1 {
-			h.config.SleepFunc(h.config.RetryInterval)
-			if ctx.Err() != nil {
-				return ctx.Err()
+			if err := h.config.SleepFunc(ctx, h.config.RetryInterval); err != nil {
+				return err
 			}
 		}
 	}

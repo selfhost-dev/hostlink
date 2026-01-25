@@ -18,15 +18,14 @@ const (
 	BackupFilename = "hostlink"
 	// AgentBinaryName is the binary name inside the agent tarball.
 	AgentBinaryName = "hostlink"
-	// UpdaterBinaryName is the binary name inside the updater tarball.
-	UpdaterBinaryName = "hostlink-updater"
 	// MaxBinarySize is the maximum allowed size for an extracted binary (100MB).
 	MaxBinarySize = 100 * 1024 * 1024
 )
 
 // BackupBinary copies the binary at srcPath to the backup directory.
 // It creates the backup directory if it doesn't exist.
-// It overwrites any existing backup.
+// It overwrites any existing backup using atomic rename to ensure
+// the backup is never corrupted even if the process crashes mid-write.
 func BackupBinary(srcPath, backupDir string) error {
 	// Open source file
 	src, err := os.Open(srcPath)
@@ -46,19 +45,45 @@ func BackupBinary(srcPath, backupDir string) error {
 		return fmt.Errorf("failed to create backup directory: %w", err)
 	}
 
-	// Create backup file
+	// Generate temp file path for atomic write
 	backupPath := filepath.Join(backupDir, BackupFilename)
-	dst, err := os.OpenFile(backupPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, srcInfo.Mode().Perm())
+	randSuffix, err := randomHex(8)
 	if err != nil {
-		return fmt.Errorf("failed to create backup file: %w", err)
+		return fmt.Errorf("failed to generate random suffix: %w", err)
 	}
-	defer dst.Close()
+	tmpPath := backupPath + ".tmp." + randSuffix
+
+	// Clean up temp file on error
+	defer func() {
+		if tmpPath != "" {
+			os.Remove(tmpPath)
+		}
+	}()
+
+	// Create temp file
+	dst, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, srcInfo.Mode().Perm())
+	if err != nil {
+		return fmt.Errorf("failed to create temp backup file: %w", err)
+	}
 
 	// Copy content
 	if _, err := io.Copy(dst, src); err != nil {
+		dst.Close()
 		return fmt.Errorf("failed to copy to backup: %w", err)
 	}
 
+	// Close before rename
+	if err := dst.Close(); err != nil {
+		return fmt.Errorf("failed to close temp backup file: %w", err)
+	}
+
+	// Atomic rename - replaces existing backup atomically
+	if err := os.Rename(tmpPath, backupPath); err != nil {
+		return fmt.Errorf("failed to finalize backup: %w", err)
+	}
+
+	// Success - don't clean up the temp file (it's been renamed)
+	tmpPath = ""
 	return nil
 }
 
@@ -67,13 +92,6 @@ func BackupBinary(srcPath, backupDir string) error {
 // Uses atomic rename to ensure the install is atomic.
 func InstallBinary(tarPath, destPath string) error {
 	return installBinaryFromTarGz(tarPath, AgentBinaryName, destPath)
-}
-
-// InstallUpdaterBinary extracts the updater binary from a tar.gz file and installs it atomically.
-// It extracts the file named "hostlink-updater" from the tarball to destPath.
-// Uses atomic rename to ensure the install is atomic.
-func InstallUpdaterBinary(tarPath, destPath string) error {
-	return installBinaryFromTarGz(tarPath, UpdaterBinaryName, destPath)
 }
 
 // installBinaryFromTarGz extracts a named binary from a tar.gz and installs it atomically.
@@ -101,6 +119,69 @@ func installBinaryFromTarGz(tarPath, binaryName, destPath string) error {
 	// Extract binary to temp path
 	if err := extractBinaryFromTarGz(tarPath, binaryName, tmpPath); err != nil {
 		return fmt.Errorf("failed to extract binary: %w", err)
+	}
+
+	// Set permissions
+	if err := os.Chmod(tmpPath, BinaryPermissions); err != nil {
+		return fmt.Errorf("failed to set permissions: %w", err)
+	}
+
+	// Atomic rename
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		return fmt.Errorf("failed to install binary: %w", err)
+	}
+
+	// Success - don't clean up the temp file (it's been renamed)
+	tmpPath = ""
+	return nil
+}
+
+// InstallSelf copies the binary at srcPath to destPath atomically.
+// srcPath is typically os.Executable() — the staged binary that is currently running.
+// It writes to a temp file first, sets permissions to 0755, then does an atomic rename.
+func InstallSelf(srcPath, destPath string) error {
+	// Create destination directory
+	destDir := filepath.Dir(destPath)
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return fmt.Errorf("failed to create destination directory: %w", err)
+	}
+
+	// Open source
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("failed to open source binary: %w", err)
+	}
+	defer src.Close()
+
+	// Generate temp file path
+	randSuffix, err := randomHex(8)
+	if err != nil {
+		return fmt.Errorf("failed to generate random suffix: %w", err)
+	}
+	tmpPath := destPath + ".tmp." + randSuffix
+
+	// Clean up temp file on error
+	defer func() {
+		if tmpPath != "" {
+			os.Remove(tmpPath)
+		}
+	}()
+
+	// Create temp file
+	dst, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, BinaryPermissions)
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+
+	// Copy content
+	if _, err := io.Copy(dst, src); err != nil {
+		dst.Close()
+		return fmt.Errorf("failed to copy binary: %w", err)
+	}
+
+	// Close before rename
+	if err := dst.Close(); err != nil {
+		return fmt.Errorf("failed to close temp file: %w", err)
 	}
 
 	// Set permissions

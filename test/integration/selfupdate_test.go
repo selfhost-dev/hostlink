@@ -1,5 +1,4 @@
-//go:build integration
-// +build integration
+//go:build integration && linux
 
 package integration
 
@@ -19,15 +18,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// buildUpdaterBinary compiles the hostlink-updater binary into the given directory.
+// buildHostlinkBinary compiles the hostlink binary into the given directory.
 // Returns the path to the compiled binary.
-func buildUpdaterBinary(t *testing.T, outputDir string) string {
+func buildHostlinkBinary(t *testing.T, outputDir string) string {
 	t.Helper()
-	binaryPath := filepath.Join(outputDir, "hostlink-updater")
-	cmd := exec.Command("go", "build", "-o", binaryPath, "./cmd/updater")
+	binaryPath := filepath.Join(outputDir, "hostlink")
+	cmd := exec.Command("go", "build", "-o", binaryPath, ".")
 	cmd.Dir = findProjectRoot(t)
 	output, err := cmd.CombinedOutput()
-	require.NoError(t, err, "failed to build hostlink-updater: %s", string(output))
+	require.NoError(t, err, "failed to build hostlink: %s", string(output))
 	return binaryPath
 }
 
@@ -58,15 +57,6 @@ func setupUpdateDirs(t *testing.T) string {
 	return baseDir
 }
 
-// writeStateFile writes a state.json file into the base directory.
-func writeStateFile(t *testing.T, baseDir string, data update.StateData) {
-	t.Helper()
-	paths := update.NewPaths(baseDir)
-	sw := update.NewStateWriter(update.StateConfig{StatePath: paths.StateFile})
-	err := sw.Write(data)
-	require.NoError(t, err)
-}
-
 // readStateFile reads and returns the state.json contents from the base directory.
 func readStateFile(t *testing.T, baseDir string) update.StateData {
 	t.Helper()
@@ -77,7 +67,17 @@ func readStateFile(t *testing.T, baseDir string) update.StateData {
 	return data
 }
 
-func TestSelfUpdate_LockPreventsConcurrentUpdates(t *testing.T) {
+// createDummyBinary creates a dummy executable file at the given path.
+// Returns the path to the created file.
+func createDummyBinary(t *testing.T, dir string) string {
+	t.Helper()
+	path := filepath.Join(dir, "hostlink")
+	err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0755)
+	require.NoError(t, err)
+	return path
+}
+
+func TestUpgrade_LockPreventsConcurrent(t *testing.T) {
 	baseDir := setupUpdateDirs(t)
 	paths := update.NewPaths(baseDir)
 
@@ -87,103 +87,21 @@ func TestSelfUpdate_LockPreventsConcurrentUpdates(t *testing.T) {
 	require.NoError(t, err)
 	defer lock.Unlock()
 
-	// Build the updater binary
+	// Build the hostlink binary
 	binDir := t.TempDir()
-	updaterBin := buildUpdaterBinary(t, binDir)
+	hostlinkBin := buildHostlinkBinary(t, binDir)
 
-	// Write state file so updater can read target version
-	writeStateFile(t, baseDir, update.StateData{
-		State:         update.StateStaged,
-		TargetVersion: "1.2.3",
-	})
-
-	// Attempt to run the updater — it should fail because the lock is held
+	// Attempt to run upgrade — it should fail because the lock is held
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, updaterBin,
-		"-base-dir", baseDir,
-		"-version", "1.2.3",
+	cmd := exec.CommandContext(ctx, hostlinkBin, "upgrade",
+		"--base-dir", baseDir,
+		"--install-path", "/tmp/fake-hostlink",
 	)
 	output, err := cmd.CombinedOutput()
-	require.Error(t, err, "updater should fail when lock is held")
+	require.Error(t, err, "upgrade should fail when lock is held")
 	assert.Contains(t, string(output), "lock", "error should mention lock")
-}
-
-func TestSelfUpdate_SignalHandlingDuringUpdate(t *testing.T) {
-	baseDir := setupUpdateDirs(t)
-
-	// Build the updater binary
-	binDir := t.TempDir()
-	updaterBin := buildUpdaterBinary(t, binDir)
-
-	// Write state file with target version
-	writeStateFile(t, baseDir, update.StateData{
-		State:         update.StateStaged,
-		TargetVersion: "1.2.3",
-	})
-
-	// Start the updater process — it will try to stop the service via systemctl
-	// which will take time / fail, giving us time to send a signal
-	cmd := exec.Command(updaterBin,
-		"-base-dir", baseDir,
-		"-version", "1.2.3",
-		"-binary", "/nonexistent/hostlink", // non-existent binary, will fail at stop
-	)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	err := cmd.Start()
-	require.NoError(t, err, "should start updater process")
-
-	// Give it a moment to start
-	time.Sleep(100 * time.Millisecond)
-
-	// Send SIGTERM
-	err = cmd.Process.Signal(syscall.SIGTERM)
-	require.NoError(t, err, "should send SIGTERM")
-
-	// Wait for exit — should exit within a few seconds
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-
-	select {
-	case err := <-done:
-		// Process exited (may be non-zero exit code due to cancellation, that's ok)
-		if err != nil {
-			// Verify it's an exit error, not something unexpected
-			_, ok := err.(*exec.ExitError)
-			assert.True(t, ok, "expected ExitError after signal, got: %v", err)
-		}
-	case <-time.After(10 * time.Second):
-		cmd.Process.Kill()
-		t.Fatal("updater did not exit within 10 seconds after SIGTERM")
-	}
-}
-
-func TestSelfUpdate_UpdaterWritesStateOnLockFailure(t *testing.T) {
-	baseDir := setupUpdateDirs(t)
-	paths := update.NewPaths(baseDir)
-
-	// Acquire lock from this process to block the updater
-	lock := update.NewLockManager(update.LockConfig{LockPath: paths.LockFile})
-	err := lock.TryLock(5 * time.Minute)
-	require.NoError(t, err)
-	defer lock.Unlock()
-
-	// Build the updater
-	binDir := t.TempDir()
-	updaterBin := buildUpdaterBinary(t, binDir)
-
-	// Run the updater — should fail on lock acquisition
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, updaterBin,
-		"-base-dir", baseDir,
-		"-version", "2.0.0",
-	)
-	_, err = cmd.CombinedOutput()
-	require.Error(t, err, "updater should fail when lock is held")
 
 	// The lock file should still be held by us (not stolen)
 	lockContent, err := os.ReadFile(paths.LockFile)
@@ -197,64 +115,146 @@ func TestSelfUpdate_UpdaterWritesStateOnLockFailure(t *testing.T) {
 	assert.Equal(t, os.Getpid(), lockData.PID, "lock should still be held by test process")
 }
 
-func TestSelfUpdate_UpdaterExitsWithErrorForMissingVersion(t *testing.T) {
+func TestUpgrade_SignalHandling(t *testing.T) {
 	baseDir := setupUpdateDirs(t)
 
-	// Build the updater
+	// Build the hostlink binary
 	binDir := t.TempDir()
-	updaterBin := buildUpdaterBinary(t, binDir)
+	hostlinkBin := buildHostlinkBinary(t, binDir)
 
-	// Run without -version and without state file — should fail
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// Create a dummy binary at install-path so backup succeeds,
+	// then systemctl stop will stall/fail giving us time to send a signal
+	installDir := t.TempDir()
+	installPath := createDummyBinary(t, installDir)
 
-	cmd := exec.CommandContext(ctx, updaterBin,
-		"-base-dir", baseDir,
+	// Start the upgrade process
+	cmd := exec.Command(hostlinkBin, "upgrade",
+		"--base-dir", baseDir,
+		"--install-path", installPath,
 	)
-	output, err := cmd.CombinedOutput()
-	require.Error(t, err, "updater should fail without version")
-	assert.Contains(t, string(output), "version", "error should mention version")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	err := cmd.Start()
+	require.NoError(t, err, "should start upgrade process")
+
+	// Give it time to start and reach the systemctl stop phase
+	time.Sleep(500 * time.Millisecond)
+
+	// Send SIGTERM
+	err = cmd.Process.Signal(syscall.SIGTERM)
+	require.NoError(t, err, "should send SIGTERM")
+
+	// Wait for exit — should exit within 10 seconds
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	select {
+	case err := <-done:
+		// Process exited (non-zero exit due to cancellation is expected)
+		if err != nil {
+			_, ok := err.(*exec.ExitError)
+			assert.True(t, ok, "expected ExitError after signal, got: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		cmd.Process.Kill()
+		t.Fatal("upgrade did not exit within 10 seconds after SIGTERM")
+	}
 }
 
-func TestSelfUpdate_UpdaterReadsVersionFromState(t *testing.T) {
+func TestUpgrade_MissingInstallPathFails(t *testing.T) {
 	baseDir := setupUpdateDirs(t)
 
-	// Write state file with target version
-	writeStateFile(t, baseDir, update.StateData{
-		State:         update.StateStaged,
-		TargetVersion: "3.0.0",
-	})
-
-	// Build the updater
+	// Build the hostlink binary
 	binDir := t.TempDir()
-	updaterBin := buildUpdaterBinary(t, binDir)
+	hostlinkBin := buildHostlinkBinary(t, binDir)
 
-	// Run without -version flag but with state file containing version
-	// It should read the version from state and proceed (then fail at systemctl stop)
+	// Run upgrade with a non-existent install-path — backup phase should fail
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, updaterBin,
-		"-base-dir", baseDir,
-		"-binary", "/nonexistent/hostlink",
+	cmd := exec.CommandContext(ctx, hostlinkBin, "upgrade",
+		"--base-dir", baseDir,
+		"--install-path", "/nonexistent/path/hostlink",
 	)
 	output, err := cmd.CombinedOutput()
-	// Should fail (no systemctl), but NOT because of missing version
-	require.Error(t, err)
-	assert.NotContains(t, string(output), "target version is required",
-		"should have read version from state file")
+	require.Error(t, err, "upgrade should fail with non-existent install-path")
+	assert.Contains(t, string(output), "no such file",
+		"error should indicate file not found")
 }
 
-func TestSelfUpdate_UpdaterPrintVersion(t *testing.T) {
-	// Build the updater
+func TestUpgrade_DryRun(t *testing.T) {
+	baseDir := setupUpdateDirs(t)
+
+	// Build the hostlink binary
 	binDir := t.TempDir()
-	updaterBin := buildUpdaterBinary(t, binDir)
+	hostlinkBin := buildHostlinkBinary(t, binDir)
+
+	// Run dry-run with a non-existent install-path — some checks should fail
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, hostlinkBin, "upgrade",
+		"--dry-run",
+		"--base-dir", baseDir,
+		"--install-path", "/nonexistent/path/hostlink",
+	)
+	output, err := cmd.CombinedOutput()
+	outputStr := string(output)
+
+	// Should exit with error because checks fail
+	require.Error(t, err, "dry-run should fail when checks don't pass")
+
+	// Should contain check result output format
+	assert.Contains(t, outputStr, "[FAIL]", "should report failed checks")
+	assert.Contains(t, outputStr, "binary_writable", "should check binary_writable")
+}
+
+func TestUpgrade_DryRunPassesWithValidPath(t *testing.T) {
+	baseDir := setupUpdateDirs(t)
+
+	// Build the hostlink binary
+	binDir := t.TempDir()
+	hostlinkBin := buildHostlinkBinary(t, binDir)
+
+	// Create a writable dummy binary at a temp path
+	installDir := t.TempDir()
+	installPath := createDummyBinary(t, installDir)
+
+	// Run dry-run with a valid install-path
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, hostlinkBin, "upgrade",
+		"--dry-run",
+		"--base-dir", baseDir,
+		"--install-path", installPath,
+	)
+	output, err := cmd.CombinedOutput()
+	outputStr := string(output)
+
+	// Some checks should pass (lock, binary_writable, backup_dir)
+	assert.Contains(t, outputStr, "[PASS]", "should report passing checks")
+	assert.Contains(t, outputStr, "lock_acquirable", "should check lock_acquirable")
+	assert.Contains(t, outputStr, "binary_writable", "should check binary_writable")
+
+	// service_exists will fail on non-hostlink machines, so overall exits with error
+	// but the path-related checks should pass
+	if err != nil {
+		assert.Contains(t, outputStr, "[FAIL]",
+			"if error, should be because service_exists or similar check failed")
+	}
+}
+
+func TestUpgrade_VersionSubcommand(t *testing.T) {
+	// Build the hostlink binary
+	binDir := t.TempDir()
+	hostlinkBin := buildHostlinkBinary(t, binDir)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, updaterBin, "-v")
+	cmd := exec.CommandContext(ctx, hostlinkBin, "version")
 	output, err := cmd.CombinedOutput()
-	require.NoError(t, err, "version flag should not fail")
-	assert.Contains(t, string(output), "hostlink-updater", "should print version info")
+	require.NoError(t, err, "version subcommand should not fail")
+	assert.Contains(t, string(output), "dev", "should print version info")
 }

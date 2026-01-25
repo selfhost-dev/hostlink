@@ -9,12 +9,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSpawnUpdater_StartsProcess(t *testing.T) {
-	err := SpawnUpdater("/bin/sleep", []string{"0.1"})
+func TestSpawnUpgrade_StartsProcess(t *testing.T) {
+	err := SpawnUpgrade("/bin/sleep", []string{"0.1"})
 	require.NoError(t, err)
 }
 
-func TestSpawnUpdater_SetpgidTrue(t *testing.T) {
+func TestSpawnUpgrade_SetpgidTrue(t *testing.T) {
 	// Use a process that prints its own PGID so we can verify
 	// We spawn "sleep 2" and check its PGID differs from ours
 	cmd, err := spawnWithCmd("/bin/sleep", []string{"0.5"})
@@ -38,7 +38,7 @@ func TestSpawnUpdater_SetpgidTrue(t *testing.T) {
 		"child should be its own process group leader (PGID == PID)")
 }
 
-func TestSpawnUpdater_ReturnsErrorForInvalidBinary(t *testing.T) {
-	err := SpawnUpdater("/nonexistent/binary", []string{})
+func TestSpawnUpgrade_ReturnsErrorForInvalidBinary(t *testing.T) {
+	err := SpawnUpgrade("/nonexistent/binary", []string{})
 	assert.Error(t, err)
 }
