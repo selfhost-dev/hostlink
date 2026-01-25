@@ -99,10 +99,10 @@ func TestRegister_RespectsParentContextCancellation(t *testing.T) {
 
 // --- Trigger Tests ---
 
-func TestDefaultTriggerConfig_OneHourInterval(t *testing.T) {
+func TestDefaultTriggerConfig_FiveMinuteInterval(t *testing.T) {
 	cfg := DefaultTriggerConfig()
-	if cfg.Interval != 1*time.Hour {
-		t.Errorf("expected default interval 1h, got %v", cfg.Interval)
+	if cfg.Interval != 5*time.Minute {
+		t.Errorf("expected default interval 5m, got %v", cfg.Interval)
 	}
 }
 

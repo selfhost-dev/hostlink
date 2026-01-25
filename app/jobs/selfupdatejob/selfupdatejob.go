@@ -127,6 +127,7 @@ func (j *SelfUpdateJob) Shutdown() {
 // runUpdate performs a single update check and apply cycle.
 func (j *SelfUpdateJob) runUpdate(ctx context.Context) error {
 	// Step 1: Check for updates
+	log.Infof("checking for updates (current_version=%s, os=%s, arch=%s)", j.config.CurrentVersion, runtime.GOOS, runtime.GOARCH)
 	info, err := j.config.UpdateChecker.Check()
 	if err != nil {
 		// Log unsupported platform at WARN level and return nil (not an error condition)
@@ -137,26 +138,33 @@ func (j *SelfUpdateJob) runUpdate(ctx context.Context) error {
 		return fmt.Errorf("update check failed: %w", err)
 	}
 	if !info.UpdateAvailable {
+		log.Infof("no update available, current version %s is up to date", j.config.CurrentVersion)
 		return nil
 	}
 
 	updateID := uuid.NewString()
-	log.Infof("update available: %s -> %s (update_id=%s)", j.config.CurrentVersion, info.TargetVersion, updateID)
+	log.Infof("update available: %s -> %s (update_id=%s, url=%s, size=%d)", j.config.CurrentVersion, info.TargetVersion, updateID, info.AgentURL, info.AgentSize)
 
 	// Step 2: Pre-flight checks
+	log.Infof("running preflight checks (update_id=%s)", updateID)
 	requiredSpace := info.AgentSize
 	if requiredSpace == 0 {
 		requiredSpace = defaultRequiredSpace
 	}
 	result := j.config.PreflightChecker.Check(requiredSpace)
 	if !result.Passed {
+		log.Warnf("preflight checks failed (update_id=%s): %v", updateID, result.Errors)
 		return fmt.Errorf("preflight checks failed: %v", result.Errors)
 	}
+	log.Infof("preflight checks passed (update_id=%s)", updateID)
 
 	// Step 3: Acquire lock
+	log.Infof("acquiring update lock (update_id=%s)", updateID)
 	if err := j.config.LockManager.TryLockWithRetry(5*time.Minute, 3, 5*time.Second); err != nil {
+		log.Warnf("failed to acquire update lock (update_id=%s): %v", updateID, err)
 		return fmt.Errorf("failed to acquire update lock: %w", err)
 	}
+	log.Infof("update lock acquired (update_id=%s)", updateID)
 
 	// From here on, we must release the lock on any failure
 	locked := true
@@ -192,11 +200,14 @@ func (j *SelfUpdateJob) runUpdate(ctx context.Context) error {
 	}
 
 	// Step 5: Download agent tarball
+	log.Infof("downloading agent tarball (update_id=%s, url=%s)", updateID, info.AgentURL)
 	agentDest := filepath.Join(j.config.StagingDir, updatedownload.AgentTarballName)
 	if _, err := j.config.Downloader.DownloadAndVerify(ctx, info.AgentURL, agentDest, info.AgentSHA256); err != nil {
+		log.Errorf("failed to download agent (update_id=%s): %v", updateID, err)
 		writeErrorState(fmt.Sprintf("failed to download agent: %s", err))
 		return fmt.Errorf("failed to download agent: %w", err)
 	}
+	log.Infof("agent tarball downloaded successfully (update_id=%s, dest=%s)", updateID, agentDest)
 
 	if err := ctx.Err(); err != nil {
 		writeErrorState(err.Error())
@@ -204,11 +215,14 @@ func (j *SelfUpdateJob) runUpdate(ctx context.Context) error {
 	}
 
 	// Step 6: Extract hostlink binary from tarball to staging dir
+	log.Infof("extracting binary from tarball (update_id=%s)", updateID)
 	stagedBinary := filepath.Join(j.config.StagingDir, "hostlink")
 	if err := j.config.InstallBinary(agentDest, stagedBinary); err != nil {
+		log.Errorf("failed to extract binary (update_id=%s): %v", updateID, err)
 		writeErrorState(fmt.Sprintf("failed to extract binary from tarball: %s", err))
 		return fmt.Errorf("failed to extract binary from tarball: %w", err)
 	}
+	log.Infof("binary extracted successfully (update_id=%s, staged=%s)", updateID, stagedBinary)
 
 	if err := ctx.Err(); err != nil {
 		writeErrorState(err.Error())
@@ -231,16 +245,19 @@ func (j *SelfUpdateJob) runUpdate(ctx context.Context) error {
 	}
 
 	// Step 8: Release lock before spawning upgrade
+	log.Infof("releasing update lock before spawn (update_id=%s)", updateID)
 	j.config.LockManager.Unlock()
 	locked = false
 
 	// Step 9: Spawn staged binary with upgrade subcommand
 	args := []string{"upgrade", "--install-path", j.config.InstallPath, "--update-id", updateID, "--source-version", j.config.CurrentVersion}
+	log.Infof("spawning upgrade process (update_id=%s, binary=%s, args=%v)", updateID, stagedBinary, args)
 	if err := j.config.Spawn(stagedBinary, args); err != nil {
+		log.Errorf("failed to spawn upgrade (update_id=%s): %v", updateID, err)
 		writeErrorState(err.Error())
 		return fmt.Errorf("failed to spawn upgrade: %w", err)
 	}
 
-	log.Infof("upgrade spawned for version %s", info.TargetVersion)
+	log.Infof("upgrade spawned successfully (update_id=%s, target_version=%s)", updateID, info.TargetVersion)
 	return nil
 }
