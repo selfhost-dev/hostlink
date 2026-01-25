@@ -262,10 +262,6 @@ fi
 
 HOSTLINK_TAR=hostlink_$VERSION.tar.gz
 
-# Download the release tarball with retry logic.
-# Note: Retry logic handles transient network failures. The release process
-# ensures assets exist before the version is visible to /releases/latest API,
-# so 404 errors during the publish window are not expected.
 download_tar() {
   local download_url="https://github.com/selfhost-dev/hostlink/releases/download/${VERSION}/hostlink_Linux_${ARCH}.tar.gz"
   local tar_file="$TEMP_DIR/$HOSTLINK_TAR"
