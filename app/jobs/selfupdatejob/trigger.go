@@ -12,10 +12,10 @@ type TriggerConfig struct {
 	Interval time.Duration
 }
 
-// DefaultTriggerConfig returns the default trigger configuration (1 hour interval).
+// DefaultTriggerConfig returns the default trigger configuration (5 minute interval for debugging).
 func DefaultTriggerConfig() TriggerConfig {
 	return TriggerConfig{
-		Interval: 1 * time.Hour,
+		Interval: 5 * time.Minute,
 	}
 }
 
