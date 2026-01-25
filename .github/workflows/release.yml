@@ -1,180 +1,41 @@
 # .github/workflows/release.yml
-name: release
+name: goreleaser
 
 on:
   push:
     # run only against tags
     tags:
-      - "v*"
+      - "*"
 
 permissions:
   contents: write
+  # packages: write
+  # issues: write
+  # id-token: write
 
 jobs:
   goreleaser:
     runs-on: ubuntu-latest
-    outputs:
-      tag: ${{ steps.get_tag.outputs.tag }}
     steps:
-      - name: Get tag
-        id: get_tag
-        run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: stable
-
+      # More assembly might be required: Docker logins, GPG, etc.
+      # It all depends on your needs.
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
+          # either 'goreleaser' (default) or 'goreleaser-pro'
           distribution: goreleaser
+          # 'latest', 'nightly', or a semver
           version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  verify-and-publish:
-    needs: goreleaser
-    runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      TAG: ${{ needs.goreleaser.outputs.tag }}
-    steps:
-      - name: Get release info
-        id: release
-        run: |
-          echo "Fetching draft release for tag: $TAG"
-          RELEASE_ID=$(gh api repos/${{ github.repository }}/releases \
-            --jq ".[] | select(.tag_name == \"$TAG\" and .draft == true) | .id")
-          
-          if [ -z "$RELEASE_ID" ]; then
-            echo "ERROR: No draft release found for tag $TAG"
-            exit 1
-          fi
-          
-          echo "Found draft release ID: $RELEASE_ID"
-          echo "release_id=$RELEASE_ID" >> $GITHUB_OUTPUT
-
-      - name: Verify asset count
-        run: |
-          echo "Verifying assets for release ID: ${{ steps.release.outputs.release_id }}"
-          
-          ASSETS=$(gh api repos/${{ github.repository }}/releases/${{ steps.release.outputs.release_id }}/assets)
-          ASSET_COUNT=$(echo "$ASSETS" | jq length)
-          
-          echo "Found $ASSET_COUNT assets"
-          echo "$ASSETS" | jq -r '.[].name'
-          
-          # Expect: hostlink_Linux_x86_64.tar.gz, hostlink_Linux_arm64.tar.gz, checksums.txt
-          if [ "$ASSET_COUNT" -lt 3 ]; then
-            echo "ERROR: Expected at least 3 assets, found $ASSET_COUNT"
-            exit 1
-          fi
-          
-          # Verify required assets exist
-          for asset in "hostlink_Linux_x86_64.tar.gz" "hostlink_Linux_arm64.tar.gz" "checksums.txt"; do
-            if ! echo "$ASSETS" | jq -e ".[] | select(.name == \"$asset\")" > /dev/null; then
-              echo "ERROR: Missing required asset: $asset"
-              exit 1
-            fi
-          done
-          
-          echo "All required assets present"
-
-      - name: Download assets
-        run: |
-          mkdir -p assets
-          cd assets
-          
-          RELEASE_ID="${{ steps.release.outputs.release_id }}"
-          ASSETS=$(gh api repos/${{ github.repository }}/releases/$RELEASE_ID/assets)
-          
-          for asset in "hostlink_Linux_x86_64.tar.gz" "hostlink_Linux_arm64.tar.gz" "checksums.txt"; do
-            echo "Downloading $asset..."
-            ASSET_ID=$(echo "$ASSETS" | jq -r ".[] | select(.name == \"$asset\") | .id")
-            gh api repos/${{ github.repository }}/releases/assets/$ASSET_ID \
-              -H "Accept: application/octet-stream" > "$asset"
-            echo "Downloaded $asset ($(stat -c%s "$asset") bytes)"
-          done
-
-      - name: Validate gzip files
-        run: |
-          cd assets
-          
-          for tarball in hostlink_Linux_x86_64.tar.gz hostlink_Linux_arm64.tar.gz; do
-            echo "Validating $tarball..."
-            
-            # Check gzip magic bytes (1f8b)
-            MAGIC=$(xxd -p -l 2 "$tarball")
-            if [ "$MAGIC" != "1f8b" ]; then
-              echo "ERROR: $tarball is not a valid gzip file (magic: $MAGIC)"
-              exit 1
-            fi
-            
-            # Verify it can be listed
-            if ! tar -tzf "$tarball" > /dev/null 2>&1; then
-              echo "ERROR: $tarball cannot be read by tar"
-              exit 1
-            fi
-            
-            echo "$tarball is valid"
-          done
-
-      - name: Verify checksums
-        run: |
-          cd assets
-          echo "Verifying SHA256 checksums..."
-          
-          # checksums.txt format: <hash>  <filename>
-          sha256sum -c checksums.txt
-          
-          echo "All checksums verified"
-
-      - name: Test binary execution
-        run: |
-          cd assets
-          echo "Testing x86_64 binary..."
-          
-          mkdir -p test
-          tar -xzf hostlink_Linux_x86_64.tar.gz -C test
-          
-          # Run version check
-          if ! ./test/hostlink --version; then
-            echo "ERROR: hostlink --version failed"
-            exit 1
-          fi
-          
-          echo "Binary execution test passed"
-
-      - name: Publish release
-        run: |
-          RELEASE_ID="${{ steps.release.outputs.release_id }}"
-          
-          # Retry logic with exponential backoff
-          MAX_RETRIES=3
-          DELAYS=(5 15 45)
-          
-          for i in $(seq 0 $((MAX_RETRIES - 1))); do
-            echo "Attempt $((i + 1)) of $MAX_RETRIES: Publishing release..."
-            
-            if gh api repos/${{ github.repository }}/releases/$RELEASE_ID \
-                -X PATCH -f draft=false; then
-              echo "Release published successfully!"
-              exit 0
-            fi
-            
-            if [ $i -lt $((MAX_RETRIES - 1)) ]; then
-              DELAY=${DELAYS[$i]}
-              echo "Publish failed, retrying in ${DELAY}s..."
-              sleep $DELAY
-            fi
-          done
-          
-          echo "ERROR: Failed to publish release after $MAX_RETRIES attempts"
-          exit 1
+          # Your GoReleaser Pro key, if you are using the 'goreleaser-pro' distribution
+          # GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
