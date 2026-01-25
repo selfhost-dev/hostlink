@@ -128,6 +128,32 @@ go run main.go
 go test -tags=smoke ./test/smoke -run TestHlctl
 ```
 
+## Release Process
+
+Releases are automated via GitHub Actions and triggered by pushing a version tag.
+
+### Creating a Release
+
+1. Ensure all changes are merged to `main`
+2. Create and push a version tag:
+   ```bash
+   git tag v1.2.3
+   git push origin v1.2.3
+   ```
+3. The CI workflow will automatically:
+   - Build binaries for linux/amd64 and linux/arm64
+   - Create a **draft** release with all assets
+   - Verify all assets are valid (checksums, gzip integrity, binary execution)
+   - Publish the release (make it visible)
+
+4. Monitor the [Actions tab](https://github.com/selfhost-dev/hostlink/actions) for workflow status
+
+### Important Notes
+
+- **Do NOT create releases manually via GitHub UI.** The automated workflow ensures all release assets are verified before becoming visible to users. Manual releases bypass this verification and may cause installation failures.
+- Tags must follow semver format: `v1.0.0`, `v1.2.3`, etc.
+- If verification fails, the release remains as a draft for debugging. Check the workflow logs and re-trigger if needed.
+
 ### Questions or Issues?
 
 Feel free to open an issue on GitHub or reach out to the maintainers.

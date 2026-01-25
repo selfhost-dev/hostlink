@@ -14,9 +14,7 @@ before:
     - go mod tidy
     # you may remove this if you don't need go generate
     - go generate ./...
-    # Run tests before building
-    - make test
-    - make test-it
+    # Note: Tests run on PR (test.yml), not during release
 
 builds:
   - id: hostlink
@@ -48,6 +46,10 @@ archives:
         dst: scripts
         strip_parent: true
 
+checksum:
+  name_template: 'checksums.txt'
+  algorithm: sha256
+
 changelog:
   sort: asc
   filters:
@@ -56,6 +58,8 @@ changelog:
       - "^test:"
 
 release:
+  # Create as draft first, verify assets, then publish
+  draft: true
   footer: >-
 
     ---
