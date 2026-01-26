@@ -3,6 +3,9 @@ package updatepreflight
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -46,7 +49,7 @@ func New(cfg PreflightConfig) *PreflightChecker {
 func (p *PreflightChecker) Check(requiredSpace int64) *PreflightResult {
 	var errs []string
 
-	if err := p.checkBinaryWritable(); err != nil {
+	if err := p.checkInstallPath(); err != nil {
 		errs = append(errs, err.Error())
 	}
 
@@ -64,12 +67,21 @@ func (p *PreflightChecker) Check(requiredSpace int64) *PreflightResult {
 	}
 }
 
-func (p *PreflightChecker) checkBinaryWritable() error {
-	f, err := os.OpenFile(p.agentBinaryPath, os.O_WRONLY, 0)
-	if err != nil {
-		return fmt.Errorf("agent binary %s is not writable: %w", p.agentBinaryPath, err)
+func (p *PreflightChecker) checkInstallPath() error {
+	// Check that the binary exists
+	if _, err := os.Stat(p.agentBinaryPath); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("agent binary does not exist at %s", p.agentBinaryPath)
+		}
+		return fmt.Errorf("cannot stat agent binary %s: %w", p.agentBinaryPath, err)
 	}
-	f.Close()
+
+	// Check that the directory is writable (needed for atomic rename during upgrade)
+	dir := filepath.Dir(p.agentBinaryPath)
+	if err := unix.Access(dir, unix.W_OK); err != nil {
+		return fmt.Errorf("cannot write to install directory %s: %w", dir, err)
+	}
+
 	return nil
 }
 
