@@ -6,6 +6,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/labstack/gommon/log"
+
 	"hostlink/app/services/agentstate"
 	"hostlink/config/appconf"
 	"hostlink/domain/credential"
@@ -27,14 +29,14 @@ type Pusher interface {
 }
 
 type metricspusher struct {
-	apiserver         apiserver.MetricsOperations
-	agentstate        agentstate.Operations
-	metricscollector  pgmetrics.Collector
-	syscollector      sysmetrics.Collector
-	netcollector      networkmetrics.Collector
-	storagecollector  storagemetrics.Collector
-	crypto            crypto.Service
-	privateKeyPath    string
+	apiserver        apiserver.MetricsOperations
+	agentstate       agentstate.Operations
+	metricscollector pgmetrics.Collector
+	syscollector     sysmetrics.Collector
+	netcollector     networkmetrics.Collector
+	storagecollector storagemetrics.Collector
+	crypto           crypto.Service
+	privateKeyPath   string
 }
 
 func NewWithConf() (*metricspusher, error) {
@@ -130,11 +132,10 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 
 	ctx := context.Background()
 	var metricSets []domainmetrics.MetricSet
-	var collectionErrors []error
 
 	sysMetrics, err := mp.syscollector.Collect(ctx)
 	if err != nil {
-		collectionErrors = append(collectionErrors, fmt.Errorf("system metrics: %w", err))
+		log.Warnf("system metrics collection failed: %v", err)
 	} else {
 		metricSets = append(metricSets, domainmetrics.MetricSet{
 			Type:    domainmetrics.MetricTypeSystem,
@@ -144,7 +145,7 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 
 	netMetrics, err := mp.netcollector.Collect(ctx)
 	if err != nil {
-		collectionErrors = append(collectionErrors, fmt.Errorf("network metrics: %w", err))
+		log.Warnf("network metrics collection failed: %v", err)
 	} else {
 		metricSets = append(metricSets, domainmetrics.MetricSet{
 			Type:    domainmetrics.MetricTypeNetwork,
@@ -154,17 +155,19 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 
 	dbMetrics, err := mp.metricscollector.Collect(cred)
 	if err != nil {
-		collectionErrors = append(collectionErrors, fmt.Errorf("database metrics: %w", err))
+		log.Warnf("database metrics collection failed: %v", err)
+		dbMetrics = domainmetrics.PostgreSQLDatabaseMetrics{Up: false}
 	} else {
-		metricSets = append(metricSets, domainmetrics.MetricSet{
-			Type:    domainmetrics.MetricTypePostgreSQLDatabase,
-			Metrics: dbMetrics,
-		})
+		dbMetrics.Up = true
 	}
+	metricSets = append(metricSets, domainmetrics.MetricSet{
+		Type:    domainmetrics.MetricTypePostgreSQLDatabase,
+		Metrics: dbMetrics,
+	})
 
 	storageMetrics, err := mp.storagecollector.Collect(ctx)
 	if err != nil {
-		collectionErrors = append(collectionErrors, fmt.Errorf("storage metrics: %w", err))
+		log.Warnf("storage metrics collection failed: %v", err)
 	} else {
 		for _, sm := range storageMetrics {
 			metricSets = append(metricSets, domainmetrics.MetricSet{
@@ -180,9 +183,9 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 		}
 	}
 
-	if len(metricSets) == 0 {
-		return fmt.Errorf("all metrics collection failed: %v", collectionErrors)
-	}
+	// If only the postgresql.database metric set exists (with up=false) and
+	// all other collectors failed, we still push so the server knows the agent
+	// is alive and PostgreSQL status is reported.
 
 	hostname, _ := os.Hostname()
 
