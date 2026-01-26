@@ -7,10 +7,16 @@ import (
 	"testing"
 )
 
-func TestCheck_BinaryWritable(t *testing.T) {
+func TestCheck_InstallDirNotWritable(t *testing.T) {
 	dir := t.TempDir()
-	binaryPath := filepath.Join(dir, "hostlink")
-	os.WriteFile(binaryPath, []byte("binary"), 0444)
+	// Create a read-only directory for the binary
+	readOnlyBinDir := filepath.Join(dir, "bin")
+	os.MkdirAll(readOnlyBinDir, 0755)
+	binaryPath := filepath.Join(readOnlyBinDir, "hostlink")
+	os.WriteFile(binaryPath, []byte("binary"), 0755)
+	// Make the directory read-only AFTER creating the file
+	os.Chmod(readOnlyBinDir, 0555)
+	t.Cleanup(func() { os.Chmod(readOnlyBinDir, 0755) }) // restore for cleanup
 
 	checker := New(PreflightConfig{
 		AgentBinaryPath: binaryPath,
@@ -20,12 +26,12 @@ func TestCheck_BinaryWritable(t *testing.T) {
 
 	result := checker.Check(10 * 1024 * 1024) // 10MB required
 	if result.Passed {
-		t.Error("expected Passed to be false when binary is not writable")
+		t.Error("expected Passed to be false when install directory is not writable")
 	}
-	assertContainsError(t, result.Errors, "not writable")
+	assertContainsError(t, result.Errors, "cannot write to install directory")
 }
 
-func TestCheck_BinaryWritable_Passes(t *testing.T) {
+func TestCheck_InstallPath_Passes(t *testing.T) {
 	dir := t.TempDir()
 	binaryPath := filepath.Join(dir, "hostlink")
 	os.WriteFile(binaryPath, []byte("binary"), 0755)
@@ -101,15 +107,23 @@ func TestCheck_DiskSpaceSufficient(t *testing.T) {
 
 func TestCheck_AllErrorsReported(t *testing.T) {
 	dir := t.TempDir()
-	binaryPath := filepath.Join(dir, "hostlink")
-	os.WriteFile(binaryPath, []byte("binary"), 0444) // not writable
 
-	readOnlyDir := filepath.Join(dir, "updates")
-	os.MkdirAll(readOnlyDir, 0555) // not writable
+	// Create binary in a read-only directory
+	readOnlyBinDir := filepath.Join(dir, "bin")
+	os.MkdirAll(readOnlyBinDir, 0755)
+	binaryPath := filepath.Join(readOnlyBinDir, "hostlink")
+	os.WriteFile(binaryPath, []byte("binary"), 0755)
+	os.Chmod(readOnlyBinDir, 0555) // make read-only after creating file
+	t.Cleanup(func() { os.Chmod(readOnlyBinDir, 0755) })
+
+	// Create read-only updates directory
+	readOnlyUpdatesDir := filepath.Join(dir, "updates")
+	os.MkdirAll(readOnlyUpdatesDir, 0555)
+	t.Cleanup(func() { os.Chmod(readOnlyUpdatesDir, 0755) })
 
 	checker := New(PreflightConfig{
 		AgentBinaryPath: binaryPath,
-		UpdatesDir:      readOnlyDir,
+		UpdatesDir:      readOnlyUpdatesDir,
 		StatFunc:        func(path string) (uint64, error) { return 1024, nil }, // tiny
 	})
 
@@ -117,7 +131,7 @@ func TestCheck_AllErrorsReported(t *testing.T) {
 	if result.Passed {
 		t.Error("expected Passed to be false")
 	}
-	// Should have 3 errors: binary not writable, dir not writable, disk space
+	// Should have 3 errors: install dir not writable, updates dir not writable, disk space
 	if len(result.Errors) < 3 {
 		t.Errorf("expected at least 3 errors, got %d: %v", len(result.Errors), result.Errors)
 	}
@@ -155,7 +169,30 @@ func TestCheck_BinaryNotExists(t *testing.T) {
 	if result.Passed {
 		t.Error("expected Passed to be false when binary does not exist")
 	}
-	assertContainsError(t, result.Errors, "not writable")
+	assertContainsError(t, result.Errors, "does not exist")
+}
+
+func TestCheck_BinaryExistsButDirNotWritable(t *testing.T) {
+	dir := t.TempDir()
+	// Create binary in a directory, then make the directory read-only
+	binDir := filepath.Join(dir, "usr", "bin")
+	os.MkdirAll(binDir, 0755)
+	binaryPath := filepath.Join(binDir, "hostlink")
+	os.WriteFile(binaryPath, []byte("binary"), 0755)
+	os.Chmod(binDir, 0555) // read-only after file creation
+	t.Cleanup(func() { os.Chmod(binDir, 0755) })
+
+	checker := New(PreflightConfig{
+		AgentBinaryPath: binaryPath,
+		UpdatesDir:      dir,
+		StatFunc:        func(path string) (uint64, error) { return 1 << 30, nil },
+	})
+
+	result := checker.Check(10 * 1024 * 1024)
+	if result.Passed {
+		t.Error("expected Passed to be false when binary directory is not writable")
+	}
+	assertContainsError(t, result.Errors, "cannot write to install directory")
 }
 
 // assertContainsError checks that at least one error string contains the substring.
