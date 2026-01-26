@@ -27,9 +27,9 @@ func TestSelfUpdateEnabled_InvalidFallsToDefault(t *testing.T) {
 	assert.True(t, SelfUpdateEnabled())
 }
 
-func TestUpdateCheckInterval_Default1h(t *testing.T) {
+func TestUpdateCheckInterval_Default5m(t *testing.T) {
 	t.Setenv("HOSTLINK_UPDATE_CHECK_INTERVAL", "")
-	assert.Equal(t, 1*time.Hour, UpdateCheckInterval())
+	assert.Equal(t, 5*time.Minute, UpdateCheckInterval())
 }
 
 func TestUpdateCheckInterval_CustomValue(t *testing.T) {
@@ -49,7 +49,7 @@ func TestUpdateCheckInterval_ClampedToMax(t *testing.T) {
 
 func TestUpdateCheckInterval_InvalidFallsToDefault(t *testing.T) {
 	t.Setenv("HOSTLINK_UPDATE_CHECK_INTERVAL", "garbage")
-	assert.Equal(t, 1*time.Hour, UpdateCheckInterval())
+	assert.Equal(t, 5*time.Minute, UpdateCheckInterval())
 }
 
 func TestUpdateLockTimeout_Default5m(t *testing.T) {

@@ -81,10 +81,11 @@ func SelfUpdateEnabled() bool {
 }
 
 // UpdateCheckInterval returns the interval between update checks.
-// Controlled by HOSTLINK_UPDATE_CHECK_INTERVAL (default: 1h, clamped to [1m, 24h]).
+// Controlled by HOSTLINK_UPDATE_CHECK_INTERVAL (default: 5m, clamped to [1m, 24h]).
 func UpdateCheckInterval() time.Duration {
 	const (
-		defaultInterval = 1 * time.Hour
+		// TODO(SLFHOST-11): revert to 1*time.Hour once self-update debugging is complete
+		defaultInterval = 5 * time.Minute
 		minInterval     = 1 * time.Minute
 		maxInterval     = 24 * time.Hour
 	)
