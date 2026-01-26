@@ -129,6 +129,54 @@ func runUpgrade(ctx context.Context, cmd *cli.Command) error {
 		defer cleanup()
 	}
 
+	// Skip auto-download in these cases:
+	// 1. --dry-run: only validates preconditions
+	// 2. --base-dir set: likely a test with custom paths
+	// 3. HOSTLINK_ENV=test: explicit test environment
+	// 4. Running from staging: spawned by selfupdatejob (handled by IsManualInvocation)
+	skipAutoDownload := dryRun || baseDir != "" || os.Getenv("HOSTLINK_ENV") == "test"
+
+	if !skipAutoDownload && upgrade.IsManualInvocation(selfPath, installPath, paths.StagingDir) {
+		fmt.Fprintf(os.Stderr, "Manual upgrade detected, checking for latest version...\n")
+
+		// Create auto-downloader to fetch latest version
+		ad, err := upgrade.NewAutoDownloader(upgrade.NewAutoDownloaderConfig{
+			StagingDir: paths.StagingDir,
+			Logger:     logger,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to initialize auto-downloader: %w", err)
+		}
+
+		// Check and download latest version if available
+		stagedBinary, err := ad.DownloadLatestIfNeeded(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to download latest version: %w", err)
+		}
+
+		if stagedBinary == "" {
+			fmt.Fprintf(os.Stderr, "Already running the latest version (%s)\n", version.Version)
+			return nil
+		}
+
+		fmt.Fprintf(os.Stderr, "Downloaded new version, executing upgrade...\n")
+
+		// Hand off to the staged binary to complete the upgrade
+		// Pass through all original args
+		args := []string{"upgrade", "--install-path", installPath}
+		if baseDir != "" {
+			args = append(args, "--base-dir", baseDir)
+		}
+		if dryRun {
+			args = append(args, "--dry-run")
+		}
+
+		// This replaces the current process - never returns on success
+		return upgrade.ExecStagedBinary(stagedBinary, args)
+	}
+
+	// Normal upgrade flow (spawned by selfupdatejob or exec'd from auto-download)
+
 	// Build config
 	cfg := &upgrade.Config{
 		InstallPath:   installPath,
