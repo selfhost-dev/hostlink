@@ -1,6 +1,6 @@
 module hostlink
 
-go 1.24.4
+go 1.26.0
 
 require (
 	github.com/glebarez/sqlite v1.11.0
@@ -14,10 +14,12 @@ require (
 	github.com/mattn/go-shellwords v1.0.12
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/shirou/gopsutil/v4 v4.25.11
+	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.39.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.39.0
 	github.com/urfave/cli/v3 v3.4.1
+	golang.org/x/sys v0.39.0
 	gorm.io/gorm v1.31.0
 )
 
@@ -71,7 +73,6 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/tklauser/go-sysconf v0.3.16 // indirect
 	github.com/tklauser/numcpus v0.11.0 // indirect
@@ -87,7 +88,6 @@ require (
 	golang.org/x/crypto v0.46.0 // indirect
 	golang.org/x/exp v0.0.0-20250819193227-8b4c13bb791b // indirect
 	golang.org/x/net v0.47.0 // indirect
-	golang.org/x/sys v0.39.0 // indirect
 	golang.org/x/text v0.32.0 // indirect
 	golang.org/x/time v0.11.0 // indirect
 	google.golang.org/grpc v1.75.1 // indirect

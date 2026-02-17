@@ -459,7 +459,7 @@ func TestPush_SystemMetricsFailure_StillPushesDbMetrics(t *testing.T) {
 	setupNetCollectorMocks(mocks.netcollector)
 	setupStorageCollectorMocks(mocks.storagecollector)
 	mocks.collector.On("Collect", testCred).
-		Return(domainmetrics.PostgreSQLDatabaseMetrics{ConnectionsTotal: 5}, nil)
+		Return(domainmetrics.PostgreSQLDatabaseMetrics{Up: true, ConnectionsTotal: 5}, nil)
 	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {
 		hasNetwork := false
 		hasDb := false
@@ -469,7 +469,8 @@ func TestPush_SystemMetricsFailure_StillPushesDbMetrics(t *testing.T) {
 				hasNetwork = true
 			}
 			if ms.Type == domainmetrics.MetricTypePostgreSQLDatabase {
-				hasDb = true
+				dbMetrics := ms.Metrics.(domainmetrics.PostgreSQLDatabaseMetrics)
+				hasDb = dbMetrics.Up
 			}
 			if ms.Type == domainmetrics.MetricTypeStorage {
 				hasStorage = true
@@ -486,7 +487,7 @@ func TestPush_SystemMetricsFailure_StillPushesDbMetrics(t *testing.T) {
 }
 
 // Push Tests - Partial Collection (system succeeds, db fails)
-func TestPush_DatabaseMetricsFailure_StillPushesSystemMetrics(t *testing.T) {
+func TestPush_DatabaseMetricsFailure_StillPushesSystemMetricsAndDbWithUpFalse(t *testing.T) {
 	mp, mocks := setupTestMetricsPusher()
 	testCred := credential.Credential{Host: "localhost", DataDirectory: "/var/lib/postgresql"}
 	collectErr := errors.New("connection refused")
@@ -501,6 +502,7 @@ func TestPush_DatabaseMetricsFailure_StillPushesSystemMetrics(t *testing.T) {
 		hasSys := false
 		hasNetwork := false
 		hasStorage := false
+		hasDbWithUpFalse := false
 		for _, ms := range p.MetricSets {
 			if ms.Type == domainmetrics.MetricTypeSystem {
 				hasSys = true
@@ -511,8 +513,12 @@ func TestPush_DatabaseMetricsFailure_StillPushesSystemMetrics(t *testing.T) {
 			if ms.Type == domainmetrics.MetricTypeStorage {
 				hasStorage = true
 			}
+			if ms.Type == domainmetrics.MetricTypePostgreSQLDatabase {
+				dbMetrics := ms.Metrics.(domainmetrics.PostgreSQLDatabaseMetrics)
+				hasDbWithUpFalse = !dbMetrics.Up
+			}
 		}
-		return hasSys && hasNetwork && hasStorage
+		return hasSys && hasNetwork && hasStorage && hasDbWithUpFalse
 	})).Return(nil)
 
 	err := mp.Push(testCred)
@@ -522,8 +528,8 @@ func TestPush_DatabaseMetricsFailure_StillPushesSystemMetrics(t *testing.T) {
 	mocks.apiserver.AssertExpectations(t)
 }
 
-// Push Tests - All Collections Fail
-func TestPush_AllCollectionsFail(t *testing.T) {
+// Push Tests - All Collections Fail — still pushes postgresql.database with up=false
+func TestPush_AllCollectionsFail_StillPushesDbWithUpFalse(t *testing.T) {
 	mp, mocks := setupTestMetricsPusher()
 	testCred := credential.Credential{Host: "localhost", DataDirectory: "/var/lib/postgresql"}
 
@@ -536,12 +542,22 @@ func TestPush_AllCollectionsFail(t *testing.T) {
 		Return(nil, errors.New("storage failed"))
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{}, errors.New("connection refused"))
+	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {
+		if len(p.MetricSets) != 1 {
+			return false
+		}
+		ms := p.MetricSets[0]
+		if ms.Type != domainmetrics.MetricTypePostgreSQLDatabase {
+			return false
+		}
+		dbMetrics := ms.Metrics.(domainmetrics.PostgreSQLDatabaseMetrics)
+		return !dbMetrics.Up
+	})).Return(nil)
 
 	err := mp.Push(testCred)
 
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "all metrics collection failed")
-	mocks.apiserver.AssertNotCalled(t, "PushMetrics")
+	assert.NoError(t, err)
+	mocks.apiserver.AssertExpectations(t)
 }
 
 func TestPush_APIServerPushFailure(t *testing.T) {
@@ -554,7 +570,7 @@ func TestPush_APIServerPushFailure(t *testing.T) {
 	setupNetCollectorMocks(mocks.netcollector)
 	setupStorageCollectorMocks(mocks.storagecollector)
 	mocks.collector.On("Collect", testCred).
-		Return(domainmetrics.PostgreSQLDatabaseMetrics{ConnectionsTotal: 5}, nil)
+		Return(domainmetrics.PostgreSQLDatabaseMetrics{Up: true, ConnectionsTotal: 5}, nil)
 	mocks.apiserver.On("PushMetrics", mock.Anything, mock.Anything).
 		Return(pushErr)
 
@@ -579,6 +595,7 @@ func TestPush_Success_ValidatesPayloadSchema(t *testing.T) {
 	setupStorageCollectorMocks(mocks.storagecollector)
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{
+			Up:                    true,
 			ConnectionsTotal:      10,
 			MaxConnections:        100,
 			CacheHitRatio:         95.5,
@@ -653,6 +670,9 @@ func TestPush_Success_ValidatesPayloadSchema(t *testing.T) {
 		}
 
 		// Check database metrics values
+		if !dbMetrics.Up {
+			return false
+		}
 		if dbMetrics.ConnectionsTotal != 10 {
 			return false
 		}
@@ -695,7 +715,7 @@ func TestPush_ContextPropagation(t *testing.T) {
 	setupNetCollectorMocks(mocks.netcollector)
 	setupStorageCollectorMocks(mocks.storagecollector)
 	mocks.collector.On("Collect", testCred).
-		Return(domainmetrics.PostgreSQLDatabaseMetrics{}, nil)
+		Return(domainmetrics.PostgreSQLDatabaseMetrics{Up: true}, nil)
 	mocks.apiserver.On("PushMetrics", mock.MatchedBy(func(ctx context.Context) bool {
 		return ctx != nil
 	}), mock.Anything).
@@ -742,7 +762,7 @@ func TestPush_CredentialPassedCorrectly(t *testing.T) {
 			c.Port == testCred.Port &&
 			c.Username == testCred.Username &&
 			c.Dialect == testCred.Dialect
-	})).Return(domainmetrics.PostgreSQLDatabaseMetrics{}, nil)
+	})).Return(domainmetrics.PostgreSQLDatabaseMetrics{Up: true}, nil)
 	mocks.apiserver.On("PushMetrics", mock.Anything, mock.Anything).
 		Return(nil)
 
@@ -793,6 +813,59 @@ func setupStorageCollectorMocks(collector *MockStorageCollector) {
 	}, nil)
 }
 
+// Verifies database down sends up=false with zero metrics
+func TestPush_DatabaseDown_SendsUpFalseWithZeroMetrics(t *testing.T) {
+	mp, mocks := setupTestMetricsPusher()
+	testCred := credential.Credential{Host: "localhost", DataDirectory: "/var/lib/postgresql"}
+
+	mocks.agentstate.On("GetAgentID").Return("agent-123")
+	setupSysCollectorMocks(mocks.syscollector)
+	setupNetCollectorMocks(mocks.netcollector)
+	setupStorageCollectorMocks(mocks.storagecollector)
+	mocks.collector.On("Collect", testCred).
+		Return(domainmetrics.PostgreSQLDatabaseMetrics{}, errors.New("connection refused"))
+	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {
+		for _, ms := range p.MetricSets {
+			if ms.Type == domainmetrics.MetricTypePostgreSQLDatabase {
+				dbMetrics := ms.Metrics.(domainmetrics.PostgreSQLDatabaseMetrics)
+				// up must be false
+				if dbMetrics.Up {
+					return false
+				}
+				// all other fields must be zero
+				if dbMetrics.ConnectionsTotal != 0 {
+					return false
+				}
+				if dbMetrics.MaxConnections != 0 {
+					return false
+				}
+				if dbMetrics.CacheHitRatio != 0 {
+					return false
+				}
+				if dbMetrics.TransactionsPerSecond != 0 {
+					return false
+				}
+				if dbMetrics.CommittedTxPerSecond != 0 {
+					return false
+				}
+				if dbMetrics.BlocksReadPerSecond != 0 {
+					return false
+				}
+				if dbMetrics.ReplicationLagSeconds != 0 {
+					return false
+				}
+				return true
+			}
+		}
+		return false // postgresql.database metric set must be present
+	})).Return(nil)
+
+	err := mp.Push(testCred)
+
+	assert.NoError(t, err)
+	mocks.apiserver.AssertExpectations(t)
+}
+
 // Verifies storage metrics are included in the payload
 func TestPush_IncludesStorageMetrics(t *testing.T) {
 	mp, mocks := setupTestMetricsPusher()
@@ -803,7 +876,7 @@ func TestPush_IncludesStorageMetrics(t *testing.T) {
 	setupNetCollectorMocks(mocks.netcollector)
 	setupStorageCollectorMocks(mocks.storagecollector)
 	mocks.collector.On("Collect", testCred).
-		Return(domainmetrics.PostgreSQLDatabaseMetrics{}, nil)
+		Return(domainmetrics.PostgreSQLDatabaseMetrics{Up: true}, nil)
 	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {
 		hasStorage := false
 		for _, ms := range p.MetricSets {
@@ -832,7 +905,7 @@ func TestPush_StorageMetricsFailure_StillPushesOtherMetrics(t *testing.T) {
 	mocks.storagecollector.On("Collect", mock.Anything).
 		Return(nil, errors.New("storage collection failed"))
 	mocks.collector.On("Collect", testCred).
-		Return(domainmetrics.PostgreSQLDatabaseMetrics{}, nil)
+		Return(domainmetrics.PostgreSQLDatabaseMetrics{Up: true}, nil)
 	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {
 		hasSys := false
 		hasNet := false
@@ -876,7 +949,7 @@ func TestPush_StorageMetricsMultipleMounts(t *testing.T) {
 		},
 	}, nil)
 	mocks.collector.On("Collect", testCred).
-		Return(domainmetrics.PostgreSQLDatabaseMetrics{}, nil)
+		Return(domainmetrics.PostgreSQLDatabaseMetrics{Up: true}, nil)
 	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {
 		storageCount := 0
 		for _, ms := range p.MetricSets {
@@ -913,7 +986,7 @@ func TestPush_StorageMetricsWithAttributes(t *testing.T) {
 		},
 	}, nil)
 	mocks.collector.On("Collect", testCred).
-		Return(domainmetrics.PostgreSQLDatabaseMetrics{}, nil)
+		Return(domainmetrics.PostgreSQLDatabaseMetrics{Up: true}, nil)
 	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {
 		for _, ms := range p.MetricSets {
 			if ms.Type == domainmetrics.MetricTypeStorage {

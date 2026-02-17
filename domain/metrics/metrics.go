@@ -43,6 +43,7 @@ type NetworkMetrics struct {
 }
 
 type PostgreSQLDatabaseMetrics struct {
+	Up                    bool    `json:"up"`
 	ConnectionsTotal      int     `json:"connections_total"`
 	MaxConnections        int     `json:"max_connections"`
 	CacheHitRatio         float64 `json:"cache_hit_ratio"`
