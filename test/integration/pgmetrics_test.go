@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/network"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
@@ -129,6 +131,9 @@ func TestCollector_Collect(t *testing.T) {
 
 	// Replication lag should be 0 when no replication is configured
 	assert.Equal(t, 0, metrics.ReplicationLagSeconds)
+
+	// Standalone primary has no replication_connected
+	assert.Nil(t, metrics.ReplicationConnected, "standalone primary has no replication_connected")
 }
 
 func TestCollector_Collect_InvalidCredentials(t *testing.T) {
@@ -201,6 +206,121 @@ func TestCollector_Collect_DeltaBasedTPS(t *testing.T) {
 	require.NoError(t, err)
 	assert.Greater(t, metrics2.TransactionsPerSecond, 0.0, "second collection should have TPS > 0")
 	assert.Greater(t, metrics2.CommittedTxPerSecond, 0.0, "second collection should have committed TPS > 0")
+}
+
+func setupReplicationPair(t *testing.T) (primaryCred, replicaCred credential.Credential) {
+	ctx := context.Background()
+
+	net, err := network.New(ctx)
+	require.NoError(t, err)
+
+	hbaPath, err := filepath.Abs("testdata/primary-pg_hba.conf")
+	require.NoError(t, err)
+
+	primaryContainer, err := postgres.Run(ctx,
+		"postgres:18-alpine",
+		postgres.WithDatabase(testDatabase),
+		postgres.WithUsername(testUser),
+		postgres.WithPassword(testPassword),
+		testcontainers.WithCmdArgs(
+			"-c", "wal_level=replica",
+			"-c", "max_wal_senders=4",
+			"-c", "wal_keep_size=64MB",
+			"-c", "hba_file=/etc/postgresql/pg_hba.conf",
+		),
+		testcontainers.WithFiles(testcontainers.ContainerFile{
+			HostFilePath:      hbaPath,
+			ContainerFilePath: "/etc/postgresql/pg_hba.conf",
+			FileMode:          0644,
+		}),
+		network.WithNetwork([]string{"primary"}, net),
+		postgres.BasicWaitStrategies(),
+	)
+	require.NoError(t, err)
+
+	replicaScript := `
+rm -rf /var/lib/postgresql/replica/*
+until pg_basebackup -h primary -U testuser -D /var/lib/postgresql/replica -R -P --wal-method=stream; do
+  sleep 1
+done
+exec postgres -D /var/lib/postgresql/replica
+`
+
+	replicaContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:      "postgres:18-alpine",
+			User:       "postgres",
+			Entrypoint: []string{"sh", "-c"},
+			Cmd:        []string{replicaScript},
+			Env: map[string]string{
+				"PGDATA": "/var/lib/postgresql/replica",
+			},
+			ExposedPorts: []string{"5432/tcp"},
+			Networks:     []string{net.Name},
+			NetworkAliases: map[string][]string{
+				net.Name: {"replica"},
+			},
+			WaitingFor: wait.ForLog("database system is ready to accept read-only connections").
+				WithStartupTimeout(60 * time.Second),
+		},
+		Started: true,
+	})
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = replicaContainer.Terminate(ctx)
+		_ = primaryContainer.Terminate(ctx)
+		_ = net.Remove(ctx)
+	})
+
+	primaryHost, err := primaryContainer.Host(ctx)
+	require.NoError(t, err)
+	primaryPort, err := primaryContainer.MappedPort(ctx, "5432")
+	require.NoError(t, err)
+
+	replicaHost, err := replicaContainer.Host(ctx)
+	require.NoError(t, err)
+	replicaPort, err := replicaContainer.MappedPort(ctx, "5432")
+	require.NoError(t, err)
+
+	pw := testPassword
+	primaryCred = credential.Credential{
+		Host:     primaryHost,
+		Port:     primaryPort.Int(),
+		Username: testUser,
+		Password: &pw,
+		Database: testDatabase,
+	}
+
+	pw2 := testPassword
+	replicaCred = credential.Credential{
+		Host:     replicaHost,
+		Port:     replicaPort.Int(),
+		Username: testUser,
+		Password: &pw2,
+		Database: testDatabase,
+	}
+
+	return primaryCred, replicaCred
+}
+
+func TestCollector_Collect_Replica(t *testing.T) {
+	primaryCred, replicaCred := setupReplicationPair(t)
+
+	collector := pgmetrics.New()
+
+	// Replica with active streaming: ReplicationConnected=true, ReplicationLagSeconds>=0
+	replicaMetrics, err := collector.Collect(replicaCred)
+	require.NoError(t, err)
+	require.NotNil(t, replicaMetrics.ReplicationConnected, "replica should report replication_connected")
+	assert.True(t, *replicaMetrics.ReplicationConnected, "replica should be connected to primary")
+	assert.GreaterOrEqual(t, replicaMetrics.ReplicationLagSeconds, 0, "replica lag should be >= 0")
+
+	// Primary with a connected replica: ReplicationConnected=nil, ReplicationLagSeconds>=0
+	primaryMetrics, err := collector.Collect(primaryCred)
+	require.NoError(t, err)
+	assert.Nil(t, primaryMetrics.ReplicationConnected, "primary should not report replication_connected")
+	assert.GreaterOrEqual(t, primaryMetrics.ReplicationLagSeconds, 0, "primary lag should be >= 0")
 }
 
 func BenchmarkCollector_Collect(b *testing.B) {
