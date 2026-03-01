@@ -51,6 +51,7 @@ type PostgreSQLDatabaseMetrics struct {
 	CommittedTxPerSecond  float64 `json:"committed_tx_per_second"`
 	BlocksReadPerSecond   float64 `json:"blocks_read_per_second"`
 	ReplicationLagSeconds int     `json:"replication_lag_seconds"`
+	ReplicationConnected  *bool  `json:"replication_connected,omitempty"`
 }
 
 type StorageMetrics struct {

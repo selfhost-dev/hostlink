@@ -593,6 +593,7 @@ func TestPush_Success_ValidatesPayloadSchema(t *testing.T) {
 	setupSysCollectorMocks(mocks.syscollector)
 	setupNetCollectorMocks(mocks.netcollector)
 	setupStorageCollectorMocks(mocks.storagecollector)
+	connected := true
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{
 			Up:                    true,
@@ -603,6 +604,7 @@ func TestPush_Success_ValidatesPayloadSchema(t *testing.T) {
 			CommittedTxPerSecond:  98.0,
 			BlocksReadPerSecond:   5.5,
 			ReplicationLagSeconds: 0,
+			ReplicationConnected:  &connected,
 		}, nil)
 	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {
 		// Validate payload structure
@@ -692,6 +694,9 @@ func TestPush_Success_ValidatesPayloadSchema(t *testing.T) {
 			return false
 		}
 		if dbMetrics.ReplicationLagSeconds != 0 {
+			return false
+		}
+		if dbMetrics.ReplicationConnected == nil || *dbMetrics.ReplicationConnected != true {
 			return false
 		}
 
@@ -852,6 +857,9 @@ func TestPush_DatabaseDown_SendsUpFalseWithZeroMetrics(t *testing.T) {
 					return false
 				}
 				if dbMetrics.ReplicationLagSeconds != 0 {
+					return false
+				}
+				if dbMetrics.ReplicationConnected != nil {
 					return false
 				}
 				return true

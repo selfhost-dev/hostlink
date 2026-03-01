@@ -158,26 +158,52 @@ func (pgm *pgmetrics) collectDatabaseMetrics(ctx context.Context, db *sql.DB, m 
 }
 
 func (pgm *pgmetrics) collectReplicationMetrics(ctx context.Context, db *sql.DB, m *metrics.PostgreSQLDatabaseMetrics) error {
-	replQuery := `
-		SELECT
-			COALESCE(
-				EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp())),
-				0
-			)::integer as lag_seconds
-		FROM pg_stat_replication
-		LIMIT 1;
-	`
+	var isReplica bool
+	if err := db.QueryRowContext(ctx, `SELECT pg_is_in_recovery()`).Scan(&isReplica); err != nil {
+		return fmt.Errorf("pg_is_in_recovery: %w", err)
+	}
+
+	if isReplica {
+		return pgm.collectReplicaMetrics(ctx, db, m)
+	}
+	return pgm.collectPrimaryReplicationMetrics(ctx, db, m)
+}
+
+func (pgm *pgmetrics) collectReplicaMetrics(ctx context.Context, db *sql.DB, m *metrics.PostgreSQLDatabaseMetrics) error {
+	var status sql.NullString
+	err := db.QueryRowContext(ctx, `SELECT status FROM pg_stat_wal_receiver LIMIT 1`).Scan(&status)
+	if err == sql.ErrNoRows {
+		connected := false
+		m.ReplicationConnected = &connected
+	} else if err != nil {
+		return fmt.Errorf("pg_stat_wal_receiver: %w", err)
+	} else {
+		connected := status.Valid && status.String == "streaming"
+		m.ReplicationConnected = &connected
+	}
 
 	var lag sql.NullInt64
-	err := db.QueryRowContext(ctx, replQuery).Scan(&lag)
+	err = db.QueryRowContext(ctx, `SELECT COALESCE(EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp())), 0)::integer`).Scan(&lag)
+	if err != nil {
+		return fmt.Errorf("replay lag: %w", err)
+	}
+	if lag.Valid {
+		m.ReplicationLagSeconds = int(lag.Int64)
+	}
+
+	return nil
+}
+
+func (pgm *pgmetrics) collectPrimaryReplicationMetrics(ctx context.Context, db *sql.DB, m *metrics.PostgreSQLDatabaseMetrics) error {
+	var lag sql.NullInt64
+	err := db.QueryRowContext(ctx, `SELECT COALESCE(MAX(EXTRACT(EPOCH FROM replay_lag)), 0)::integer FROM pg_stat_replication`).Scan(&lag)
 	if err == sql.ErrNoRows {
 		m.ReplicationLagSeconds = 0
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("replication lag: %w", err)
+		return fmt.Errorf("primary replay_lag: %w", err)
 	}
-
 	if lag.Valid {
 		m.ReplicationLagSeconds = int(lag.Int64)
 	}
