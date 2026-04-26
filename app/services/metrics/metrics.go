@@ -15,6 +15,7 @@ import (
 	"hostlink/internal/apiserver"
 	"hostlink/internal/crypto"
 	"hostlink/internal/networkmetrics"
+	"hostlink/internal/pgbouncermetrics"
 	"hostlink/internal/pgmetrics"
 	"hostlink/internal/storagemetrics"
 	"hostlink/internal/sysmetrics"
@@ -29,14 +30,15 @@ type Pusher interface {
 }
 
 type metricspusher struct {
-	apiserver        apiserver.MetricsOperations
-	agentstate       agentstate.Operations
-	metricscollector pgmetrics.Collector
-	syscollector     sysmetrics.Collector
-	netcollector     networkmetrics.Collector
-	storagecollector storagemetrics.Collector
-	crypto           crypto.Service
-	privateKeyPath   string
+	apiserver              apiserver.MetricsOperations
+	agentstate             agentstate.Operations
+	metricscollector       pgmetrics.Collector
+	syscollector           sysmetrics.Collector
+	netcollector           networkmetrics.Collector
+	storagecollector       storagemetrics.Collector
+	pgbouncercollector     pgbouncermetrics.Collector
+	crypto                 crypto.Service
+	privateKeyPath         string
 }
 
 func NewWithConf() (*metricspusher, error) {
@@ -50,14 +52,15 @@ func NewWithConf() (*metricspusher, error) {
 	}
 
 	return &metricspusher{
-		apiserver:        svr,
-		agentstate:       agentstate,
-		metricscollector: pgmetrics.New(),
-		syscollector:     sysmetrics.New(),
-		netcollector:     networkmetrics.New(),
-		storagecollector: storagemetrics.New(),
-		crypto:           crypto.NewService(),
-		privateKeyPath:   appconf.AgentPrivateKeyPath(),
+		apiserver:          svr,
+		agentstate:         agentstate,
+		metricscollector:   pgmetrics.New(),
+		syscollector:       sysmetrics.New(),
+		netcollector:       networkmetrics.New(),
+		storagecollector:   storagemetrics.New(),
+		pgbouncercollector: pgbouncermetrics.New(),
+		crypto:             crypto.NewService(),
+		privateKeyPath:     appconf.AgentPrivateKeyPath(),
 	}, nil
 }
 
@@ -73,18 +76,20 @@ func NewWithDependencies(
 	syscollector sysmetrics.Collector,
 	netcollector networkmetrics.Collector,
 	storagecollector storagemetrics.Collector,
+	pgbouncercollector pgbouncermetrics.Collector,
 	crypto crypto.Service,
 	privateKeyPath string,
 ) *metricspusher {
 	return &metricspusher{
-		apiserver:        apiserver,
-		agentstate:       agentstate,
-		metricscollector: pgcollector,
-		syscollector:     syscollector,
-		netcollector:     netcollector,
-		storagecollector: storagecollector,
-		crypto:           crypto,
-		privateKeyPath:   privateKeyPath,
+		apiserver:          apiserver,
+		agentstate:         agentstate,
+		metricscollector:   pgcollector,
+		syscollector:       syscollector,
+		netcollector:       netcollector,
+		storagecollector:   storagecollector,
+		pgbouncercollector: pgbouncercollector,
+		crypto:             crypto,
+		privateKeyPath:     privateKeyPath,
 	}
 }
 
@@ -182,6 +187,20 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 			})
 		}
 	}
+
+	// PgBouncer stats — try-connect approach: silently skip when not running.
+	// The collector returns an error if PgBouncer is unreachable; we mark Up: false
+	// and still include the metric set so the server can track the pooler state.
+	pgbouncerMetrics, err := mp.pgbouncercollector.Collect(cred)
+	if err != nil {
+		pgbouncerMetrics = domainmetrics.PgBouncerMetrics{Up: false}
+	} else {
+		pgbouncerMetrics.Up = true
+	}
+	metricSets = append(metricSets, domainmetrics.MetricSet{
+		Type:    domainmetrics.MetricTypePgBouncer,
+		Metrics: pgbouncerMetrics,
+	})
 
 	// If only the postgresql.database metric set exists (with up=false) and
 	// all other collectors failed, we still push so the server knows the agent
