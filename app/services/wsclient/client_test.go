@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"hostlink/app/services/localtaskstore"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -110,6 +111,144 @@ func TestClientHandlesAckWithoutTaskSideEffects(t *testing.T) {
 	waitFor(t, func() bool { return client.LastAck() != nil }, "ack to be recorded")
 	if client.LastAck().AckedMessageID != "msg_other" {
 		t.Fatalf("last ack = %#v", client.LastAck())
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+}
+
+func TestClientAckRemovesResultMessageFromOutbox(t *testing.T) {
+	store := newClientTestStore(t)
+	requireNoError(t, store.AppendOutputChunk(localtaskstore.OutputChunk{
+		MessageID:          "msg-output-1",
+		TaskID:             "task-1",
+		ExecutionAttemptID: "attempt-1",
+		Stream:             "stdout",
+		Sequence:           1,
+		Payload:            "hello\n",
+		ByteCount:          6,
+	}))
+	conn := newFakeConn()
+	dialer := &fakeDialer{conn: conn}
+	client := newTestClient(t, dialer, WithResultOutbox(store))
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- client.Start(runCtx) }()
+
+	conn.waitForWrite(t)
+	conn.readCh <- ackEnvelope("msg_ack", "msg-output-1", wsprotocol.TypeTaskOutput)
+
+	waitFor(t, func() bool {
+		messages, err := store.UnackedMessages()
+		return err == nil && len(messages) == 0
+	}, "ack to remove outbox message")
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+}
+
+func TestClientReplaysUnackedMessagesAfterHelloAck(t *testing.T) {
+	store := newClientTestStore(t)
+	requireNoError(t, store.AppendOutputChunk(localtaskstore.OutputChunk{
+		MessageID:          "msg-output-1",
+		TaskID:             "task-1",
+		ExecutionAttemptID: "attempt-1",
+		Stream:             "stdout",
+		Sequence:           1,
+		Payload:            "hello\n",
+		ByteCount:          6,
+	}))
+	requireNoError(t, store.RecordFinal(localtaskstore.FinalResult{
+		MessageID:          "msg-final-1",
+		TaskID:             "task-1",
+		ExecutionAttemptID: "attempt-1",
+		Status:             "completed",
+		ExitCode:           0,
+		Payload:            `{"status":"completed","exit_code":0,"output_truncated":false,"error_truncated":false}`,
+	}))
+	conn := newFakeConn()
+	dialer := &fakeDialer{conn: conn}
+	client := newTestClient(t, dialer, WithResultOutbox(store))
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- client.Start(runCtx) }()
+
+	hello := conn.waitForWrite(t)
+	conn.readCh <- wsprotocol.Envelope{
+		ProtocolVersion: wsprotocol.ProtocolVersion,
+		MessageID:       "msg_hello_ack",
+		Type:            wsprotocol.TypeAgentHelloAck,
+		AgentID:         "agent_ws_test",
+		SentAt:          time.Now().UTC().Format(time.RFC3339),
+		Payload: payloadMap(t, wsprotocol.BuildAck(wsprotocol.AckOptions{
+			AckedMessageID: hello.MessageID,
+			AckedType:      wsprotocol.TypeAgentHello,
+		})),
+	}
+
+	output := conn.waitForWrite(t)
+	final := conn.waitForWrite(t)
+	if output.MessageID != "msg-output-1" || output.Type != wsprotocol.TypeTaskOutput {
+		t.Fatalf("first replay = %#v", output)
+	}
+	if final.MessageID != "msg-final-1" || final.Type != wsprotocol.TypeTaskFinal {
+		t.Fatalf("second replay = %#v", final)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+}
+
+func TestClientRetryableErrorKeepsConnectionAndOutboxMessage(t *testing.T) {
+	store := newClientTestStore(t)
+	requireNoError(t, store.AppendOutputChunk(localtaskstore.OutputChunk{
+		MessageID:          "msg-output-1",
+		TaskID:             "task-1",
+		ExecutionAttemptID: "attempt-1",
+		Stream:             "stdout",
+		Sequence:           1,
+		Payload:            "hello\n",
+		ByteCount:          6,
+	}))
+	conn := newFakeConn()
+	dialer := &fakeDialer{conn: conn}
+	client := newTestClient(t, dialer, WithResultOutbox(store))
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- client.Start(runCtx) }()
+
+	conn.waitForWrite(t)
+	conn.readCh <- wsprotocol.Envelope{
+		ProtocolVersion: wsprotocol.ProtocolVersion,
+		MessageID:       "msg_error",
+		Type:            wsprotocol.TypeError,
+		AgentID:         "agent_ws_test",
+		SentAt:          time.Now().UTC().Format(time.RFC3339),
+		Payload: payloadMap(t, wsprotocol.BuildError(wsprotocol.ErrorOptions{
+			Code:                    "output_sequence_gap",
+			Message:                 "expected sequence 2",
+			Retryable:               true,
+			RelatedMessageID:        "msg-output-1",
+			HighestAcceptedSequence: intValuePtr(1),
+		})),
+	}
+
+	waitFor(t, func() bool { return !conn.closed() }, "connection to remain open")
+	messages, err := store.UnackedMessages()
+	if err != nil {
+		t.Fatalf("unacked messages: %v", err)
+	}
+	if len(messages) != 1 || messages[0].MessageID != "msg-output-1" {
+		t.Fatalf("messages = %#v", messages)
 	}
 	cancel()
 	if err := <-done; err != nil {
@@ -276,6 +415,10 @@ func WithPingInterval(d time.Duration) clientOption {
 	return func(cfg *Config) { cfg.PingInterval = d }
 }
 
+func WithResultOutbox(outbox localtaskstore.ResultOutbox) clientOption {
+	return func(cfg *Config) { cfg.ResultOutbox = outbox }
+}
+
 type fakeDialer struct {
 	mu      sync.Mutex
 	conn    *fakeConn
@@ -385,6 +528,45 @@ func waitFor(t *testing.T, check func() bool, description string) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", description)
+}
+
+func ackEnvelope(messageID, ackedMessageID string, ackedType wsprotocol.MessageType) wsprotocol.Envelope {
+	return wsprotocol.Envelope{
+		ProtocolVersion: wsprotocol.ProtocolVersion,
+		MessageID:       messageID,
+		Type:            wsprotocol.TypeAck,
+		AgentID:         "agent_ws_test",
+		SentAt:          time.Now().UTC().Format(time.RFC3339),
+		Payload: map[string]any{
+			"acked_message_id": ackedMessageID,
+			"acked_type":       string(ackedType),
+		},
+	}
+}
+
+func newClientTestStore(t *testing.T) *localtaskstore.Store {
+	t.Helper()
+	store, err := localtaskstore.New(localtaskstore.Config{
+		Path:                 filepath.Join(t.TempDir(), "task_store.db"),
+		SpoolCapBytes:        1024 * 1024,
+		TerminalReserveBytes: 1024,
+	})
+	if err != nil {
+		t.Fatalf("new local task store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return store
+}
+
+func requireNoError(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func intValuePtr(value int) *int {
+	return &value
 }
 
 func saveTestPrivateKey(t *testing.T, dir string) string {
