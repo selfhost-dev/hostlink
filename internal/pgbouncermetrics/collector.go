@@ -166,7 +166,14 @@ func scanRowToMap(cols []string, rows *sql.Rows) map[string]string {
 	result := make(map[string]string, len(cols))
 	for i, col := range cols {
 		if vals[i] != nil {
-			result[col] = fmt.Sprintf("%v", vals[i])
+			switch v := vals[i].(type) {
+			case []byte:
+				// lib/pq returns NUMERIC columns as []byte; convert directly to
+				// string so parseFloat/parseInt can read them correctly.
+				result[col] = string(v)
+			default:
+				result[col] = fmt.Sprintf("%v", v)
+			}
 		}
 	}
 	return result
