@@ -2,7 +2,9 @@
 package appconf
 
 import (
+	"net/url"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -78,6 +80,62 @@ func SelfUpdateEnabled() bool {
 	default:
 		return true
 	}
+}
+
+// WebSocketEnabled returns whether the agent WebSocket client is enabled.
+// Controlled by HOSTLINK_WS_ENABLED (default: false).
+func WebSocketEnabled() bool {
+	v := strings.TrimSpace(os.Getenv("HOSTLINK_WS_ENABLED"))
+	if v == "" {
+		return false
+	}
+	switch strings.ToLower(v) {
+	case "true", "1", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
+// WebSocketURL returns the agent WebSocket gateway URL.
+// Controlled by HOSTLINK_WS_URL, otherwise derived from SH_CONTROL_PLANE_URL.
+func WebSocketURL() string {
+	if rawURL := strings.TrimSpace(os.Getenv("HOSTLINK_WS_URL")); rawURL != "" {
+		return rawURL
+	}
+
+	parsed, err := url.Parse(ControlPlaneURL())
+	if err != nil {
+		log.Warnf("invalid control plane URL %q, using as websocket URL base", ControlPlaneURL())
+		return ControlPlaneURL() + "/api/v1/agents/ws"
+	}
+
+	switch parsed.Scheme {
+	case "https":
+		parsed.Scheme = "wss"
+	case "http":
+		parsed.Scheme = "ws"
+	}
+	parsed.Path = path.Join(parsed.Path, "/api/v1/agents/ws")
+	return parsed.String()
+}
+
+// WebSocketReconnectMin returns the initial WebSocket reconnect delay.
+// Controlled by HOSTLINK_WS_RECONNECT_MIN (default: 1s, clamped to [100ms, 5m]).
+func WebSocketReconnectMin() time.Duration {
+	return parseDurationClamped("HOSTLINK_WS_RECONNECT_MIN", time.Second, 100*time.Millisecond, 5*time.Minute)
+}
+
+// WebSocketReconnectMax returns the maximum WebSocket reconnect delay.
+// Controlled by HOSTLINK_WS_RECONNECT_MAX (default: 5m, clamped to [1s, 1h]).
+func WebSocketReconnectMax() time.Duration {
+	return parseDurationClamped("HOSTLINK_WS_RECONNECT_MAX", 5*time.Minute, time.Second, time.Hour)
+}
+
+// WebSocketPingInterval returns the WebSocket keepalive ping interval.
+// Controlled by HOSTLINK_WS_PING_INTERVAL (default: 30s, clamped to [5s, 5m]).
+func WebSocketPingInterval() time.Duration {
+	return parseDurationClamped("HOSTLINK_WS_PING_INTERVAL", 30*time.Second, 5*time.Second, 5*time.Minute)
 }
 
 // UpdateCheckInterval returns the interval between update checks.

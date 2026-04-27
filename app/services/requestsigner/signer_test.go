@@ -209,6 +209,48 @@ func TestRequestSigner_SignRequest(t *testing.T) {
 	})
 }
 
+func TestRequestSigner_SignHeaders(t *testing.T) {
+	t.Run("should return required headers for websocket upgrade", func(t *testing.T) {
+		signer := setupTestSigner(t)
+
+		headers, err := signer.SignHeaders()
+
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		requiredHeaders := []string{"X-Agent-ID", "X-Timestamp", "X-Nonce", "X-Signature"}
+		for _, header := range requiredHeaders {
+			if headers.Get(header) == "" {
+				t.Errorf("expected header %s to be set", header)
+			}
+		}
+		if headers.Get("X-Agent-ID") != "test-agent-123" {
+			t.Errorf("expected X-Agent-ID test-agent-123, got %q", headers.Get("X-Agent-ID"))
+		}
+	})
+
+	t.Run("should produce signature verifiable from returned headers", func(t *testing.T) {
+		signer := setupTestSigner(t)
+
+		headers, err := signer.SignHeaders()
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		signatureBytes, err := base64.StdEncoding.DecodeString(headers.Get("X-Signature"))
+		if err != nil {
+			t.Fatalf("expected base64 signature, got %v", err)
+		}
+
+		message := fmt.Sprintf("%s|%s|%s", headers.Get("X-Agent-ID"), headers.Get("X-Timestamp"), headers.Get("X-Nonce"))
+		hashed := sha256.Sum256([]byte(message))
+		if err := rsa.VerifyPSS(&signer.privateKey.PublicKey, crypto.SHA256, hashed[:], signatureBytes, nil); err != nil {
+			t.Errorf("signature verification failed: %v", err)
+		}
+	})
+}
+
 func TestRequestSigner_GenerateSignature(t *testing.T) {
 	t.Run("should generate valid RSA-PSS signature", func(t *testing.T) {
 		signer := setupTestSigner(t)
