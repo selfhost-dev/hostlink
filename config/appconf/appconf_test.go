@@ -1,6 +1,7 @@
 package appconf
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -86,7 +87,6 @@ func TestInstallPath_CustomValue(t *testing.T) {
 	t.Setenv("HOSTLINK_INSTALL_PATH", "/opt/hostlink/bin/hostlink")
 	assert.Equal(t, "/opt/hostlink/bin/hostlink", InstallPath())
 }
-
 func TestWebSocketEnabled_DefaultFalse(t *testing.T) {
 	t.Setenv("HOSTLINK_WS_ENABLED", "")
 	assert.False(t, WebSocketEnabled())
@@ -146,4 +146,55 @@ func TestWebSocketPingInterval_Default30s(t *testing.T) {
 func TestWebSocketPingInterval_CustomValue(t *testing.T) {
 	t.Setenv("HOSTLINK_WS_PING_INTERVAL", "45s")
 	assert.Equal(t, 45*time.Second, WebSocketPingInterval())
+}
+
+func TestLocalTaskStorePath_DefaultUnderAgentStatePath(t *testing.T) {
+	stateDir := t.TempDir()
+	t.Setenv("HOSTLINK_STATE_PATH", stateDir)
+	t.Setenv("HOSTLINK_LOCAL_STORE_PATH", "")
+
+	assert.Equal(t, filepath.Join(stateDir, "task_store.db"), LocalTaskStorePath())
+}
+
+func TestLocalTaskStorePath_CustomValue(t *testing.T) {
+	customPath := filepath.Join(t.TempDir(), "custom.db")
+	t.Setenv("HOSTLINK_LOCAL_STORE_PATH", customPath)
+
+	assert.Equal(t, customPath, LocalTaskStorePath())
+}
+
+func TestLocalTaskStoreSpoolCapBytes_Default64MiB(t *testing.T) {
+	t.Setenv("HOSTLINK_LOCAL_STORE_SPOOL_CAP_BYTES", "")
+
+	assert.Equal(t, int64(64*1024*1024), LocalTaskStoreSpoolCapBytes())
+}
+
+func TestLocalTaskStoreSpoolCapBytes_CustomValue(t *testing.T) {
+	t.Setenv("HOSTLINK_LOCAL_STORE_SPOOL_CAP_BYTES", "2048")
+
+	assert.Equal(t, int64(2048), LocalTaskStoreSpoolCapBytes())
+}
+
+func TestLocalTaskStoreSpoolCapBytes_InvalidFallsToDefault(t *testing.T) {
+	t.Setenv("HOSTLINK_LOCAL_STORE_SPOOL_CAP_BYTES", "garbage")
+
+	assert.Equal(t, int64(64*1024*1024), LocalTaskStoreSpoolCapBytes())
+}
+
+func TestLocalTaskStoreTerminalReserveBytes_Default1MiB(t *testing.T) {
+	t.Setenv("HOSTLINK_LOCAL_STORE_TERMINAL_RESERVE_BYTES", "")
+
+	assert.Equal(t, int64(1024*1024), LocalTaskStoreTerminalReserveBytes())
+}
+
+func TestLocalTaskStoreTerminalReserveBytes_CustomValue(t *testing.T) {
+	t.Setenv("HOSTLINK_LOCAL_STORE_TERMINAL_RESERVE_BYTES", "4096")
+
+	assert.Equal(t, int64(4096), LocalTaskStoreTerminalReserveBytes())
+}
+
+func TestLocalTaskStoreTerminalReserveBytes_InvalidFallsToDefault(t *testing.T) {
+	t.Setenv("HOSTLINK_LOCAL_STORE_TERMINAL_RESERVE_BYTES", "garbage")
+
+	assert.Equal(t, int64(1024*1024), LocalTaskStoreTerminalReserveBytes())
 }

@@ -11,6 +11,7 @@ import (
 	"hostlink/app/jobs/taskjob"
 	"hostlink/app/services/agentstate"
 	"hostlink/app/services/heartbeat"
+	"hostlink/app/services/localtaskstore"
 	"hostlink/app/services/metrics"
 	"hostlink/app/services/requestsigner"
 	"hostlink/app/services/taskfetcher"
@@ -251,6 +252,13 @@ func runServer(ctx context.Context, cmd *cli.Command) error {
 	// Agent-related jobs run in goroutine after registration
 	go func() {
 		ctx := context.Background()
+		localStore, err := recoverLocalTaskStore()
+		if err != nil {
+			log.Printf("failed to initialize local task store: %v", err)
+		} else {
+			defer localStore.Close()
+		}
+
 		registeredChan := make(chan bool, 1)
 
 		registrationJob := registrationjob.New()
@@ -333,6 +341,19 @@ func newDefaultWebSocketRuntime() (webSocketRuntime, error) {
 		ReconnectMax:   appconf.WebSocketReconnectMax(),
 		PingInterval:   appconf.WebSocketPingInterval(),
 	})
+}
+
+func recoverLocalTaskStore() (*localtaskstore.Store, error) {
+	store, err := localtaskstore.NewDefault()
+	if err != nil {
+		return nil, err
+	}
+
+	if err := store.MarkInterruptedRunningTasks(); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	return store, nil
 }
 
 func startSelfUpdateJob(ctx context.Context) {
