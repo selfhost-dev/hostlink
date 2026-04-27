@@ -1,0 +1,81 @@
+package localtaskstore
+
+import (
+	"errors"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestAppendOutputChunkRotatesOldestChunksAndMarksTruncated(t *testing.T) {
+	store := newTestStore(t, 16, 4)
+
+	appendChunk(t, store, "msg-1", "task-1", 1, "12345")
+	appendChunk(t, store, "msg-2", "task-1", 2, "67890")
+	appendChunk(t, store, "msg-3", "task-1", 3, "abcde")
+
+	messages, err := store.UnackedMessages()
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	require.Equal(t, "msg-2", messages[0].MessageID)
+	require.Equal(t, "msg-3", messages[1].MessageID)
+
+	state, err := store.TaskState("task-1", "attempt-1")
+	require.NoError(t, err)
+	require.True(t, state.LocalOutputTruncated)
+}
+
+func TestRecordFinalPreservedUnderChunkCapPressure(t *testing.T) {
+	store := newTestStore(t, 14, 4)
+
+	appendChunk(t, store, "msg-1", "task-1", 1, "12345")
+	appendChunk(t, store, "msg-2", "task-1", 2, "67890")
+	require.NoError(t, store.RecordFinal(FinalResult{
+		MessageID:          "msg-final-1",
+		TaskID:             "task-1",
+		ExecutionAttemptID: "attempt-1",
+		Status:             "completed",
+		Payload:            "done",
+	}))
+
+	messages, err := store.UnackedMessages()
+	require.NoError(t, err)
+	require.Contains(t, messageIDs(messages), "msg-final-1")
+}
+
+func TestRecordReceivedFailsWhenTerminalReserveUnavailable(t *testing.T) {
+	store := newTestStore(t, 8, 4)
+	require.NoError(t, store.RecordFinal(FinalResult{
+		MessageID:          "msg-final-1",
+		TaskID:             "task-1",
+		ExecutionAttemptID: "attempt-1",
+		Status:             "completed",
+		Payload:            "12345",
+	}))
+
+	_, err := store.RecordReceived(TaskReceipt{TaskID: "task-2", ExecutionAttemptID: "attempt-1"})
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrTerminalReserveUnavailable))
+}
+
+func messageIDs(messages []OutboxMessage) []string {
+	ids := make([]string, 0, len(messages))
+	for _, message := range messages {
+		ids = append(ids, message.MessageID)
+	}
+	return ids
+}
+
+func appendChunk(t *testing.T, store *Store, messageID, taskID string, sequence int64, payload string) {
+	t.Helper()
+
+	require.NoError(t, store.AppendOutputChunk(OutputChunk{
+		MessageID:          messageID,
+		TaskID:             taskID,
+		ExecutionAttemptID: "attempt-1",
+		Stream:             "stdout",
+		Sequence:           sequence,
+		Payload:            payload,
+		ByteCount:          int64(len(payload)),
+	}))
+}

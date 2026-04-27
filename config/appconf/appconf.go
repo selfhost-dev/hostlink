@@ -5,6 +5,8 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -56,6 +58,21 @@ func AgentStatePath() string {
 		return path
 	}
 	return "/var/lib/hostlink"
+}
+
+func LocalTaskStorePath() string {
+	if path := strings.TrimSpace(os.Getenv("HOSTLINK_LOCAL_STORE_PATH")); path != "" {
+		return path
+	}
+	return filepath.Join(AgentStatePath(), "task_store.db")
+}
+
+func LocalTaskStoreSpoolCapBytes() int64 {
+	return parseInt64Positive("HOSTLINK_LOCAL_STORE_SPOOL_CAP_BYTES", 64*1024*1024)
+}
+
+func LocalTaskStoreTerminalReserveBytes() int64 {
+	return parseInt64Positive("HOSTLINK_LOCAL_STORE_TERMINAL_RESERVE_BYTES", 1024*1024)
 }
 
 // InstallPath returns the target install path for the hostlink binary.
@@ -182,6 +199,19 @@ func parseDurationClamped(envVar string, defaultVal, min, max time.Duration) tim
 		return max
 	}
 	return d
+}
+
+func parseInt64Positive(envVar string, defaultVal int64) int64 {
+	v := strings.TrimSpace(os.Getenv(envVar))
+	if v == "" {
+		return defaultVal
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n <= 0 {
+		log.Warnf("invalid %s value %q, using default %d", envVar, v, defaultVal)
+		return defaultVal
+	}
+	return n
 }
 
 func init() {
