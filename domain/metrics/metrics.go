@@ -6,6 +6,7 @@ const (
 	MetricTypeNetwork            = "network"
 	MetricTypePostgreSQLDatabase = "postgresql.database"
 	MetricTypeStorage            = "storage"
+	MetricTypePgBouncer          = "pgbouncer.stats"
 )
 
 type MetricPayload struct {
@@ -52,6 +53,22 @@ type PostgreSQLDatabaseMetrics struct {
 	BlocksReadPerSecond   float64 `json:"blocks_read_per_second"`
 	ReplicationLagSeconds int     `json:"replication_lag_seconds"`
 	ReplicationConnected  *bool  `json:"replication_connected,omitempty"`
+}
+
+// PgBouncerMetrics holds aggregated connection pool statistics collected
+// via the PgBouncer admin console (SHOW POOLS + SHOW STATS).
+// Up is false when PgBouncer is not running or unreachable.
+type PgBouncerMetrics struct {
+	Up               bool    `json:"up"`
+	ClientsActive    int     `json:"clients_active"`
+	ClientsWaiting   int     `json:"clients_waiting"`
+	ServersActive    int     `json:"servers_active"`
+	ServersIdle      int     `json:"servers_idle"`
+	MaxWaitMs        float64 `json:"max_wait_ms"`
+	AvgQueryTimeMs   float64 `json:"avg_query_time_ms"`
+	AvgWaitTimeMs    float64 `json:"avg_wait_time_ms"`
+	TotalQueriesPerSec float64 `json:"total_queries_per_sec"`
+	PoolCount        int     `json:"pool_count"`
 }
 
 type StorageMetrics struct {
