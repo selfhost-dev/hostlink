@@ -104,18 +104,11 @@ func (c *collector) collectPools(ctx context.Context, db *sql.DB, m *metrics.PgB
 		m.ServersActive += parseInt(row["sv_active"])
 		m.ServersIdle += parseInt(row["sv_idle"])
 
-		// maxwait_us (microseconds) is available in PgBouncer ≥ 1.8;
-		// fall back to maxwait (seconds) for older versions.
-		if us := parseFloat(row["maxwait_us"]); us > 0 {
-			waitMs := us / 1000
-			if waitMs > m.MaxWaitMs {
-				m.MaxWaitMs = waitMs
-			}
-		} else if s := parseFloat(row["maxwait"]); s > 0 {
-			waitMs := s * 1000
-			if waitMs > m.MaxWaitMs {
-				m.MaxWaitMs = waitMs
-			}
+		// maxwait is whole seconds; maxwait_us is the sub-second remainder in
+		// microseconds (PgBouncer ≥ 1.8). Combine both to get the full wait.
+		waitMs := parseFloat(row["maxwait"])*1000 + parseFloat(row["maxwait_us"])/1000
+		if waitMs > m.MaxWaitMs {
+			m.MaxWaitMs = waitMs
 		}
 	}
 
@@ -123,7 +116,8 @@ func (c *collector) collectPools(ctx context.Context, db *sql.DB, m *metrics.PgB
 }
 
 // collectStats reads aggregate throughput and latency from SHOW STATS.
-// Averages are computed across all non-meta database rows.
+// Latency averages are weighted by each database's avg_query_count so that
+// high-traffic databases dominate the aggregate rather than row count.
 func (c *collector) collectStats(ctx context.Context, db *sql.DB, m *metrics.PgBouncerMetrics) error {
 	rows, err := db.QueryContext(ctx, "SHOW STATS")
 	if err != nil {
@@ -136,23 +130,25 @@ func (c *collector) collectStats(ctx context.Context, db *sql.DB, m *metrics.PgB
 		return err
 	}
 
-	var rowCount int
-	var sumQueryTime, sumWaitTime float64
+	// Weighted sums: weight each database's avg latency by its query rate so
+	// high-traffic databases dominate the aggregate, not row count.
+	var totalWeight, weightedQueryTime, weightedWaitTime float64
 
 	for rows.Next() {
 		row := scanRowToMap(cols, rows)
 		if row["database"] == "pgbouncer" {
 			continue
 		}
-		rowCount++
-		m.TotalQueriesPerSec += parseFloat(row["avg_query_count"])
-		sumQueryTime += parseFloat(row["avg_query_time"]) // microseconds
-		sumWaitTime += parseFloat(row["avg_wait_time"])   // microseconds
+		qps := parseFloat(row["avg_query_count"])
+		m.TotalQueriesPerSec += qps
+		weightedQueryTime += parseFloat(row["avg_query_time"]) * qps // microseconds · qps
+		weightedWaitTime += parseFloat(row["avg_wait_time"]) * qps   // microseconds · qps
+		totalWeight += qps
 	}
 
-	if rowCount > 0 {
-		m.AvgQueryTimeMs = sumQueryTime / float64(rowCount) / 1000
-		m.AvgWaitTimeMs = sumWaitTime / float64(rowCount) / 1000
+	if totalWeight > 0 {
+		m.AvgQueryTimeMs = weightedQueryTime / totalWeight / 1000
+		m.AvgWaitTimeMs = weightedWaitTime / totalWeight / 1000
 	}
 
 	return rows.Err()
