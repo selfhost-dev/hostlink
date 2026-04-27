@@ -2,8 +2,10 @@ package wsclient
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"hostlink/app/services/localtaskstore"
 	"math/rand/v2"
 	"net/http"
 	"sync"
@@ -38,6 +40,7 @@ type Config struct {
 	ReconnectMax   time.Duration
 	PingInterval   time.Duration
 	SleepFunc      SleepFunc
+	ResultOutbox   localtaskstore.ResultOutbox
 }
 
 type Client struct {
@@ -51,8 +54,11 @@ type Client struct {
 	sleep        SleepFunc
 
 	mu      sync.RWMutex
+	writeMu sync.Mutex
 	active  bool
 	lastAck *wsprotocol.AckPayload
+	conn    Conn
+	outbox  localtaskstore.ResultOutbox
 }
 
 func New(cfg Config) (*Client, error) {
@@ -92,6 +98,7 @@ func New(cfg Config) (*Client, error) {
 		reconnectMax: cfg.ReconnectMax,
 		pingInterval: cfg.PingInterval,
 		sleep:        cfg.SleepFunc,
+		outbox:       cfg.ResultOutbox,
 	}, nil
 }
 
@@ -148,10 +155,12 @@ func (c *Client) runOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	c.setConn(conn)
 	defer conn.Close()
+	defer c.setConn(nil)
 
 	hello := c.buildHello()
-	if err := conn.WriteEnvelope(ctx, hello); err != nil {
+	if err := c.writeEnvelope(ctx, conn, hello); err != nil {
 		return err
 	}
 
@@ -169,7 +178,7 @@ func (c *Client) runOnce(ctx context.Context) error {
 		case err := <-readErr:
 			return err
 		case <-ticker.C:
-			if err := conn.Ping(ctx); err != nil {
+			if err := c.ping(ctx, conn); err != nil {
 				_ = conn.Close()
 				return err
 			}
@@ -200,6 +209,9 @@ func (c *Client) readLoop(ctx context.Context, conn Conn, helloMessageID string)
 			}
 			if ack.AckedMessageID == helloMessageID {
 				c.setActive(true)
+				if err := c.replayUnacked(ctx, conn); err != nil {
+					return err
+				}
 			}
 			c.setLastAck(&ack)
 		case wsprotocol.TypeAck:
@@ -207,13 +219,68 @@ func (c *Client) readLoop(ctx context.Context, conn Conn, helloMessageID string)
 			if err != nil {
 				return err
 			}
+			if c.outbox != nil && ack.AckedMessageID != "" {
+				if err := c.outbox.AckMessage(ack.AckedMessageID); err != nil {
+					return err
+				}
+			}
 			c.setLastAck(&ack)
 		case wsprotocol.TypeError:
+			payload, err := wsprotocol.DecodePayload[wsprotocol.ErrorPayload](env)
+			if err != nil {
+				return err
+			}
+			if payload.Retryable {
+				continue
+			}
 			return fmt.Errorf("websocket protocol error: %s", env.MessageID)
 		default:
 			return fmt.Errorf("unsupported inbound websocket message type: %s", env.Type)
 		}
 	}
+}
+
+func (c *Client) SendOutput(ctx context.Context, chunk localtaskstore.OutputChunk) error {
+	if c.outbox == nil {
+		return fmt.Errorf("result outbox is not configured")
+	}
+	if err := c.outbox.AppendOutputChunk(chunk); err != nil {
+		return err
+	}
+	return c.sendIfActive(ctx, envelopeFromOutboxMessage(c.agentID, localtaskstore.OutboxMessage{
+		MessageID:          chunk.MessageID,
+		TaskID:             chunk.TaskID,
+		ExecutionAttemptID: chunk.ExecutionAttemptID,
+		Type:               localtaskstore.OutboxMessageTypeOutput,
+		Stream:             chunk.Stream,
+		Sequence:           chunk.Sequence,
+		Payload:            chunk.Payload,
+		ByteCount:          chunk.ByteCount,
+	}))
+}
+
+func (c *Client) SendFinal(ctx context.Context, result localtaskstore.FinalResult) error {
+	if c.outbox == nil {
+		return fmt.Errorf("result outbox is not configured")
+	}
+	if err := c.outbox.RecordFinal(result); err != nil {
+		return err
+	}
+	err := c.sendIfActive(ctx, envelopeFromOutboxMessage(c.agentID, localtaskstore.OutboxMessage{
+		MessageID:          result.MessageID,
+		TaskID:             result.TaskID,
+		ExecutionAttemptID: result.ExecutionAttemptID,
+		Type:               localtaskstore.OutboxMessageTypeFinal,
+		Payload:            result.Payload,
+		ByteCount:          int64(len(result.Payload)),
+	}))
+	if err != nil {
+		return err
+	}
+	if !c.IsActive() {
+		return fmt.Errorf("websocket result channel is inactive")
+	}
+	return nil
 }
 
 func (c *Client) buildHello() wsprotocol.Envelope {
@@ -233,10 +300,92 @@ func (c *Client) setActive(active bool) {
 	c.active = active
 }
 
+func (c *Client) setConn(conn Conn) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.conn = conn
+}
+
 func (c *Client) setLastAck(ack *wsprotocol.AckPayload) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.lastAck = ack
+}
+
+func (c *Client) sendIfActive(ctx context.Context, env wsprotocol.Envelope) error {
+	c.mu.RLock()
+	conn := c.conn
+	active := c.active
+	c.mu.RUnlock()
+	if conn == nil || !active {
+		return nil
+	}
+	return c.writeEnvelope(ctx, conn, env)
+}
+
+func (c *Client) replayUnacked(ctx context.Context, conn Conn) error {
+	if c.outbox == nil {
+		return nil
+	}
+	messages, err := c.outbox.UnackedMessages()
+	if err != nil {
+		return err
+	}
+	for _, message := range messages {
+		if err := c.writeEnvelope(ctx, conn, envelopeFromOutboxMessage(c.agentID, message)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Client) writeEnvelope(ctx context.Context, conn Conn, env wsprotocol.Envelope) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return conn.WriteEnvelope(ctx, env)
+}
+
+func (c *Client) ping(ctx context.Context, conn Conn) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return conn.Ping(ctx)
+}
+
+func envelopeFromOutboxMessage(agentID string, message localtaskstore.OutboxMessage) wsprotocol.Envelope {
+	now := time.Now().UTC().Format(time.RFC3339)
+	if message.Type == localtaskstore.OutboxMessageTypeOutput {
+		sequence := int(message.Sequence)
+		return wsprotocol.Envelope{
+			ProtocolVersion:    wsprotocol.ProtocolVersion,
+			MessageID:          message.MessageID,
+			Type:               wsprotocol.TypeTaskOutput,
+			AgentID:            agentID,
+			TaskID:             message.TaskID,
+			ExecutionAttemptID: message.ExecutionAttemptID,
+			Sequence:           &sequence,
+			SentAt:             now,
+			Payload: map[string]any{
+				"stream":     message.Stream,
+				"data":       message.Payload,
+				"byte_count": message.ByteCount,
+			},
+		}
+	}
+
+	payload := map[string]any{}
+	if message.Payload != "" {
+		_ = json.Unmarshal([]byte(message.Payload), &payload)
+	}
+	return wsprotocol.Envelope{
+		ProtocolVersion:    wsprotocol.ProtocolVersion,
+		MessageID:          message.MessageID,
+		Type:               wsprotocol.TypeTaskFinal,
+		AgentID:            agentID,
+		TaskID:             message.TaskID,
+		ExecutionAttemptID: message.ExecutionAttemptID,
+		SentAt:             now,
+		Payload:            payload,
+	}
 }
 
 func sleepContext(ctx context.Context, d time.Duration) error {

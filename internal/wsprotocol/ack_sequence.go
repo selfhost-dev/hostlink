@@ -17,17 +17,19 @@ type AckOptions struct {
 }
 
 type ErrorPayload struct {
-	Code             string `json:"code"`
-	Message          string `json:"message"`
-	Retryable        bool   `json:"retryable"`
-	RelatedMessageID string `json:"related_message_id,omitempty"`
+	Code                    string `json:"code"`
+	Message                 string `json:"message"`
+	Retryable               bool   `json:"retryable"`
+	RelatedMessageID        string `json:"related_message_id,omitempty"`
+	HighestAcceptedSequence *int   `json:"highest_accepted_sequence,omitempty"`
 }
 
 type ErrorOptions struct {
-	Code             string
-	Message          string
-	Retryable        bool
-	RelatedMessageID string
+	Code                    string
+	Message                 string
+	Retryable               bool
+	RelatedMessageID        string
+	HighestAcceptedSequence *int
 }
 
 type MessageRecordResult int
@@ -76,10 +78,11 @@ func BuildAck(opts AckOptions) AckPayload {
 
 func BuildError(opts ErrorOptions) ErrorPayload {
 	return ErrorPayload{
-		Code:             opts.Code,
-		Message:          opts.Message,
-		Retryable:        opts.Retryable,
-		RelatedMessageID: opts.RelatedMessageID,
+		Code:                    opts.Code,
+		Message:                 opts.Message,
+		Retryable:               opts.Retryable,
+		RelatedMessageID:        opts.RelatedMessageID,
+		HighestAcceptedSequence: opts.HighestAcceptedSequence,
 	}
 }
 

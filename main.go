@@ -267,7 +267,14 @@ func runServer(ctx context.Context, cmd *cli.Command) error {
 		// Wait for registration to complete
 		<-registeredChan
 		log.Println("Agent registered, starting task job...")
-		startWebSocketClientIfEnabled(ctx, newDefaultWebSocketRuntime)
+		var resultChannel taskjob.ResultChannel
+		startWebSocketClientIfEnabled(ctx, func() (webSocketRuntime, error) {
+			runtime, err := newDefaultWebSocketRuntime(localStore)
+			if err == nil {
+				resultChannel = runtime.(taskjob.ResultChannel)
+			}
+			return runtime, err
+		})
 
 		fetcher, err := taskfetcher.NewDefault()
 		if err != nil {
@@ -280,7 +287,7 @@ func runServer(ctx context.Context, cmd *cli.Command) error {
 			return
 		}
 		taskJob := taskjob.New()
-		taskJob.Register(ctx, fetcher, reporter)
+		taskJob.Register(ctx, fetcher, reporter, resultChannel)
 
 		metricsReporter, err := metrics.New()
 		if err != nil {
@@ -328,10 +335,13 @@ func startWebSocketClientIfEnabled(ctx context.Context, constructor func() (webS
 	return true
 }
 
-func newDefaultWebSocketRuntime() (webSocketRuntime, error) {
+func newDefaultWebSocketRuntime(localStore *localtaskstore.Store) (webSocketRuntime, error) {
 	state := agentstate.New(appconf.AgentStatePath())
 	if err := state.Load(); err != nil {
 		return nil, fmt.Errorf("failed to load agent state: %w", err)
+	}
+	if localStore == nil {
+		return nil, fmt.Errorf("local task store is not available")
 	}
 	return wsclient.New(wsclient.Config{
 		URL:            appconf.WebSocketURL(),
@@ -340,6 +350,7 @@ func newDefaultWebSocketRuntime() (webSocketRuntime, error) {
 		ReconnectMin:   appconf.WebSocketReconnectMin(),
 		ReconnectMax:   appconf.WebSocketReconnectMax(),
 		PingInterval:   appconf.WebSocketPingInterval(),
+		ResultOutbox:   localStore,
 	})
 }
 

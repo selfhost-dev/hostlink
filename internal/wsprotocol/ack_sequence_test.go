@@ -52,10 +52,11 @@ func TestSampleAckPayloadUsesCanonicalFieldNames(t *testing.T) {
 
 func TestErrorPayload(t *testing.T) {
 	payload := BuildError(ErrorOptions{
-		Code:             "output_sequence_gap",
-		Message:          "expected sequence 8",
-		Retryable:        true,
-		RelatedMessageID: "msg_123",
+		Code:                    "output_sequence_gap",
+		Message:                 "expected sequence 8",
+		Retryable:               true,
+		RelatedMessageID:        "msg_123",
+		HighestAcceptedSequence: intPtr(7),
 	})
 
 	if payload.Code != "output_sequence_gap" {
@@ -66,6 +67,9 @@ func TestErrorPayload(t *testing.T) {
 	}
 	if payload.RelatedMessageID != "msg_123" {
 		t.Errorf("related_message_id = %q, want msg_123", payload.RelatedMessageID)
+	}
+	if payload.HighestAcceptedSequence == nil || *payload.HighestAcceptedSequence != 7 {
+		t.Fatalf("highest_accepted_sequence = %v, want 7", payload.HighestAcceptedSequence)
 	}
 }
 
