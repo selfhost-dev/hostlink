@@ -18,6 +18,7 @@ import (
 	"hostlink/app/services/updatecheck"
 	"hostlink/app/services/updatedownload"
 	"hostlink/app/services/updatepreflight"
+	"hostlink/app/services/wsclient"
 	"hostlink/cmd/upgrade"
 	"hostlink/config"
 	"hostlink/config/appconf"
@@ -258,6 +259,7 @@ func runServer(ctx context.Context, cmd *cli.Command) error {
 		// Wait for registration to complete
 		<-registeredChan
 		log.Println("Agent registered, starting task job...")
+		startWebSocketClientIfEnabled(ctx, newDefaultWebSocketRuntime)
 
 		fetcher, err := taskfetcher.NewDefault()
 		if err != nil {
@@ -295,6 +297,42 @@ func runServer(ctx context.Context, cmd *cli.Command) error {
 	}()
 
 	return e.Start(fmt.Sprintf(":%s", appconf.Port()))
+}
+
+type webSocketRuntime interface {
+	Start(context.Context) error
+}
+
+func startWebSocketClientIfEnabled(ctx context.Context, constructor func() (webSocketRuntime, error)) bool {
+	if !appconf.WebSocketEnabled() {
+		return false
+	}
+	runtime, err := constructor()
+	if err != nil {
+		log.Printf("failed to initialize websocket client: %v", err)
+		return false
+	}
+	go func() {
+		if err := runtime.Start(ctx); err != nil {
+			log.Printf("websocket client stopped with error: %v", err)
+		}
+	}()
+	return true
+}
+
+func newDefaultWebSocketRuntime() (webSocketRuntime, error) {
+	state := agentstate.New(appconf.AgentStatePath())
+	if err := state.Load(); err != nil {
+		return nil, fmt.Errorf("failed to load agent state: %w", err)
+	}
+	return wsclient.New(wsclient.Config{
+		URL:            appconf.WebSocketURL(),
+		AgentState:     state,
+		PrivateKeyPath: appconf.AgentPrivateKeyPath(),
+		ReconnectMin:   appconf.WebSocketReconnectMin(),
+		ReconnectMax:   appconf.WebSocketReconnectMax(),
+		PingInterval:   appconf.WebSocketPingInterval(),
+	})
 }
 
 func startSelfUpdateJob(ctx context.Context) {
