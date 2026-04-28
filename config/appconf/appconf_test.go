@@ -102,6 +102,36 @@ func TestWebSocketEnabled_ExplicitFalse(t *testing.T) {
 	assert.False(t, WebSocketEnabled())
 }
 
+func TestWebSocketResultsEnabled_DefaultFalse(t *testing.T) {
+	t.Setenv("HOSTLINK_WS_RESULTS_ENABLED", "")
+	assert.False(t, WebSocketResultsEnabled())
+}
+
+func TestWebSocketResultsEnabled_ExplicitTrue(t *testing.T) {
+	t.Setenv("HOSTLINK_WS_RESULTS_ENABLED", "true")
+	assert.True(t, WebSocketResultsEnabled())
+}
+
+func TestWebSocketDeliveryEnabled_DefaultFalse(t *testing.T) {
+	t.Setenv("HOSTLINK_WS_DELIVERY_ENABLED", "")
+	assert.False(t, WebSocketDeliveryEnabled())
+}
+
+func TestWebSocketDeliveryEnabled_ExplicitTrue(t *testing.T) {
+	t.Setenv("HOSTLINK_WS_DELIVERY_ENABLED", "1")
+	assert.True(t, WebSocketDeliveryEnabled())
+}
+
+func TestWebSocketPollingFallbackThreshold_Default30s(t *testing.T) {
+	t.Setenv("HOSTLINK_WS_POLLING_FALLBACK_THRESHOLD", "")
+	assert.Equal(t, 30*time.Second, WebSocketPollingFallbackThreshold())
+}
+
+func TestWebSocketPollingFallbackThreshold_CustomValue(t *testing.T) {
+	t.Setenv("HOSTLINK_WS_POLLING_FALLBACK_THRESHOLD", "5s")
+	assert.Equal(t, 5*time.Second, WebSocketPollingFallbackThreshold())
+}
+
 func TestWebSocketURL_DerivesWSSFromHTTPSControlPlane(t *testing.T) {
 	t.Setenv("HOSTLINK_WS_URL", "")
 	t.Setenv("SH_CONTROL_PLANE_URL", "https://api.selfhost.dev")

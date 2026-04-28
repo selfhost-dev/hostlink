@@ -102,16 +102,25 @@ func SelfUpdateEnabled() bool {
 // WebSocketEnabled returns whether the agent WebSocket client is enabled.
 // Controlled by HOSTLINK_WS_ENABLED (default: false).
 func WebSocketEnabled() bool {
-	v := strings.TrimSpace(os.Getenv("HOSTLINK_WS_ENABLED"))
-	if v == "" {
-		return false
-	}
-	switch strings.ToLower(v) {
-	case "true", "1", "yes":
-		return true
-	default:
-		return false
-	}
+	return parseBoolEnabled("HOSTLINK_WS_ENABLED", false)
+}
+
+// WebSocketResultsEnabled returns whether task output and final messages use WebSocket.
+// Controlled by HOSTLINK_WS_RESULTS_ENABLED (default: false).
+func WebSocketResultsEnabled() bool {
+	return parseBoolEnabled("HOSTLINK_WS_RESULTS_ENABLED", false)
+}
+
+// WebSocketDeliveryEnabled returns whether task delivery uses WebSocket.
+// Controlled by HOSTLINK_WS_DELIVERY_ENABLED (default: false).
+func WebSocketDeliveryEnabled() bool {
+	return parseBoolEnabled("HOSTLINK_WS_DELIVERY_ENABLED", false)
+}
+
+// WebSocketPollingFallbackThreshold returns how long delivery disconnects may pause polling.
+// Controlled by HOSTLINK_WS_POLLING_FALLBACK_THRESHOLD (default: 30s, clamped to [0s, 5m]).
+func WebSocketPollingFallbackThreshold() time.Duration {
+	return parseDurationClamped("HOSTLINK_WS_POLLING_FALLBACK_THRESHOLD", 30*time.Second, 0, 5*time.Minute)
 }
 
 // WebSocketURL returns the agent WebSocket gateway URL.
@@ -212,6 +221,19 @@ func parseInt64Positive(envVar string, defaultVal int64) int64 {
 		return defaultVal
 	}
 	return n
+}
+
+func parseBoolEnabled(envVar string, defaultVal bool) bool {
+	v := strings.TrimSpace(os.Getenv(envVar))
+	if v == "" {
+		return defaultVal
+	}
+	switch strings.ToLower(v) {
+	case "true", "1", "yes":
+		return true
+	default:
+		return false
+	}
 }
 
 func init() {

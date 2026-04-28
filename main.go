@@ -14,6 +14,7 @@ import (
 	"hostlink/app/services/localtaskstore"
 	"hostlink/app/services/metrics"
 	"hostlink/app/services/requestsigner"
+	"hostlink/app/services/rollout"
 	"hostlink/app/services/taskfetcher"
 	"hostlink/app/services/taskreporter"
 	"hostlink/app/services/updatecheck"
@@ -267,10 +268,11 @@ func runServer(ctx context.Context, cmd *cli.Command) error {
 		// Wait for registration to complete
 		<-registeredChan
 		log.Println("Agent registered, starting task job...")
+		deliveryCoordinator := rollout.NewCoordinator(appconf.WebSocketDeliveryEnabled(), appconf.WebSocketPollingFallbackThreshold())
 		var resultChannel taskjob.ResultChannel
-		taskJob := taskjob.New()
+		taskJob := taskjob.NewJobWithConf(taskjob.TaskJobConfig{PollingGate: deliveryCoordinator})
 		startWebSocketClientIfEnabled(ctx, func() (webSocketRuntime, error) {
-			runtime, err := newDefaultWebSocketRuntime(localStore, taskJob)
+			runtime, err := newDefaultWebSocketRuntime(localStore, taskJob, deliveryCoordinator)
 			if err == nil {
 				resultChannel = runtime.(taskjob.ResultChannel)
 			}
@@ -335,7 +337,7 @@ func startWebSocketClientIfEnabled(ctx context.Context, constructor func() (webS
 	return true
 }
 
-func newDefaultWebSocketRuntime(localStore *localtaskstore.Store, enqueuer wsclient.TaskEnqueuer) (webSocketRuntime, error) {
+func newDefaultWebSocketRuntime(localStore *localtaskstore.Store, enqueuer wsclient.TaskEnqueuer, deliveryCoordinator wsclient.DeliveryCoordinator) (webSocketRuntime, error) {
 	state := agentstate.New(appconf.AgentStatePath())
 	if err := state.Load(); err != nil {
 		return nil, fmt.Errorf("failed to load agent state: %w", err)
@@ -344,15 +346,19 @@ func newDefaultWebSocketRuntime(localStore *localtaskstore.Store, enqueuer wscli
 		return nil, fmt.Errorf("local task store is not available")
 	}
 	return wsclient.New(wsclient.Config{
-		URL:            appconf.WebSocketURL(),
-		AgentState:     state,
-		PrivateKeyPath: appconf.AgentPrivateKeyPath(),
-		ReconnectMin:   appconf.WebSocketReconnectMin(),
-		ReconnectMax:   appconf.WebSocketReconnectMax(),
-		PingInterval:   appconf.WebSocketPingInterval(),
-		ResultOutbox:   localStore,
-		ReceiptStore:   localStore,
-		TaskEnqueuer:   enqueuer,
+		URL:                 appconf.WebSocketURL(),
+		AgentState:          state,
+		PrivateKeyPath:      appconf.AgentPrivateKeyPath(),
+		ReconnectMin:        appconf.WebSocketReconnectMin(),
+		ReconnectMax:        appconf.WebSocketReconnectMax(),
+		PingInterval:        appconf.WebSocketPingInterval(),
+		ResultOutbox:        localStore,
+		ReceiptStore:        localStore,
+		RecoveryStore:       localStore,
+		TaskEnqueuer:        enqueuer,
+		ResultsEnabled:      appconf.WebSocketResultsEnabled(),
+		DeliveryEnabled:     appconf.WebSocketDeliveryEnabled(),
+		DeliveryCoordinator: deliveryCoordinator,
 	})
 }
 
