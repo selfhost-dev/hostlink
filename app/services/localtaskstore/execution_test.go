@@ -51,6 +51,22 @@ func TestTaskStateTreatsNewAttemptAsDistinct(t *testing.T) {
 	require.False(t, state.Exists)
 }
 
+func TestDiscardReceivedRemovesOnlyReceivedAttempt(t *testing.T) {
+	store := newTestStore(t, 1024*1024, 1024)
+
+	_, err := store.RecordReceived(TaskReceipt{TaskID: "task-1", ExecutionAttemptID: "attempt-received"})
+	require.NoError(t, err)
+	require.NoError(t, store.RecordStarted("task-1", "attempt-running"))
+
+	require.NoError(t, store.DiscardReceived("task-1", "attempt-received"))
+	received, err := store.TaskState("task-1", "attempt-received")
+	require.NoError(t, err)
+	require.False(t, received.Exists)
+	running, err := store.TaskState("task-1", "attempt-running")
+	require.NoError(t, err)
+	require.Equal(t, TaskStatusRunning, running.Status)
+}
+
 func openTestStore(t *testing.T, path string, spoolCapBytes, terminalReserveBytes int64) *Store {
 	t.Helper()
 

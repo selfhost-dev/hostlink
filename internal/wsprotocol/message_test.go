@@ -189,6 +189,69 @@ func TestPayloadValidation(t *testing.T) {
 	})
 }
 
+func TestHelloPayloadUsesReconnectSnapshotShape(t *testing.T) {
+	payload := HelloPayload{
+		RunningTask: &RunningTaskSnapshot{
+			TaskID:             "task-1",
+			ExecutionAttemptID: "attempt-1",
+			StartedAt:          "2026-04-28T00:00:00Z",
+			LastOutputSequence: map[string]int{"stdout": 2, "stderr": 1},
+		},
+		ReceivedNotStarted: []ReceivedNotStartedAttempt{{TaskID: "task-2", ExecutionAttemptID: "attempt-2", ReceivedAt: "2026-04-28T00:00:01Z"}},
+		UnackedFinals: []UnackedFinalSnapshot{{
+			MessageID:          "msg-final-1",
+			TaskID:             "task-3",
+			ExecutionAttemptID: "attempt-3",
+			Status:             FinalStatusCompleted,
+		}},
+		UnackedOutput: []UnackedOutputRange{{TaskID: "task-1", ExecutionAttemptID: "attempt-1", Stream: StreamStdout, FirstSequence: 2, LastSequence: 4}},
+		SpoolStatus:   SpoolStatus{BytesUsed: 128, ByteCap: 1024, HasRotatedChunks: true},
+		ClientVersion: "test-version",
+	}
+
+	if err := payload.Validate(); err != nil {
+		t.Fatalf("expected hello payload to validate, got %v", err)
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal hello payload: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal hello payload: %v", err)
+	}
+	if !reflect.DeepEqual(sortedKeys(decoded), []string{"client_version", "received_not_started", "running_task", "spool_status", "unacked_finals", "unacked_output"}) {
+		t.Fatalf("hello payload fields = %v", sortedKeys(decoded))
+	}
+	lastOutput, ok := decoded["running_task"].(map[string]any)["last_output_sequence"].(map[string]any)
+	if !ok || lastOutput["stdout"] != float64(2) || lastOutput["stderr"] != float64(1) {
+		t.Fatalf("last_output_sequence = %#v", decoded["running_task"])
+	}
+}
+
+func TestHelloAckPayloadUsesReconciliationDirectiveShape(t *testing.T) {
+	payload := HelloAckPayload{
+		AckedMessageID:              "msg-hello",
+		AckedType:                   TypeAgentHello,
+		AcknowledgedFinalMessageIDs: []string{"msg-final-1"},
+		DiscardedAttempts:           []DiscardedAttempt{{TaskID: "task-2", ExecutionAttemptID: "attempt-2", Reason: "stale_attempt"}},
+		OutputReplay:                []OutputReplayDirective{{TaskID: "task-1", ExecutionAttemptID: "attempt-1", Stream: StreamStderr, NextSequence: 14}},
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal hello ack: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal hello ack: %v", err)
+	}
+	if !reflect.DeepEqual(sortedKeys(decoded), []string{"acked_message_id", "acked_type", "acknowledged_final_message_ids", "discarded_attempts", "output_replay"}) {
+		t.Fatalf("hello ack fields = %v", sortedKeys(decoded))
+	}
+}
+
 func intPtr(value int) *int {
 	return &value
 }

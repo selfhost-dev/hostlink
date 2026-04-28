@@ -38,8 +38,10 @@ func TestClientSendsHelloAndMarksActiveAfterHelloAck(t *testing.T) {
 	if written.AgentID != "agent_ws_test" {
 		t.Fatalf("written agent_id = %q", written.AgentID)
 	}
-	if len(written.Payload) != 0 {
-		t.Fatalf("hello payload = %#v, want empty object", written.Payload)
+	for _, key := range []string{"running_task", "received_not_started", "unacked_finals", "unacked_output", "spool_status", "client_version"} {
+		if _, ok := written.Payload[key]; !ok {
+			t.Fatalf("hello payload missing %q: %#v", key, written.Payload)
+		}
 	}
 
 	conn.readCh <- wsprotocol.Envelope{
@@ -55,6 +57,56 @@ func TestClientSendsHelloAndMarksActiveAfterHelloAck(t *testing.T) {
 	}
 
 	waitFor(t, func() bool { return client.IsActive() }, "client to become active")
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+}
+
+func TestClientHelloPayloadIncludesLocalReconnectSnapshot(t *testing.T) {
+	store := newClientTestStore(t)
+	_, err := store.RecordReceived(localtaskstore.TaskReceipt{TaskID: "task-received", ExecutionAttemptID: "attempt-received"})
+	requireNoError(t, err)
+	requireNoError(t, store.RecordStarted("task-running", "attempt-running"))
+	requireNoError(t, store.AppendOutputChunk(localtaskstore.OutputChunk{
+		MessageID:          "msg-output-1",
+		TaskID:             "task-running",
+		ExecutionAttemptID: "attempt-running",
+		Stream:             "stdout",
+		Sequence:           3,
+		Payload:            "hello",
+		ByteCount:          5,
+	}))
+	requireNoError(t, store.RecordFinal(localtaskstore.FinalResult{
+		MessageID:          "msg-final-1",
+		TaskID:             "task-final",
+		ExecutionAttemptID: "attempt-final",
+		Status:             "completed",
+		ExitCode:           0,
+		Payload:            `{"status":"completed","exit_code":0,"output_truncated":false,"error_truncated":false}`,
+	}))
+	conn := newFakeConn()
+	dialer := &fakeDialer{conn: conn}
+	client := newTestClient(t, dialer, WithRecoveryStore(store))
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- client.Start(runCtx) }()
+
+	written := conn.waitForWrite(t)
+	running, ok := written.Payload["running_task"].(map[string]any)
+	if !ok || running["task_id"] != "task-running" {
+		t.Fatalf("running_task = %#v", written.Payload["running_task"])
+	}
+	if len(written.Payload["received_not_started"].([]any)) != 1 {
+		t.Fatalf("received_not_started = %#v", written.Payload["received_not_started"])
+	}
+	if len(written.Payload["unacked_finals"].([]any)) != 1 {
+		t.Fatalf("unacked_finals = %#v", written.Payload["unacked_finals"])
+	}
+	if len(written.Payload["unacked_output"].([]any)) != 1 {
+		t.Fatalf("unacked_output = %#v", written.Payload["unacked_output"])
+	}
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("Start returned error: %v", err)
@@ -380,6 +432,101 @@ func TestClientReplaysUnackedMessagesAfterHelloAck(t *testing.T) {
 	}
 }
 
+func TestClientHelloAckAppliesFinalDiscardAndTargetedReplayDirectives(t *testing.T) {
+	store := newClientTestStore(t)
+	_, err := store.RecordReceived(localtaskstore.TaskReceipt{TaskID: "task-stale", ExecutionAttemptID: "attempt-stale"})
+	requireNoError(t, err)
+	requireNoError(t, store.AppendOutputChunk(localtaskstore.OutputChunk{
+		MessageID:          "msg-output-1",
+		TaskID:             "task-running",
+		ExecutionAttemptID: "attempt-running",
+		Stream:             "stdout",
+		Sequence:           1,
+		Payload:            "old",
+		ByteCount:          3,
+	}))
+	requireNoError(t, store.AppendOutputChunk(localtaskstore.OutputChunk{
+		MessageID:          "msg-output-2",
+		TaskID:             "task-running",
+		ExecutionAttemptID: "attempt-running",
+		Stream:             "stdout",
+		Sequence:           2,
+		Payload:            "needed",
+		ByteCount:          6,
+	}))
+	requireNoError(t, store.RecordFinal(localtaskstore.FinalResult{
+		MessageID:          "msg-final-1",
+		TaskID:             "task-final",
+		ExecutionAttemptID: "attempt-final",
+		Status:             "completed",
+		Payload:            `{"status":"completed","exit_code":0,"output_truncated":false,"error_truncated":false}`,
+	}))
+	conn := newFakeConn()
+	dialer := &fakeDialer{conn: conn}
+	client := newTestClient(t, dialer, WithResultOutbox(store), WithReceiptStore(store), WithRecoveryStore(store))
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- client.Start(runCtx) }()
+
+	hello := conn.waitForWrite(t)
+	conn.readCh <- helloAckEnvelopeWithDirectives(hello.MessageID, wsprotocol.HelloAckPayload{
+		AcknowledgedFinalMessageIDs: []string{"msg-final-1"},
+		DiscardedAttempts:           []wsprotocol.DiscardedAttempt{{TaskID: "task-stale", ExecutionAttemptID: "attempt-stale", Reason: "stale_attempt"}},
+		OutputReplay:                []wsprotocol.OutputReplayDirective{{TaskID: "task-running", ExecutionAttemptID: "attempt-running", Stream: wsprotocol.StreamStdout, NextSequence: 2}},
+	})
+
+	replayed := conn.waitForWrite(t)
+	if replayed.MessageID != "msg-output-2" {
+		t.Fatalf("replayed message = %#v", replayed)
+	}
+	waitFor(t, func() bool { return client.IsActive() }, "client active after directives")
+	state, err := store.TaskState("task-stale", "attempt-stale")
+	requireNoError(t, err)
+	if state.Exists {
+		t.Fatalf("discarded state still exists: %#v", state)
+	}
+	messages, err := store.UnackedMessages()
+	requireNoError(t, err)
+	if containsMessage(messages, "msg-final-1") {
+		t.Fatalf("acked final still unacked: %#v", messages)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+}
+
+func TestClientHelloAckDiscardDoesNotEraseRunningAttempt(t *testing.T) {
+	store := newClientTestStore(t)
+	requireNoError(t, store.RecordStarted("task-running", "attempt-running"))
+	conn := newFakeConn()
+	dialer := &fakeDialer{conn: conn}
+	client := newTestClient(t, dialer, WithReceiptStore(store), WithRecoveryStore(store))
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- client.Start(runCtx) }()
+
+	hello := conn.waitForWrite(t)
+	conn.readCh <- helloAckEnvelopeWithDirectives(hello.MessageID, wsprotocol.HelloAckPayload{
+		DiscardedAttempts: []wsprotocol.DiscardedAttempt{{TaskID: "task-running", ExecutionAttemptID: "attempt-running", Reason: "stale_attempt"}},
+	})
+
+	waitFor(t, func() bool { return client.IsActive() }, "client active after discard directive")
+	state, err := store.TaskState("task-running", "attempt-running")
+	requireNoError(t, err)
+	if !state.Exists || state.Status != localtaskstore.TaskStatusRunning {
+		t.Fatalf("running state = %#v", state)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+}
+
 func TestClientRetryableErrorKeepsConnectionAndOutboxMessage(t *testing.T) {
 	store := newClientTestStore(t)
 	requireNoError(t, store.AppendOutputChunk(localtaskstore.OutputChunk{
@@ -597,6 +744,10 @@ func WithReceiptStore(store localtaskstore.ReceiptStore) clientOption {
 	return func(cfg *Config) { cfg.ReceiptStore = store }
 }
 
+func WithRecoveryStore(store localtaskstore.RecoveryStore) clientOption {
+	return func(cfg *Config) { cfg.RecoveryStore = store }
+}
+
 func WithTaskEnqueuer(enqueuer TaskEnqueuer) clientOption {
 	return func(cfg *Config) { cfg.TaskEnqueuer = enqueuer }
 }
@@ -740,6 +891,28 @@ func helloAckEnvelope(ackedMessageID string) wsprotocol.Envelope {
 	}
 }
 
+func helloAckEnvelopeWithDirectives(ackedMessageID string, directives wsprotocol.HelloAckPayload) wsprotocol.Envelope {
+	directives.AckedMessageID = ackedMessageID
+	directives.AckedType = wsprotocol.TypeAgentHello
+	if directives.AcknowledgedFinalMessageIDs == nil {
+		directives.AcknowledgedFinalMessageIDs = []string{}
+	}
+	if directives.DiscardedAttempts == nil {
+		directives.DiscardedAttempts = []wsprotocol.DiscardedAttempt{}
+	}
+	if directives.OutputReplay == nil {
+		directives.OutputReplay = []wsprotocol.OutputReplayDirective{}
+	}
+	return wsprotocol.Envelope{
+		ProtocolVersion: wsprotocol.ProtocolVersion,
+		MessageID:       "msg_hello_ack",
+		Type:            wsprotocol.TypeAgentHelloAck,
+		AgentID:         "agent_ws_test",
+		SentAt:          time.Now().UTC().Format(time.RFC3339),
+		Payload:         payloadMapForTest(directives),
+	}
+}
+
 func deliverEnvelope(messageID, taskID, attemptID, command string, priority int) wsprotocol.Envelope {
 	return wsprotocol.Envelope{
 		ProtocolVersion:    wsprotocol.ProtocolVersion,
@@ -807,6 +980,15 @@ func requireNoError(t *testing.T, err error) {
 
 func intValuePtr(value int) *int {
 	return &value
+}
+
+func containsMessage(messages []localtaskstore.OutboxMessage, messageID string) bool {
+	for _, message := range messages {
+		if message.MessageID == messageID {
+			return true
+		}
+	}
+	return false
 }
 
 func saveTestPrivateKey(t *testing.T, dir string) string {

@@ -352,6 +352,7 @@ func newDefaultWebSocketRuntime(localStore *localtaskstore.Store, enqueuer wscli
 		PingInterval:   appconf.WebSocketPingInterval(),
 		ResultOutbox:   localStore,
 		ReceiptStore:   localStore,
+		RecoveryStore:  localStore,
 		TaskEnqueuer:   enqueuer,
 	})
 }
