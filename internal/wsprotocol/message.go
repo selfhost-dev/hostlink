@@ -70,6 +70,74 @@ type TaskDeliverPayload struct {
 	Priority int    `json:"priority"`
 }
 
+type HelloPayload struct {
+	RunningTask        *RunningTaskSnapshot        `json:"running_task"`
+	ReceivedNotStarted []ReceivedNotStartedAttempt `json:"received_not_started"`
+	UnackedFinals      []UnackedFinalSnapshot      `json:"unacked_finals"`
+	UnackedOutput      []UnackedOutputRange        `json:"unacked_output"`
+	SpoolStatus        SpoolStatus                 `json:"spool_status"`
+	ClientVersion      string                      `json:"client_version"`
+}
+
+type RunningTaskSnapshot struct {
+	TaskID             string         `json:"task_id"`
+	ExecutionAttemptID string         `json:"execution_attempt_id"`
+	StartedAt          string         `json:"started_at"`
+	LastOutputSequence map[string]int `json:"last_output_sequence"`
+}
+
+type ReceivedNotStartedAttempt struct {
+	TaskID             string `json:"task_id"`
+	ExecutionAttemptID string `json:"execution_attempt_id"`
+	ReceivedAt         string `json:"received_at"`
+}
+
+type UnackedFinalSnapshot struct {
+	MessageID          string      `json:"message_id"`
+	TaskID             string      `json:"task_id"`
+	ExecutionAttemptID string      `json:"execution_attempt_id"`
+	Status             FinalStatus `json:"status"`
+	ExitCode           int         `json:"exit_code"`
+	OutputTruncated    bool        `json:"output_truncated"`
+	ErrorTruncated     bool        `json:"error_truncated"`
+}
+
+type UnackedOutputRange struct {
+	TaskID             string `json:"task_id"`
+	ExecutionAttemptID string `json:"execution_attempt_id"`
+	Stream             Stream `json:"stream"`
+	FirstSequence      int    `json:"first_sequence"`
+	LastSequence       int    `json:"last_sequence"`
+	TruncatedLocally   bool   `json:"truncated_locally"`
+}
+
+type SpoolStatus struct {
+	BytesUsed        int64 `json:"bytes_used"`
+	ByteCap          int64 `json:"byte_cap"`
+	HasRotatedChunks bool  `json:"has_rotated_chunks"`
+}
+
+type HelloAckPayload struct {
+	AckedMessageID              string                  `json:"acked_message_id"`
+	AckedType                   MessageType             `json:"acked_type"`
+	AcknowledgedFinalMessageIDs []string                `json:"acknowledged_final_message_ids"`
+	DiscardedAttempts           []DiscardedAttempt      `json:"discarded_attempts"`
+	OutputReplay                []OutputReplayDirective `json:"output_replay"`
+}
+
+type DiscardedAttempt struct {
+	TaskID             string `json:"task_id"`
+	ExecutionAttemptID string `json:"execution_attempt_id"`
+	Reason             string `json:"reason"`
+}
+
+type OutputReplayDirective struct {
+	TaskID             string `json:"task_id"`
+	ExecutionAttemptID string `json:"execution_attempt_id"`
+	Stream             Stream `json:"stream"`
+	NextSequence       int    `json:"next_sequence"`
+}
+
 func (e Envelope) Validate(authenticatedAgentID string) error {
 	if e.ProtocolVersion != ProtocolVersion {
 		return fmt.Errorf("unsupported protocol_version: %d", e.ProtocolVersion)
@@ -130,6 +198,49 @@ func (p TaskDeliverPayload) Validate() error {
 		return fmt.Errorf("command is required")
 	}
 	return nil
+}
+
+func (p HelloPayload) Validate() error {
+	if p.ClientVersion == "" {
+		return fmt.Errorf("client_version is required")
+	}
+	if p.RunningTask != nil {
+		if p.RunningTask.TaskID == "" {
+			return fmt.Errorf("running_task.task_id is required")
+		}
+		if p.RunningTask.ExecutionAttemptID == "" {
+			return fmt.Errorf("running_task.execution_attempt_id is required")
+		}
+		if p.RunningTask.LastOutputSequence == nil {
+			return fmt.Errorf("running_task.last_output_sequence is required")
+		}
+	}
+	for _, attempt := range p.ReceivedNotStarted {
+		if attempt.TaskID == "" || attempt.ExecutionAttemptID == "" {
+			return fmt.Errorf("received_not_started entries require task_id and execution_attempt_id")
+		}
+	}
+	for _, final := range p.UnackedFinals {
+		if final.MessageID == "" || final.TaskID == "" || final.ExecutionAttemptID == "" {
+			return fmt.Errorf("unacked_finals entries require message_id, task_id, and execution_attempt_id")
+		}
+	}
+	for _, output := range p.UnackedOutput {
+		if output.TaskID == "" || output.ExecutionAttemptID == "" {
+			return fmt.Errorf("unacked_output entries require task_id and execution_attempt_id")
+		}
+		if output.Stream != StreamStdout && output.Stream != StreamStderr {
+			return fmt.Errorf("unacked_output.stream must be stdout or stderr")
+		}
+		if output.FirstSequence <= 0 || output.LastSequence < output.FirstSequence {
+			return fmt.Errorf("unacked_output sequence range is invalid")
+		}
+	}
+	return nil
+}
+
+func (p HelloAckPayload) HasReconciliationDirectives() bool {
+	return p.AcknowledgedFinalMessageIDs != nil || p.DiscardedAttempts != nil || p.OutputReplay != nil
 }
 
 func DecodePayload[T any](e Envelope) (T, error) {

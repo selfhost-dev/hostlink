@@ -20,6 +20,47 @@ func TestSnapshotIncludesLocalTruncationState(t *testing.T) {
 	require.True(t, snapshot.Tasks[0].LocalOutputTruncated)
 }
 
+func TestSnapshotIncludesReconnectSafeState(t *testing.T) {
+	store := newTestStore(t, 1024*1024, 1024)
+
+	_, err := store.RecordReceived(TaskReceipt{TaskID: "task-received", ExecutionAttemptID: "attempt-received"})
+	require.NoError(t, err)
+	require.NoError(t, store.RecordStarted("task-running", "attempt-running"))
+	require.NoError(t, store.AppendOutputChunk(OutputChunk{
+		MessageID:          "msg-output-1",
+		TaskID:             "task-running",
+		ExecutionAttemptID: "attempt-running",
+		Stream:             "stdout",
+		Sequence:           4,
+		Payload:            "hello",
+		ByteCount:          5,
+	}))
+	require.NoError(t, store.RecordFinal(FinalResult{
+		MessageID:          "msg-final-1",
+		TaskID:             "task-final",
+		ExecutionAttemptID: "attempt-final",
+		Status:             "completed",
+		ExitCode:           0,
+		Payload:            `{"status":"completed","exit_code":0,"output_truncated":false,"error_truncated":false}`,
+	}))
+
+	snapshot, err := store.Snapshot()
+	require.NoError(t, err)
+	require.NotNil(t, snapshot.RunningTask)
+	require.Equal(t, "task-running", snapshot.RunningTask.TaskID)
+	require.Equal(t, int64(4), snapshot.RunningTask.LastOutputSequence["stdout"])
+	require.Len(t, snapshot.ReceivedNotStarted, 1)
+	require.Equal(t, "task-received", snapshot.ReceivedNotStarted[0].TaskID)
+	require.Len(t, snapshot.UnackedFinals, 1)
+	require.Equal(t, "msg-final-1", snapshot.UnackedFinals[0].MessageID)
+	require.Equal(t, "completed", snapshot.UnackedFinals[0].Status)
+	require.Len(t, snapshot.UnackedOutput, 1)
+	require.Equal(t, int64(4), snapshot.UnackedOutput[0].FirstSequence)
+	require.Equal(t, int64(4), snapshot.UnackedOutput[0].LastSequence)
+	require.Positive(t, snapshot.SpoolStatus.BytesUsed)
+	require.Equal(t, int64(1024*1024), snapshot.SpoolStatus.ByteCap)
+}
+
 func TestMarkInterruptedRunningTasksQueuesTerminalRecordAcrossRestart(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "task_store.db")
 	store := openTestStore(t, storePath, 1024*1024, 1024)
@@ -39,6 +80,19 @@ func TestMarkInterruptedRunningTasksQueuesTerminalRecordAcrossRestart(t *testing
 	require.Len(t, messages, 1)
 	require.Equal(t, OutboxMessageTypeFinal, messages[0].Type)
 	require.Contains(t, messages[0].Payload, "interrupted")
+}
+
+func TestSnapshotReportsInterruptedStartupRecoveryAsUnackedFinal(t *testing.T) {
+	store := newTestStore(t, 1024*1024, 1024)
+
+	require.NoError(t, store.RecordStarted("task-1", "attempt-1"))
+	require.NoError(t, store.MarkInterruptedRunningTasks())
+
+	snapshot, err := store.Snapshot()
+	require.NoError(t, err)
+	require.Nil(t, snapshot.RunningTask)
+	require.Len(t, snapshot.UnackedFinals, 1)
+	require.Equal(t, "interrupted", snapshot.UnackedFinals[0].Status)
 }
 
 func TestMarkInterruptedRunningTasksIsIdempotent(t *testing.T) {

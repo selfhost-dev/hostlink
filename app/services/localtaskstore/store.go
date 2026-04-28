@@ -1,6 +1,7 @@
 package localtaskstore
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -41,6 +42,8 @@ type TaskState struct {
 	OutputTruncated      bool
 	ErrorTruncated       bool
 	LocalOutputTruncated bool
+	ReceivedAt           time.Time
+	StartedAt            time.Time
 }
 
 type OutputChunk struct {
@@ -76,7 +79,50 @@ type OutboxMessage struct {
 }
 
 type Snapshot struct {
-	Tasks []TaskState
+	Tasks              []TaskState
+	RunningTask        *RunningTaskSnapshot
+	ReceivedNotStarted []ReceivedAttemptSnapshot
+	UnackedFinals      []UnackedFinalSnapshot
+	UnackedOutput      []UnackedOutputRange
+	SpoolStatus        SpoolStatus
+}
+
+type RunningTaskSnapshot struct {
+	TaskID             string
+	ExecutionAttemptID string
+	StartedAt          time.Time
+	LastOutputSequence map[string]int64
+}
+
+type ReceivedAttemptSnapshot struct {
+	TaskID             string
+	ExecutionAttemptID string
+	ReceivedAt         time.Time
+}
+
+type UnackedFinalSnapshot struct {
+	MessageID          string
+	TaskID             string
+	ExecutionAttemptID string
+	Status             string
+	ExitCode           int
+	OutputTruncated    bool
+	ErrorTruncated     bool
+}
+
+type UnackedOutputRange struct {
+	TaskID             string
+	ExecutionAttemptID string
+	Stream             string
+	FirstSequence      int64
+	LastSequence       int64
+	TruncatedLocally   bool
+}
+
+type SpoolStatus struct {
+	BytesUsed        int64
+	ByteCap          int64
+	HasRotatedChunks bool
 }
 
 type Config struct {
@@ -96,11 +142,13 @@ type ResultOutbox interface {
 	RecordFinal(FinalResult) error
 	UnackedMessages() ([]OutboxMessage, error)
 	AckMessage(messageID string) error
+	UnackedMessagesFrom(taskID, executionAttemptID, stream string, nextSequence int64) ([]OutboxMessage, error)
 }
 
 type RecoveryStore interface {
 	Snapshot() (Snapshot, error)
 	MarkInterruptedRunningTasks() error
+	DiscardReceived(taskID, executionAttemptID string) error
 }
 
 type Store struct {
@@ -118,6 +166,8 @@ type taskExecutionRecord struct {
 	OutputTruncated      bool
 	ErrorTruncated       bool
 	LocalOutputTruncated bool
+	ReceivedAt           *time.Time
+	StartedAt            *time.Time
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
 }
@@ -223,6 +273,7 @@ func (s *Store) RecordReceived(receipt TaskReceipt) (TaskState, error) {
 
 	var state TaskState
 	err := s.db.Transaction(func(tx *gorm.DB) error {
+		now := time.Now().UTC()
 		if err := s.ensureTerminalReserveAvailable(tx); err != nil {
 			return err
 		}
@@ -241,6 +292,7 @@ func (s *Store) RecordReceived(receipt TaskReceipt) (TaskState, error) {
 			TaskID:             receipt.TaskID,
 			ExecutionAttemptID: receipt.ExecutionAttemptID,
 			Status:             TaskStatusReceived,
+			ReceivedAt:         &now,
 		}
 		if err := tx.Create(&record).Error; err != nil {
 			return err
@@ -280,10 +332,12 @@ func (s *Store) RecordStarted(taskID, executionAttemptID string) error {
 	}
 
 	return s.db.Transaction(func(tx *gorm.DB) error {
+		now := time.Now().UTC()
 		return s.upsertExecutionState(tx, taskExecutionRecord{
 			TaskID:             taskID,
 			ExecutionAttemptID: executionAttemptID,
 			Status:             TaskStatusRunning,
+			StartedAt:          &now,
 		})
 	})
 }
@@ -464,6 +518,39 @@ func (s *Store) UnackedMessages() ([]OutboxMessage, error) {
 	return messages, nil
 }
 
+func (s *Store) UnackedMessagesFrom(taskID, executionAttemptID, stream string, nextSequence int64) ([]OutboxMessage, error) {
+	if taskID == "" {
+		return nil, fmt.Errorf("task ID is required")
+	}
+	if executionAttemptID == "" {
+		return nil, fmt.Errorf("execution attempt ID is required")
+	}
+	if stream == "" {
+		return nil, fmt.Errorf("stream is required")
+	}
+	if nextSequence <= 0 {
+		return nil, fmt.Errorf("next sequence must be positive")
+	}
+
+	var records []outboxMessageRecord
+	if err := s.db.Where(
+		"acked_at IS NULL AND type = ? AND task_id = ? AND execution_attempt_id = ? AND stream = ? AND sequence >= ?",
+		OutboxMessageTypeOutput,
+		taskID,
+		executionAttemptID,
+		stream,
+		nextSequence,
+	).Order("sequence ASC, created_at ASC, id ASC").Find(&records).Error; err != nil {
+		return nil, fmt.Errorf("load unacked messages from sequence: %w", err)
+	}
+
+	messages := make([]OutboxMessage, 0, len(records))
+	for _, record := range records {
+		messages = append(messages, outboxMessageFromRecord(record))
+	}
+	return messages, nil
+}
+
 func (s *Store) AckMessage(messageID string) error {
 	if messageID == "" {
 		return fmt.Errorf("message ID is required")
@@ -476,16 +563,105 @@ func (s *Store) AckMessage(messageID string) error {
 }
 
 func (s *Store) Snapshot() (Snapshot, error) {
-	var records []taskExecutionRecord
-	if err := s.db.Order("updated_at ASC, id ASC").Find(&records).Error; err != nil {
+	var snapshot Snapshot
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var records []taskExecutionRecord
+		if err := tx.Order("updated_at ASC, id ASC").Find(&records).Error; err != nil {
+			return err
+		}
+
+		snapshot = Snapshot{
+			Tasks:              make([]TaskState, 0, len(records)),
+			ReceivedNotStarted: []ReceivedAttemptSnapshot{},
+			UnackedFinals:      []UnackedFinalSnapshot{},
+			UnackedOutput:      []UnackedOutputRange{},
+			SpoolStatus:        SpoolStatus{ByteCap: s.spoolCapBytes},
+		}
+		stateByAttempt := make(map[string]TaskState, len(records))
+		for _, record := range records {
+			state := taskStateFromRecord(record)
+			snapshot.Tasks = append(snapshot.Tasks, state)
+			stateByAttempt[attemptKey(state.TaskID, state.ExecutionAttemptID)] = state
+			switch state.Status {
+			case TaskStatusRunning:
+				running := RunningTaskSnapshot{
+					TaskID:             state.TaskID,
+					ExecutionAttemptID: state.ExecutionAttemptID,
+					StartedAt:          state.StartedAt,
+					LastOutputSequence: map[string]int64{"stdout": 0, "stderr": 0},
+				}
+				snapshot.RunningTask = &running
+			case TaskStatusReceived:
+				snapshot.ReceivedNotStarted = append(snapshot.ReceivedNotStarted, ReceivedAttemptSnapshot{
+					TaskID:             state.TaskID,
+					ExecutionAttemptID: state.ExecutionAttemptID,
+					ReceivedAt:         state.ReceivedAt,
+				})
+			}
+		}
+
+		var outbox []outboxMessageRecord
+		if err := tx.Where("acked_at IS NULL").Order("created_at ASC, id ASC").Find(&outbox).Error; err != nil {
+			return err
+		}
+		outputRanges := map[string]*UnackedOutputRange{}
+		for _, message := range outbox {
+			snapshot.SpoolStatus.BytesUsed += message.ByteCount
+			state := stateByAttempt[attemptKey(message.TaskID, message.ExecutionAttemptID)]
+			if state.LocalOutputTruncated {
+				snapshot.SpoolStatus.HasRotatedChunks = true
+			}
+			switch message.Type {
+			case OutboxMessageTypeFinal:
+				snapshot.UnackedFinals = append(snapshot.UnackedFinals, finalSnapshotFromRecord(message))
+			case OutboxMessageTypeOutput:
+				key := attemptKey(message.TaskID, message.ExecutionAttemptID) + "|" + message.Stream
+				rangeSnapshot := outputRanges[key]
+				if rangeSnapshot == nil {
+					rangeSnapshot = &UnackedOutputRange{
+						TaskID:             message.TaskID,
+						ExecutionAttemptID: message.ExecutionAttemptID,
+						Stream:             message.Stream,
+						FirstSequence:      message.Sequence,
+						LastSequence:       message.Sequence,
+						TruncatedLocally:   state.LocalOutputTruncated,
+					}
+					outputRanges[key] = rangeSnapshot
+				} else {
+					if message.Sequence < rangeSnapshot.FirstSequence {
+						rangeSnapshot.FirstSequence = message.Sequence
+					}
+					if message.Sequence > rangeSnapshot.LastSequence {
+						rangeSnapshot.LastSequence = message.Sequence
+					}
+					rangeSnapshot.TruncatedLocally = rangeSnapshot.TruncatedLocally || state.LocalOutputTruncated
+				}
+				if snapshot.RunningTask != nil && snapshot.RunningTask.TaskID == message.TaskID && snapshot.RunningTask.ExecutionAttemptID == message.ExecutionAttemptID {
+					if message.Sequence > snapshot.RunningTask.LastOutputSequence[message.Stream] {
+						snapshot.RunningTask.LastOutputSequence[message.Stream] = message.Sequence
+					}
+				}
+			}
+		}
+		for _, outputRange := range outputRanges {
+			snapshot.UnackedOutput = append(snapshot.UnackedOutput, *outputRange)
+		}
+		return nil
+	})
+	if err != nil {
 		return Snapshot{}, fmt.Errorf("load task snapshot: %w", err)
 	}
-
-	snapshot := Snapshot{Tasks: make([]TaskState, 0, len(records))}
-	for _, record := range records {
-		snapshot.Tasks = append(snapshot.Tasks, taskStateFromRecord(record))
-	}
 	return snapshot, nil
+}
+
+func (s *Store) DiscardReceived(taskID, executionAttemptID string) error {
+	if taskID == "" {
+		return fmt.Errorf("task ID is required")
+	}
+	if executionAttemptID == "" {
+		return fmt.Errorf("execution attempt ID is required")
+	}
+	return s.db.Where("task_id = ? AND execution_attempt_id = ? AND status = ?", taskID, executionAttemptID, TaskStatusReceived).Delete(&taskExecutionRecord{}).Error
 }
 
 func (s *Store) MarkInterruptedRunningTasks() error {
@@ -553,6 +729,12 @@ func (s *Store) upsertExecutionState(tx *gorm.DB, next taskExecutionRecord) erro
 	if next.LocalOutputTruncated {
 		updates["local_output_truncated"] = true
 	}
+	if next.ReceivedAt != nil {
+		updates["received_at"] = next.ReceivedAt
+	}
+	if next.StartedAt != nil {
+		updates["started_at"] = next.StartedAt
+	}
 	return tx.Model(&existing).Updates(updates).Error
 }
 
@@ -595,6 +777,14 @@ func validateFinalResult(result FinalResult) error {
 }
 
 func taskStateFromRecord(record taskExecutionRecord) TaskState {
+	var receivedAt time.Time
+	if record.ReceivedAt != nil {
+		receivedAt = *record.ReceivedAt
+	}
+	var startedAt time.Time
+	if record.StartedAt != nil {
+		startedAt = *record.StartedAt
+	}
 	return TaskState{
 		ID:                   record.ID,
 		Exists:               true,
@@ -605,6 +795,8 @@ func taskStateFromRecord(record taskExecutionRecord) TaskState {
 		OutputTruncated:      record.OutputTruncated,
 		ErrorTruncated:       record.ErrorTruncated,
 		LocalOutputTruncated: record.LocalOutputTruncated,
+		ReceivedAt:           receivedAt,
+		StartedAt:            startedAt,
 	}
 }
 
@@ -623,4 +815,32 @@ func outboxMessageFromRecord(record outboxMessageRecord) OutboxMessage {
 
 func interruptedMessageID(taskID, executionAttemptID string) string {
 	return "local-interrupted-" + strings.NewReplacer("/", "-", " ", "-", "|", "-").Replace(taskID+"-"+executionAttemptID)
+}
+
+func attemptKey(taskID, executionAttemptID string) string {
+	return taskID + "|" + executionAttemptID
+}
+
+func finalSnapshotFromRecord(record outboxMessageRecord) UnackedFinalSnapshot {
+	snapshot := UnackedFinalSnapshot{
+		MessageID:          record.MessageID,
+		TaskID:             record.TaskID,
+		ExecutionAttemptID: record.ExecutionAttemptID,
+	}
+	if record.Payload == "" {
+		return snapshot
+	}
+	var payload struct {
+		Status          string `json:"status"`
+		ExitCode        int    `json:"exit_code"`
+		OutputTruncated bool   `json:"output_truncated"`
+		ErrorTruncated  bool   `json:"error_truncated"`
+	}
+	if err := json.Unmarshal([]byte(record.Payload), &payload); err == nil {
+		snapshot.Status = payload.Status
+		snapshot.ExitCode = payload.ExitCode
+		snapshot.OutputTruncated = payload.OutputTruncated
+		snapshot.ErrorTruncated = payload.ErrorTruncated
+	}
+	return snapshot
 }

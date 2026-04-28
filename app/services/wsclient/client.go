@@ -15,6 +15,7 @@ import (
 	"hostlink/app/services/requestsigner"
 	"hostlink/domain/task"
 	"hostlink/internal/wsprotocol"
+	"hostlink/version"
 )
 
 var ErrAgentNotRegistered = errors.New("agent not registered: missing agent ID")
@@ -47,6 +48,7 @@ type Config struct {
 	SleepFunc      SleepFunc
 	ResultOutbox   localtaskstore.ResultOutbox
 	ReceiptStore   localtaskstore.ReceiptStore
+	RecoveryStore  localtaskstore.RecoveryStore
 	TaskEnqueuer   TaskEnqueuer
 }
 
@@ -67,6 +69,7 @@ type Client struct {
 	conn     Conn
 	outbox   localtaskstore.ResultOutbox
 	receipts localtaskstore.ReceiptStore
+	recovery localtaskstore.RecoveryStore
 	enqueuer TaskEnqueuer
 }
 
@@ -109,6 +112,7 @@ func New(cfg Config) (*Client, error) {
 		sleep:        cfg.SleepFunc,
 		outbox:       cfg.ResultOutbox,
 		receipts:     cfg.ReceiptStore,
+		recovery:     cfg.RecoveryStore,
 		enqueuer:     cfg.TaskEnqueuer,
 	}, nil
 }
@@ -214,16 +218,26 @@ func (c *Client) readLoop(ctx context.Context, conn Conn, helloMessageID string)
 
 		switch env.Type {
 		case wsprotocol.TypeAgentHelloAck:
-			ack, err := wsprotocol.DecodePayload[wsprotocol.AckPayload](env)
+			helloAck, err := wsprotocol.DecodePayload[wsprotocol.HelloAckPayload](env)
 			if err != nil {
 				return err
 			}
-			if ack.AckedMessageID == helloMessageID {
-				c.setActive(true)
-				if err := c.replayUnacked(ctx, conn); err != nil {
+			if helloAck.AckedMessageID == helloMessageID {
+				if err := c.applyHelloAckLocalState(helloAck); err != nil {
 					return err
 				}
+				c.setActive(true)
+				if helloAck.HasReconciliationDirectives() {
+					if err := c.replayRequestedOutput(ctx, conn, helloAck.OutputReplay); err != nil {
+						return err
+					}
+				} else {
+					if err := c.replayUnacked(ctx, conn); err != nil {
+						return err
+					}
+				}
 			}
+			ack := wsprotocol.AckPayload{AckedMessageID: helloAck.AckedMessageID, AckedType: helloAck.AckedType}
 			c.setLastAck(&ack)
 		case wsprotocol.TypeAck:
 			ack, err := wsprotocol.DecodePayload[wsprotocol.AckPayload](env)
@@ -376,14 +390,113 @@ func (c *Client) RecordStarted(ctx context.Context, receipt localtaskstore.TaskR
 }
 
 func (c *Client) buildHello() wsprotocol.Envelope {
+	payload := c.buildHelloPayload()
 	return wsprotocol.Envelope{
 		ProtocolVersion: wsprotocol.ProtocolVersion,
 		MessageID:       fmt.Sprintf("msg_%d", time.Now().UnixNano()),
 		Type:            wsprotocol.TypeAgentHello,
 		AgentID:         c.agentID,
 		SentAt:          time.Now().UTC().Format(time.RFC3339),
-		Payload:         map[string]any{},
+		Payload:         payloadFromValue(payload),
 	}
+}
+
+func (c *Client) buildHelloPayload() wsprotocol.HelloPayload {
+	payload := wsprotocol.HelloPayload{
+		ReceivedNotStarted: []wsprotocol.ReceivedNotStartedAttempt{},
+		UnackedFinals:      []wsprotocol.UnackedFinalSnapshot{},
+		UnackedOutput:      []wsprotocol.UnackedOutputRange{},
+		SpoolStatus:        wsprotocol.SpoolStatus{},
+		ClientVersion:      version.Version,
+	}
+	if c.recovery == nil {
+		return payload
+	}
+	snapshot, err := c.recovery.Snapshot()
+	if err != nil {
+		return payload
+	}
+	if snapshot.RunningTask != nil {
+		payload.RunningTask = &wsprotocol.RunningTaskSnapshot{
+			TaskID:             snapshot.RunningTask.TaskID,
+			ExecutionAttemptID: snapshot.RunningTask.ExecutionAttemptID,
+			StartedAt:          formatTime(snapshot.RunningTask.StartedAt),
+			LastOutputSequence: map[string]int{
+				"stdout": int(snapshot.RunningTask.LastOutputSequence["stdout"]),
+				"stderr": int(snapshot.RunningTask.LastOutputSequence["stderr"]),
+			},
+		}
+	}
+	for _, attempt := range snapshot.ReceivedNotStarted {
+		payload.ReceivedNotStarted = append(payload.ReceivedNotStarted, wsprotocol.ReceivedNotStartedAttempt{
+			TaskID:             attempt.TaskID,
+			ExecutionAttemptID: attempt.ExecutionAttemptID,
+			ReceivedAt:         formatTime(attempt.ReceivedAt),
+		})
+	}
+	for _, final := range snapshot.UnackedFinals {
+		payload.UnackedFinals = append(payload.UnackedFinals, wsprotocol.UnackedFinalSnapshot{
+			MessageID:          final.MessageID,
+			TaskID:             final.TaskID,
+			ExecutionAttemptID: final.ExecutionAttemptID,
+			Status:             wsprotocol.FinalStatus(final.Status),
+			ExitCode:           final.ExitCode,
+			OutputTruncated:    final.OutputTruncated,
+			ErrorTruncated:     final.ErrorTruncated,
+		})
+	}
+	for _, outputRange := range snapshot.UnackedOutput {
+		payload.UnackedOutput = append(payload.UnackedOutput, wsprotocol.UnackedOutputRange{
+			TaskID:             outputRange.TaskID,
+			ExecutionAttemptID: outputRange.ExecutionAttemptID,
+			Stream:             wsprotocol.Stream(outputRange.Stream),
+			FirstSequence:      int(outputRange.FirstSequence),
+			LastSequence:       int(outputRange.LastSequence),
+			TruncatedLocally:   outputRange.TruncatedLocally,
+		})
+	}
+	payload.SpoolStatus = wsprotocol.SpoolStatus{
+		BytesUsed:        snapshot.SpoolStatus.BytesUsed,
+		ByteCap:          snapshot.SpoolStatus.ByteCap,
+		HasRotatedChunks: snapshot.SpoolStatus.HasRotatedChunks,
+	}
+	return payload
+}
+
+func (c *Client) applyHelloAckLocalState(ack wsprotocol.HelloAckPayload) error {
+	if c.outbox != nil {
+		for _, messageID := range ack.AcknowledgedFinalMessageIDs {
+			if err := c.outbox.AckMessage(messageID); err != nil {
+				return err
+			}
+		}
+	}
+	if c.recovery != nil {
+		for _, attempt := range ack.DiscardedAttempts {
+			if err := c.recovery.DiscardReceived(attempt.TaskID, attempt.ExecutionAttemptID); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (c *Client) replayRequestedOutput(ctx context.Context, conn Conn, replayRequests []wsprotocol.OutputReplayDirective) error {
+	if c.outbox == nil {
+		return nil
+	}
+	for _, replay := range replayRequests {
+		messages, err := c.outbox.UnackedMessagesFrom(replay.TaskID, replay.ExecutionAttemptID, string(replay.Stream), int64(replay.NextSequence))
+		if err != nil {
+			return err
+		}
+		for _, message := range messages {
+			if err := c.writeEnvelope(ctx, conn, envelopeFromOutboxMessage(c.agentID, message)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (c *Client) buildTaskStateEnvelope(messageType wsprotocol.MessageType, taskID, executionAttemptID string) wsprotocol.Envelope {
@@ -491,6 +604,23 @@ func envelopeFromOutboxMessage(agentID string, message localtaskstore.OutboxMess
 		SentAt:             now,
 		Payload:            payload,
 	}
+}
+
+func payloadFromValue(value any) map[string]any {
+	data, _ := json.Marshal(value)
+	var payload map[string]any
+	_ = json.Unmarshal(data, &payload)
+	if payload == nil {
+		return map[string]any{}
+	}
+	return payload
+}
+
+func formatTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339)
 }
 
 func sleepContext(ctx context.Context, d time.Duration) error {
