@@ -65,6 +65,11 @@ type FinalPayload struct {
 	ErrorTruncated  bool        `json:"error_truncated"`
 }
 
+type TaskDeliverPayload struct {
+	Command  string `json:"command"`
+	Priority int    `json:"priority"`
+}
+
 func (e Envelope) Validate(authenticatedAgentID string) error {
 	if e.ProtocolVersion != ProtocolVersion {
 		return fmt.Errorf("unsupported protocol_version: %d", e.ProtocolVersion)
@@ -118,6 +123,13 @@ func (p FinalPayload) Validate() error {
 	default:
 		return fmt.Errorf("status must be completed, failed, or interrupted")
 	}
+}
+
+func (p TaskDeliverPayload) Validate() error {
+	if p.Command == "" {
+		return fmt.Errorf("command is required")
+	}
+	return nil
 }
 
 func DecodePayload[T any](e Envelope) (T, error) {

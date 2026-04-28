@@ -31,14 +31,29 @@ type TaskJobConfig struct {
 }
 
 type ResultChannel interface {
+	RecordStarted(context.Context, localtaskstore.TaskReceipt) error
+	SendStarted(context.Context, localtaskstore.TaskReceipt) error
 	SendOutput(context.Context, localtaskstore.OutputChunk) error
 	SendFinal(context.Context, localtaskstore.FinalResult) error
 }
 
+type TaskExecutor interface {
+	Execute(context.Context, task.Task) error
+}
+
+type taskExecutor struct {
+	config   TaskJobConfig
+	reporter taskreporter.TaskReporter
+	channel  ResultChannel
+}
+
 type TaskJob struct {
-	config TaskJobConfig
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	config       TaskJobConfig
+	enqueueCh    chan task.Task
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
+	mu           sync.Mutex
+	knownAttempt map[string]struct{}
 }
 
 func New() *TaskJob {
@@ -59,7 +74,9 @@ func NewJobWithConf(cfg TaskJobConfig) *TaskJob {
 	}
 
 	return &TaskJob{
-		config: cfg,
+		config:       cfg,
+		enqueueCh:    make(chan task.Task, 16),
+		knownAttempt: make(map[string]struct{}),
 	}
 }
 
@@ -70,6 +87,12 @@ func (tj *TaskJob) Register(ctx context.Context, tf taskfetcher.TaskFetcher, tr 
 	if len(channels) > 0 {
 		channel = channels[0]
 	}
+	executor := &taskExecutor{config: tj.config, reporter: tr, channel: channel}
+	tj.wg.Add(1)
+	go func() {
+		defer tj.wg.Done()
+		tj.run(ctx, executor)
+	}()
 	tj.wg.Add(1)
 	go func() {
 		defer tj.wg.Done()
@@ -78,14 +101,13 @@ func (tj *TaskJob) Register(ctx context.Context, tf taskfetcher.TaskFetcher, tr 
 			if err != nil {
 				return err
 			}
-			incompleteTasks := []task.Task{}
-			for _, task := range allTasks {
-				if task.Status != "completed" {
-					incompleteTasks = append(incompleteTasks, task)
+			for _, t := range allTasks {
+				if t.Status == "completed" {
+					continue
 				}
-			}
-			for _, t := range incompleteTasks {
-				tj.processTask(ctx, t, tr, channel)
+				if err := tj.Enqueue(ctx, t); err != nil {
+					return err
+				}
 			}
 			return nil
 		})
@@ -93,19 +115,83 @@ func (tj *TaskJob) Register(ctx context.Context, tf taskfetcher.TaskFetcher, tr 
 	return cancel
 }
 
+func (tj *TaskJob) run(ctx context.Context, executor TaskExecutor) {
+	for {
+		select {
+		case queued := <-tj.enqueueCh:
+			executor.Execute(ctx, queued)
+			tj.finishAttempt(queued)
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (tj *TaskJob) Enqueue(ctx context.Context, t task.Task) error {
+	if !tj.reserveAttempt(t) {
+		return nil
+	}
+	select {
+	case tj.enqueueCh <- t:
+		return nil
+	case <-ctx.Done():
+		tj.finishAttempt(t)
+		return ctx.Err()
+	}
+}
+
+func (tj *TaskJob) reserveAttempt(t task.Task) bool {
+	key := executionKey(t)
+	if key == "" {
+		return true
+	}
+	tj.mu.Lock()
+	defer tj.mu.Unlock()
+	if _, ok := tj.knownAttempt[key]; ok {
+		return false
+	}
+	tj.knownAttempt[key] = struct{}{}
+	return true
+}
+
+func (tj *TaskJob) finishAttempt(t task.Task) {
+	key := executionKey(t)
+	if key == "" {
+		return
+	}
+	tj.mu.Lock()
+	defer tj.mu.Unlock()
+	delete(tj.knownAttempt, key)
+}
+
+func executionKey(t task.Task) string {
+	if t.ID == "" || t.ExecutionAttemptID == "" {
+		return ""
+	}
+	return t.ID + "\x00" + t.ExecutionAttemptID
+}
+
+func (e *taskExecutor) Execute(ctx context.Context, t task.Task) error {
+	e.processTask(ctx, t)
+	return nil
+}
+
 func (tj *TaskJob) processTask(ctx context.Context, t task.Task, tr taskreporter.TaskReporter, channel ResultChannel) {
+	executor := &taskExecutor{config: tj.config, reporter: tr, channel: channel}
+	executor.processTask(ctx, t)
+}
+
+func (tj *TaskJob) captureStream(ctx context.Context, t task.Task, stream string, reader io.Reader, sink *bytes.Buffer, channel ResultChannel) {
+	executor := &taskExecutor{config: tj.config, channel: channel}
+	executor.captureStream(ctx, t, stream, reader, sink)
+}
+
+func (e *taskExecutor) processTask(ctx context.Context, t task.Task) {
 	tempFile, err := os.CreateTemp("", "*_script.sh")
 	if err != nil {
 		t.Error = fmt.Sprintf("failed to create temp file: %v", err)
 		t.Status = "failed"
-		if reportErr := tr.Report(t.ID, &taskreporter.TaskResult{
-			Status:   t.Status,
-			Output:   t.Output,
-			Error:    t.Error,
-			ExitCode: t.ExitCode,
-		}); reportErr != nil {
-			log.Errorf("failed to report task %s: %v", t.ID, reportErr)
-		}
+		e.reportHTTPResult(t, "failed", t.Output, t.Error, t.ExitCode)
 		return
 	}
 	defer os.Remove(tempFile.Name())
@@ -114,14 +200,7 @@ func (tj *TaskJob) processTask(ctx context.Context, t task.Task, tr taskreporter
 		tempFile.Close()
 		t.Error = fmt.Sprintf("failed to write script: %v", err)
 		t.Status = "failed"
-		if reportErr := tr.Report(t.ID, &taskreporter.TaskResult{
-			Status:   t.Status,
-			Output:   t.Output,
-			Error:    t.Error,
-			ExitCode: t.ExitCode,
-		}); reportErr != nil {
-			log.Errorf("failed to report task %s: %v", t.ID, reportErr)
-		}
+		e.reportHTTPResult(t, "failed", t.Output, t.Error, t.ExitCode)
 		return
 	}
 	tempFile.Close()
@@ -129,19 +208,12 @@ func (tj *TaskJob) processTask(ctx context.Context, t task.Task, tr taskreporter
 	if err := os.Chmod(tempFile.Name(), 0755); err != nil {
 		t.Error = fmt.Sprintf("failed to chmod: %v", err)
 		t.Status = "failed"
-		if reportErr := tr.Report(t.ID, &taskreporter.TaskResult{
-			Status:   t.Status,
-			Output:   t.Output,
-			Error:    t.Error,
-			ExitCode: t.ExitCode,
-		}); reportErr != nil {
-			log.Errorf("failed to report task %s: %v", t.ID, reportErr)
-		}
+		e.reportHTTPResult(t, "failed", t.Output, t.Error, t.ExitCode)
 		return
 	}
 	execCmd := exec.Command("/bin/sh", "-c", tempFile.Name())
-	if channel != nil && t.ExecutionAttemptID != "" {
-		tj.processTaskWithResultChannel(ctx, t, execCmd, tr, channel)
+	if e.channel != nil && t.ExecutionAttemptID != "" {
+		e.processTaskWithResultChannel(ctx, t, execCmd)
 		return
 	}
 
@@ -158,30 +230,33 @@ func (tj *TaskJob) processTask(ctx context.Context, t task.Task, tr taskreporter
 	t.Error = errMsg
 	t.Output = string(output)
 	t.Status = "completed"
-	if reportErr := tr.Report(t.ID, &taskreporter.TaskResult{
-		Status:   t.Status,
-		Output:   t.Output,
-		Error:    t.Error,
-		ExitCode: t.ExitCode,
-	}); reportErr != nil {
-		log.Errorf("failed to report task %s: %v", t.ID, reportErr)
-	}
+	e.reportHTTPResult(t, t.Status, t.Output, t.Error, t.ExitCode)
 }
 
-func (tj *TaskJob) processTaskWithResultChannel(ctx context.Context, t task.Task, execCmd *exec.Cmd, tr taskreporter.TaskReporter, channel ResultChannel) {
+func (e *taskExecutor) processTaskWithResultChannel(ctx context.Context, t task.Task, execCmd *exec.Cmd) {
 	stdout, err := execCmd.StdoutPipe()
 	if err != nil {
-		tj.reportHTTPResult(t, tr, "failed", "", fmt.Sprintf("failed to capture stdout: %v", err), 1)
+		e.reportHTTPResult(t, "failed", "", fmt.Sprintf("failed to capture stdout: %v", err), 1)
 		return
 	}
 	stderr, err := execCmd.StderrPipe()
 	if err != nil {
-		tj.reportHTTPResult(t, tr, "failed", "", fmt.Sprintf("failed to capture stderr: %v", err), 1)
+		e.reportHTTPResult(t, "failed", "", fmt.Sprintf("failed to capture stderr: %v", err), 1)
 		return
 	}
 
+	receipt := localtaskstore.TaskReceipt{TaskID: t.ID, ExecutionAttemptID: t.ExecutionAttemptID}
+	if err := e.channel.RecordStarted(ctx, receipt); err != nil {
+		e.reportHTTPResult(t, "failed", "", fmt.Sprintf("failed to record task start: %v", err), 1)
+		return
+	}
 	if err := execCmd.Start(); err != nil {
-		tj.reportHTTPResult(t, tr, "failed", "", err.Error(), 1)
+		e.reportHTTPResult(t, "failed", "", err.Error(), 1)
+		return
+	}
+	if err := e.channel.SendStarted(ctx, receipt); err != nil {
+		_ = execCmd.Process.Kill()
+		e.reportHTTPResult(t, "failed", "", fmt.Sprintf("failed to report task start: %v", err), 1)
 		return
 	}
 
@@ -191,11 +266,11 @@ func (tj *TaskJob) processTaskWithResultChannel(ctx context.Context, t task.Task
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		tj.captureStream(ctx, t, "stdout", stdout, &stdoutBuf, channel)
+		e.captureStream(ctx, t, "stdout", stdout, &stdoutBuf)
 	}()
 	go func() {
 		defer wg.Done()
-		tj.captureStream(ctx, t, "stderr", stderr, &stderrBuf, channel)
+		e.captureStream(ctx, t, "stderr", stderr, &stderrBuf)
 	}()
 	wg.Wait()
 
@@ -219,7 +294,7 @@ func (tj *TaskJob) processTaskWithResultChannel(ctx context.Context, t task.Task
 	resultPayload := taskreporter.TaskResult{Status: status, Output: output, Error: errMsg, ExitCode: exitCode}
 	finalPayload, err := json.Marshal(resultPayload)
 	if err != nil {
-		tj.reportHTTPResult(t, tr, status, output, errMsg, exitCode)
+		e.reportHTTPResult(t, status, output, errMsg, exitCode)
 		return
 	}
 
@@ -231,19 +306,19 @@ func (tj *TaskJob) processTaskWithResultChannel(ctx context.Context, t task.Task
 		ExitCode:           exitCode,
 		Payload:            string(finalPayload),
 	}
-	if err := channel.SendFinal(ctx, final); err != nil {
-		tj.reportHTTPResult(t, tr, status, output, errMsg, exitCode)
+	if err := e.channel.SendFinal(ctx, final); err != nil {
+		e.reportHTTPResult(t, status, output, errMsg, exitCode)
 	}
 }
 
-func (tj *TaskJob) captureStream(ctx context.Context, t task.Task, stream string, reader io.Reader, sink *bytes.Buffer, channel ResultChannel) {
+func (e *taskExecutor) captureStream(ctx context.Context, t task.Task, stream string, reader io.Reader, sink *bytes.Buffer) {
 	sequence := int64(1)
 	chunks := make(chan string, 1)
 	go func() {
 		defer close(chunks)
-		buffered := bufio.NewReaderSize(reader, tj.config.OutputFlushThreshold)
+		buffered := bufio.NewReaderSize(reader, e.config.OutputFlushThreshold)
 		for {
-			buf := make([]byte, max(tj.config.OutputFlushThreshold, 1))
+			buf := make([]byte, max(e.config.OutputFlushThreshold, 1))
 			n, err := buffered.Read(buf)
 			if n > 0 {
 				chunks <- string(buf[:n])
@@ -255,7 +330,7 @@ func (tj *TaskJob) captureStream(ctx context.Context, t task.Task, stream string
 	}()
 
 	var pending bytes.Buffer
-	ticker := time.NewTicker(tj.config.OutputFlushInterval)
+	ticker := time.NewTicker(e.config.OutputFlushInterval)
 	defer ticker.Stop()
 
 	flush := func() bool {
@@ -263,7 +338,7 @@ func (tj *TaskJob) captureStream(ctx context.Context, t task.Task, stream string
 			return true
 		}
 		chunk := pending.String()
-		err := channel.SendOutput(ctx, localtaskstore.OutputChunk{
+		err := e.channel.SendOutput(ctx, localtaskstore.OutputChunk{
 			MessageID:          messageID(t.ID, t.ExecutionAttemptID, stream, sequence),
 			TaskID:             t.ID,
 			ExecutionAttemptID: t.ExecutionAttemptID,
@@ -289,7 +364,7 @@ func (tj *TaskJob) captureStream(ctx context.Context, t task.Task, stream string
 			}
 			sink.WriteString(chunk)
 			pending.WriteString(chunk)
-			if pending.Len() >= tj.config.OutputFlushThreshold {
+			if pending.Len() >= e.config.OutputFlushThreshold {
 				flush()
 			}
 		case <-ticker.C:
@@ -300,8 +375,8 @@ func (tj *TaskJob) captureStream(ctx context.Context, t task.Task, stream string
 	}
 }
 
-func (tj *TaskJob) reportHTTPResult(t task.Task, tr taskreporter.TaskReporter, status, output, errMsg string, exitCode int) {
-	if reportErr := tr.Report(t.ID, &taskreporter.TaskResult{
+func (e *taskExecutor) reportHTTPResult(t task.Task, status, output, errMsg string, exitCode int) {
+	if reportErr := e.reporter.Report(t.ID, &taskreporter.TaskResult{
 		Status:   status,
 		Output:   output,
 		Error:    errMsg,

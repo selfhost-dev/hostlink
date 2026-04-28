@@ -22,6 +22,7 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/labstack/echo/v4"
@@ -48,6 +49,7 @@ func TestTaskJobReporter_SendsUpdateViaAPI(t *testing.T) {
 	wg.Add(1)
 
 	env.echo.PUT("/api/v1/tasks/:id", func(c echo.Context) error {
+		defer wg.Done()
 		mu.Lock()
 		updateReceived = true
 		mu.Unlock()
@@ -57,7 +59,6 @@ func TestTaskJobReporter_SendsUpdateViaAPI(t *testing.T) {
 	job := taskjob.NewJobWithConf(taskjob.TaskJobConfig{
 		Trigger: func(ctx context.Context, fn func() error) {
 			fn()
-			wg.Done()
 		},
 	})
 	defer job.Shutdown()
@@ -65,7 +66,7 @@ func TestTaskJobReporter_SendsUpdateViaAPI(t *testing.T) {
 	ctx := context.Background()
 	job.Register(ctx, env.fetcher, env.reporter)
 
-	wg.Wait()
+	waitForTaskJobReporterUpdate(t, &wg)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -94,6 +95,7 @@ func TestTaskJobReporter_CapturesTaskOutput(t *testing.T) {
 	wg.Add(1)
 
 	env.echo.PUT("/api/v1/tasks/:id", func(c echo.Context) error {
+		defer wg.Done()
 		var req map[string]any
 		if err := c.Bind(&req); err != nil {
 			return err
@@ -109,7 +111,6 @@ func TestTaskJobReporter_CapturesTaskOutput(t *testing.T) {
 	job := taskjob.NewJobWithConf(taskjob.TaskJobConfig{
 		Trigger: func(ctx context.Context, fn func() error) {
 			fn()
-			wg.Done()
 		},
 	})
 	defer job.Shutdown()
@@ -117,7 +118,7 @@ func TestTaskJobReporter_CapturesTaskOutput(t *testing.T) {
 	ctx := context.Background()
 	job.Register(ctx, env.fetcher, env.reporter)
 
-	wg.Wait()
+	waitForTaskJobReporterUpdate(t, &wg)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -142,6 +143,7 @@ func TestTaskJobReporter_SendsExitCode(t *testing.T) {
 	wg.Add(1)
 
 	env.echo.PUT("/api/v1/tasks/:id", func(c echo.Context) error {
+		defer wg.Done()
 		var req map[string]any
 		if err := c.Bind(&req); err != nil {
 			return err
@@ -157,7 +159,6 @@ func TestTaskJobReporter_SendsExitCode(t *testing.T) {
 	job := taskjob.NewJobWithConf(taskjob.TaskJobConfig{
 		Trigger: func(ctx context.Context, fn func() error) {
 			fn()
-			wg.Done()
 		},
 	})
 	defer job.Shutdown()
@@ -165,7 +166,7 @@ func TestTaskJobReporter_SendsExitCode(t *testing.T) {
 	ctx := context.Background()
 	job.Register(ctx, env.fetcher, env.reporter)
 
-	wg.Wait()
+	waitForTaskJobReporterUpdate(t, &wg)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -191,6 +192,7 @@ func TestTaskJobReporter_SendsErrorMessages(t *testing.T) {
 	wg.Add(1)
 
 	env.echo.PUT("/api/v1/tasks/:id", func(c echo.Context) error {
+		defer wg.Done()
 		var req map[string]any
 		if err := c.Bind(&req); err != nil {
 			return err
@@ -209,7 +211,6 @@ func TestTaskJobReporter_SendsErrorMessages(t *testing.T) {
 	job := taskjob.NewJobWithConf(taskjob.TaskJobConfig{
 		Trigger: func(ctx context.Context, fn func() error) {
 			fn()
-			wg.Done()
 		},
 	})
 	defer job.Shutdown()
@@ -217,7 +218,7 @@ func TestTaskJobReporter_SendsErrorMessages(t *testing.T) {
 	ctx := context.Background()
 	job.Register(ctx, env.fetcher, env.reporter)
 
-	wg.Wait()
+	waitForTaskJobReporterUpdate(t, &wg)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -243,6 +244,7 @@ func TestTaskJobReporter_IncludesAuthHeaders(t *testing.T) {
 	wg.Add(1)
 
 	env.echo.PUT("/api/v1/tasks/:id", func(c echo.Context) error {
+		defer wg.Done()
 		mu.Lock()
 		hasAgentID = c.Request().Header.Get("X-Agent-ID") != ""
 		hasTimestamp = c.Request().Header.Get("X-Timestamp") != ""
@@ -255,7 +257,6 @@ func TestTaskJobReporter_IncludesAuthHeaders(t *testing.T) {
 	job := taskjob.NewJobWithConf(taskjob.TaskJobConfig{
 		Trigger: func(ctx context.Context, fn func() error) {
 			fn()
-			wg.Done()
 		},
 	})
 	defer job.Shutdown()
@@ -263,7 +264,7 @@ func TestTaskJobReporter_IncludesAuthHeaders(t *testing.T) {
 	ctx := context.Background()
 	job.Register(ctx, env.fetcher, env.reporter)
 
-	wg.Wait()
+	waitForTaskJobReporterUpdate(t, &wg)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -291,6 +292,7 @@ func TestTaskJobReporter_FailedUpdateIsLogged(t *testing.T) {
 	wg.Add(1)
 
 	env.echo.PUT("/api/v1/tasks/:id", func(c echo.Context) error {
+		defer wg.Done()
 		mu.Lock()
 		updateAttempted = true
 		mu.Unlock()
@@ -300,7 +302,6 @@ func TestTaskJobReporter_FailedUpdateIsLogged(t *testing.T) {
 	job := taskjob.NewJobWithConf(taskjob.TaskJobConfig{
 		Trigger: func(ctx context.Context, fn func() error) {
 			fn()
-			wg.Done()
 		},
 	})
 	defer job.Shutdown()
@@ -308,11 +309,25 @@ func TestTaskJobReporter_FailedUpdateIsLogged(t *testing.T) {
 	ctx := context.Background()
 	job.Register(ctx, env.fetcher, env.reporter)
 
-	wg.Wait()
+	waitForTaskJobReporterUpdate(t, &wg)
 
 	mu.Lock()
 	defer mu.Unlock()
 	assert.True(t, updateAttempted, "Update should be attempted even if it fails")
+}
+
+func waitForTaskJobReporterUpdate(t *testing.T, wg *sync.WaitGroup) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for task update")
+	}
 }
 
 type taskJobTestEnv struct {

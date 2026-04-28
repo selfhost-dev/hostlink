@@ -87,6 +87,7 @@ type Config struct {
 
 type ReceiptStore interface {
 	RecordReceived(TaskReceipt) (TaskState, error)
+	RecordStarted(taskID, executionAttemptID string) error
 	TaskState(taskID, executionAttemptID string) (TaskState, error)
 }
 

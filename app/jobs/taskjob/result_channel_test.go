@@ -8,6 +8,8 @@ import (
 	"hostlink/app/services/taskreporter"
 	"hostlink/domain/task"
 	"io"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -26,6 +28,12 @@ func TestTaskJobStreamsOutputAndFinalOverResultChannel(t *testing.T) {
 
 	job.processTask(context.Background(), fetcher.tasks[0], reporter, channel)
 
+	if len(channel.started) != 1 {
+		t.Fatalf("started len = %d, want 1", len(channel.started))
+	}
+	if channel.started[0].TaskID != "task-1" || channel.started[0].ExecutionAttemptID != "attempt-1" {
+		t.Fatalf("started = %#v", channel.started[0])
+	}
 	if len(channel.outputs) != 2 {
 		t.Fatalf("outputs len = %d, want 2", len(channel.outputs))
 	}
@@ -81,6 +89,34 @@ func TestTaskJobFallsBackToHTTPReporterWhenFinalPersistenceFails(t *testing.T) {
 	}
 	if len(channel.finals) != 1 {
 		t.Fatalf("finals len = %d, want 1", len(channel.finals))
+	}
+}
+
+func TestTaskJobRecordsStartedBeforeProcessLaunch(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "process-started")
+	reporter := &fakeTaskReporter{}
+	checked := false
+	channel := &fakeResultChannel{recordStartedHook: func() error {
+		checked = true
+		if _, err := os.Stat(marker); err == nil {
+			return errors.New("process launched before durable started state")
+		}
+		return nil
+	}}
+	job := NewJobWithConf(TaskJobConfig{Trigger: runOnceTrigger})
+
+	job.processTask(context.Background(), task.Task{
+		ID:                 "task-1",
+		ExecutionAttemptID: "attempt-1",
+		Command:            "printf launched > " + marker,
+		Status:             "pending",
+	}, reporter, channel)
+
+	if !checked {
+		t.Fatal("RecordStarted was not called")
+	}
+	if len(channel.started) != 1 {
+		t.Fatalf("started len = %d, want 1", len(channel.started))
 	}
 }
 
@@ -176,23 +212,49 @@ func (f *fakeTaskFetcher) Fetch() ([]task.Task, error) {
 }
 
 type fakeTaskReporter struct {
-	mu      sync.Mutex
-	results []*taskreporter.TaskResult
+	mu              sync.Mutex
+	taskIDsReported []string
+	results         []*taskreporter.TaskResult
 }
 
 func (f *fakeTaskReporter) Report(taskID string, result *taskreporter.TaskResult) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.taskIDsReported = append(f.taskIDsReported, taskID)
 	f.results = append(f.results, result)
 	return nil
 }
 
 type fakeResultChannel struct {
-	mu         sync.Mutex
-	outputs    []localtaskstore.OutputChunk
-	finals     []localtaskstore.FinalResult
-	outputErrs []error
-	finalErr   error
+	mu                sync.Mutex
+	recordedStarted   []localtaskstore.TaskReceipt
+	started           []localtaskstore.TaskReceipt
+	outputs           []localtaskstore.OutputChunk
+	finals            []localtaskstore.FinalResult
+	recordStartedErr  error
+	recordStartedHook func() error
+	startedErr        error
+	outputErrs        []error
+	finalErr          error
+}
+
+func (f *fakeResultChannel) RecordStarted(ctx context.Context, receipt localtaskstore.TaskReceipt) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.recordStartedHook != nil {
+		if err := f.recordStartedHook(); err != nil {
+			return err
+		}
+	}
+	f.recordedStarted = append(f.recordedStarted, receipt)
+	return f.recordStartedErr
+}
+
+func (f *fakeResultChannel) SendStarted(ctx context.Context, receipt localtaskstore.TaskReceipt) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.started = append(f.started, receipt)
+	return f.startedErr
 }
 
 func (f *fakeResultChannel) SendOutput(ctx context.Context, chunk localtaskstore.OutputChunk) error {
