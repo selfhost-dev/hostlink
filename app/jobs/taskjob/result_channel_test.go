@@ -174,11 +174,22 @@ func runOnceTrigger(ctx context.Context, fn func() error) {
 }
 
 type fakeTaskFetcher struct {
+	mu    sync.Mutex
+	calls int
 	tasks []task.Task
 }
 
 func (f *fakeTaskFetcher) Fetch() ([]task.Task, error) {
+	f.mu.Lock()
+	f.calls++
+	f.mu.Unlock()
 	return f.tasks, nil
+}
+
+func (f *fakeTaskFetcher) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
 }
 
 type fakeTaskReporter struct {

@@ -24,10 +24,15 @@ import (
 
 type TriggerFunc func(context.Context, func() error)
 
+type PollingGate interface {
+	ShouldPoll() bool
+}
+
 type TaskJobConfig struct {
 	Trigger              TriggerFunc
 	OutputFlushInterval  time.Duration
 	OutputFlushThreshold int
+	PollingGate          PollingGate
 }
 
 type ResultChannel interface {
@@ -89,6 +94,9 @@ func (tj *TaskJob) Register(ctx context.Context, tf taskfetcher.TaskFetcher, tr 
 	go func() {
 		defer tj.wg.Done()
 		tj.config.Trigger(ctx, func() error {
+			if tj.config.PollingGate != nil && !tj.config.PollingGate.ShouldPoll() {
+				return nil
+			}
 			allTasks, err := tf.Fetch()
 			if err != nil {
 				return err

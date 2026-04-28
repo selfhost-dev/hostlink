@@ -193,6 +193,72 @@ func intPtr(value int) *int {
 	return &value
 }
 
+func TestHelloPayloadUsesReconnectSnapshotShape(t *testing.T) {
+	payload := HelloPayload{
+		ClientVersion: "1.0.0",
+		RunningTask: &RunningTaskSnapshot{
+			TaskID:             "tsk_123",
+			ExecutionAttemptID: "attempt_123",
+			StartedAt:          "2026-04-28T12:00:00Z",
+			LastOutputSequence: map[string]int{"stdout": 5, "stderr": 3},
+		},
+		Capabilities: HelloCapabilities{ResultsEnabled: true, DeliveryEnabled: false},
+	}
+	if err := payload.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	expected := []string{"capabilities", "client_version", "received_not_started", "running_task", "spool_status", "unacked_finals", "unacked_output"}
+	keys := sortedKeys(decoded)
+	if !reflect.DeepEqual(keys, expected) {
+		t.Errorf("hello payload keys = %v, want %v", keys, expected)
+	}
+	capabilities, ok := decoded["capabilities"].(map[string]any)
+	if !ok {
+		t.Fatal("capabilities is not an object")
+	}
+	if capabilities["results_enabled"] != true || capabilities["delivery_enabled"] != false {
+		t.Errorf("capabilities = %#v", capabilities)
+	}
+}
+
+func TestHelloAckPayloadUsesReconciliationDirectiveShape(t *testing.T) {
+	payload := HelloAckPayload{
+		AckedMessageID: "msg_123",
+		AckedType:      TypeAgentHello,
+		DeliveryEnabled: true,
+		DiscardedAttempts: []DiscardedAttempt{
+			{TaskID: "tsk_456", ExecutionAttemptID: "attempt_456", Reason: "not_found"},
+		},
+		OutputReplay: []OutputReplayDirective{
+			{TaskID: "tsk_789", ExecutionAttemptID: "attempt_789", Stream: StreamStdout, NextSequence: 3},
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	expected := []string{"acked_message_id", "acked_type", "acknowledged_final_message_ids", "delivery_enabled", "discarded_attempts", "output_replay"}
+	keys := sortedKeys(decoded)
+	if !reflect.DeepEqual(keys, expected) {
+		t.Errorf("hello ack keys = %v, want %v", keys, expected)
+	}
+	if decoded["delivery_enabled"] != true {
+		t.Errorf("delivery_enabled = %v, want true", decoded["delivery_enabled"])
+	}
+}
+
 func sortedKeys(values map[string]any) []string {
 	keys := make([]string, 0, len(values))
 	for key := range values {

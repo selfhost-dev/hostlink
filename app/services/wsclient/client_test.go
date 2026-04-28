@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"hostlink/app/services/localtaskstore"
+	"hostlink/app/services/rollout"
 	"hostlink/domain/task"
 	"net/http"
 	"os"
@@ -38,8 +39,10 @@ func TestClientSendsHelloAndMarksActiveAfterHelloAck(t *testing.T) {
 	if written.AgentID != "agent_ws_test" {
 		t.Fatalf("written agent_id = %q", written.AgentID)
 	}
-	if len(written.Payload) != 0 {
-		t.Fatalf("hello payload = %#v, want empty object", written.Payload)
+	for _, key := range []string{"running_task", "received_not_started", "unacked_finals", "unacked_output", "spool_status", "client_version", "capabilities"} {
+		if _, ok := written.Payload[key]; !ok {
+			t.Fatalf("hello payload missing key %q", key)
+		}
 	}
 
 	conn.readCh <- wsprotocol.Envelope{
@@ -55,6 +58,78 @@ func TestClientSendsHelloAndMarksActiveAfterHelloAck(t *testing.T) {
 	}
 
 	waitFor(t, func() bool { return client.IsActive() }, "client to become active")
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+}
+
+func TestClientHelloPayloadAdvertisesRolloutCapabilities(t *testing.T) {
+	conn := newFakeConn()
+	dialer := &fakeDialer{conn: conn}
+	client := newTestClient(t, dialer, WithResultsEnabled(true), WithDeliveryEnabled(false))
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- client.Start(runCtx) }()
+
+	written := conn.waitForWrite(t)
+	capabilities, ok := written.Payload["capabilities"].(map[string]any)
+	if !ok {
+		t.Fatalf("capabilities = %#v", written.Payload["capabilities"])
+	}
+	if capabilities["results_enabled"] != true || capabilities["delivery_enabled"] != false {
+		t.Fatalf("capabilities = %#v", capabilities)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+}
+
+func TestClientHelloAckUpdatesPollingCoordinator(t *testing.T) {
+	now := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
+	coordinator := rollout.NewCoordinatorWithClock(true, 5*time.Second, func() time.Time { return now })
+	conn := newFakeConn()
+	dialer := &fakeDialer{conn: conn}
+	client := newTestClient(t, dialer, WithDeliveryEnabled(true), WithDeliveryCoordinator(coordinator))
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- client.Start(runCtx) }()
+
+	hello := conn.waitForWrite(t)
+	conn.readCh <- helloAckEnvelopeWithDirectives(hello.MessageID, wsprotocol.HelloAckPayload{DeliveryEnabled: true})
+	waitFor(t, func() bool { return !coordinator.ShouldPoll() }, "polling to pause after delivery-enabled hello ack")
+
+	conn.readErr <- errors.New("server closed")
+	waitFor(t, func() bool { return !client.IsActive() }, "client to mark inactive after disconnect")
+	if coordinator.ShouldPoll() {
+		t.Fatal("polling resumed before fallback threshold elapsed")
+	}
+	now = now.Add(6 * time.Second)
+	if !coordinator.ShouldPoll() {
+		t.Fatal("polling did not resume after fallback threshold elapsed")
+	}
+}
+
+func TestClientDeliveryDisabledHelloAckLeavesPollingEnabled(t *testing.T) {
+	coordinator := rollout.NewCoordinator(true, 30*time.Second)
+	conn := newFakeConn()
+	dialer := &fakeDialer{conn: conn}
+	client := newTestClient(t, dialer, WithDeliveryEnabled(true), WithDeliveryCoordinator(coordinator))
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- client.Start(runCtx) }()
+
+	hello := conn.waitForWrite(t)
+	conn.readCh <- helloAckEnvelopeWithDirectives(hello.MessageID, wsprotocol.HelloAckPayload{DeliveryEnabled: false})
+	waitFor(t, func() bool { return client.IsActive() }, "client to become active")
+	if !coordinator.ShouldPoll() {
+		t.Fatal("polling paused despite delivery-disabled hello ack")
+	}
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("Start returned error: %v", err)
@@ -182,6 +257,38 @@ func TestClientSendStartedPersistsRunningStateAndSendsStarted(t *testing.T) {
 	requireNoError(t, err)
 	if state.Status != localtaskstore.TaskStatusRunning {
 		t.Fatalf("state = %#v", state)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+}
+
+func TestClientDeliveryOnlySendsStartedButFallsBackToHTTPFinal(t *testing.T) {
+	store := newClientTestStore(t)
+	conn := newFakeConn()
+	dialer := &fakeDialer{conn: conn}
+	client := newTestClient(t, dialer, WithReceiptStore(store), WithDeliveryEnabled(true), WithResultsEnabled(false))
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- client.Start(runCtx) }()
+
+	hello := conn.waitForWrite(t)
+	conn.readCh <- helloAckEnvelopeWithDirectives(hello.MessageID, wsprotocol.HelloAckPayload{DeliveryEnabled: true})
+	waitFor(t, func() bool { return client.IsActive() }, "client to become active")
+	receipt := localtaskstore.TaskReceipt{TaskID: "task-1", ExecutionAttemptID: "attempt-1"}
+	requireNoError(t, client.RecordStarted(context.Background(), receipt))
+	requireNoError(t, client.SendStarted(context.Background(), receipt))
+	started := conn.waitForWrite(t)
+	if started.Type != wsprotocol.TypeTaskStarted {
+		t.Fatalf("started type = %q", started.Type)
+	}
+
+	err := client.SendFinal(context.Background(), localtaskstore.FinalResult{TaskID: "task-1", ExecutionAttemptID: "attempt-1", Status: "completed"})
+	if err == nil {
+		t.Fatal("expected disabled result channel to force HTTP final fallback")
 	}
 	cancel()
 	if err := <-done; err != nil {
@@ -569,6 +676,8 @@ func newTestClient(t *testing.T, dialer Dialer, opts ...clientOption) *Client {
 		ReconnectMin:   time.Millisecond,
 		ReconnectMax:   10 * time.Millisecond,
 		PingInterval:   time.Hour,
+		ResultsEnabled: true,
+		DeliveryEnabled: true,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -598,6 +707,18 @@ func WithReceiptStore(store localtaskstore.ReceiptStore) clientOption {
 
 func WithTaskEnqueuer(enqueuer TaskEnqueuer) clientOption {
 	return func(cfg *Config) { cfg.TaskEnqueuer = enqueuer }
+}
+
+func WithResultsEnabled(enabled bool) clientOption {
+	return func(cfg *Config) { cfg.ResultsEnabled = enabled }
+}
+
+func WithDeliveryEnabled(enabled bool) clientOption {
+	return func(cfg *Config) { cfg.DeliveryEnabled = enabled }
+}
+
+func WithDeliveryCoordinator(coordinator DeliveryCoordinator) clientOption {
+	return func(cfg *Config) { cfg.DeliveryCoordinator = coordinator }
 }
 
 type fakeDialer struct {
@@ -736,6 +857,19 @@ func helloAckEnvelope(ackedMessageID string) wsprotocol.Envelope {
 			AckedMessageID: ackedMessageID,
 			AckedType:      wsprotocol.TypeAgentHello,
 		})),
+	}
+}
+
+func helloAckEnvelopeWithDirectives(ackedMessageID string, payload wsprotocol.HelloAckPayload) wsprotocol.Envelope {
+	payload.AckedMessageID = ackedMessageID
+	payload.AckedType = wsprotocol.TypeAgentHello
+	return wsprotocol.Envelope{
+		ProtocolVersion: wsprotocol.ProtocolVersion,
+		MessageID:       "msg_hello_ack",
+		Type:            wsprotocol.TypeAgentHelloAck,
+		AgentID:         "agent_ws_test",
+		SentAt:          time.Now().UTC().Format(time.RFC3339),
+		Payload:         payloadMapForTest(payload),
 	}
 }
 
