@@ -26,6 +26,12 @@ func TestTaskJobStreamsOutputAndFinalOverResultChannel(t *testing.T) {
 
 	job.processTask(context.Background(), fetcher.tasks[0], reporter, channel)
 
+	if len(channel.started) != 1 {
+		t.Fatalf("started len = %d, want 1", len(channel.started))
+	}
+	if channel.started[0].TaskID != "task-1" || channel.started[0].ExecutionAttemptID != "attempt-1" {
+		t.Fatalf("started = %#v", channel.started[0])
+	}
 	if len(channel.outputs) != 2 {
 		t.Fatalf("outputs len = %d, want 2", len(channel.outputs))
 	}
@@ -189,10 +195,19 @@ func (f *fakeTaskReporter) Report(taskID string, result *taskreporter.TaskResult
 
 type fakeResultChannel struct {
 	mu         sync.Mutex
+	started    []localtaskstore.TaskReceipt
 	outputs    []localtaskstore.OutputChunk
 	finals     []localtaskstore.FinalResult
+	startedErr error
 	outputErrs []error
 	finalErr   error
+}
+
+func (f *fakeResultChannel) SendStarted(ctx context.Context, receipt localtaskstore.TaskReceipt) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.started = append(f.started, receipt)
+	return f.startedErr
 }
 
 func (f *fakeResultChannel) SendOutput(ctx context.Context, chunk localtaskstore.OutputChunk) error {

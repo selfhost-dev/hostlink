@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"hostlink/app/services/localtaskstore"
+	"hostlink/domain/task"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -111,6 +112,178 @@ func TestClientHandlesAckWithoutTaskSideEffects(t *testing.T) {
 	waitFor(t, func() bool { return client.LastAck() != nil }, "ack to be recorded")
 	if client.LastAck().AckedMessageID != "msg_other" {
 		t.Fatalf("last ack = %#v", client.LastAck())
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+}
+
+func TestClientReceivesTaskDeliverStoresAcksAndQueues(t *testing.T) {
+	store := newClientTestStore(t)
+	enqueuer := &fakeTaskEnqueuer{}
+	conn := newFakeConn()
+	dialer := &fakeDialer{conn: conn}
+	client := newTestClient(t, dialer, WithReceiptStore(store), WithTaskEnqueuer(enqueuer))
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- client.Start(runCtx) }()
+
+	hello := conn.waitForWrite(t)
+	conn.readCh <- helloAckEnvelope(hello.MessageID)
+	conn.readCh <- deliverEnvelope("msg_deliver", "task-1", "attempt-1", "printf hi", 2)
+
+	received := conn.waitForWrite(t)
+	if received.Type != wsprotocol.TypeTaskReceived {
+		t.Fatalf("received type = %q, want %q", received.Type, wsprotocol.TypeTaskReceived)
+	}
+	if received.TaskID != "task-1" || received.ExecutionAttemptID != "attempt-1" {
+		t.Fatalf("received envelope = %#v", received)
+	}
+	state, err := store.TaskState("task-1", "attempt-1")
+	requireNoError(t, err)
+	if !state.Exists || state.Status != localtaskstore.TaskStatusReceived {
+		t.Fatalf("state = %#v", state)
+	}
+	waitFor(t, func() bool { return len(enqueuer.tasks()) == 1 }, "task to be queued")
+	queued := enqueuer.tasks()[0]
+	if queued.ID != "task-1" || queued.ExecutionAttemptID != "attempt-1" || queued.Command != "printf hi" || queued.Priority != 2 {
+		t.Fatalf("queued task = %#v", queued)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+}
+
+func TestClientSendStartedPersistsRunningStateAndSendsStarted(t *testing.T) {
+	store := newClientTestStore(t)
+	conn := newFakeConn()
+	dialer := &fakeDialer{conn: conn}
+	client := newTestClient(t, dialer, WithReceiptStore(store))
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- client.Start(runCtx) }()
+
+	hello := conn.waitForWrite(t)
+	conn.readCh <- helloAckEnvelope(hello.MessageID)
+	waitFor(t, func() bool { return client.IsActive() }, "client to become active")
+	requireNoError(t, client.SendStarted(context.Background(), localtaskstore.TaskReceipt{TaskID: "task-1", ExecutionAttemptID: "attempt-1"}))
+
+	started := conn.waitForWrite(t)
+	if started.Type != wsprotocol.TypeTaskStarted {
+		t.Fatalf("started type = %q", started.Type)
+	}
+	state, err := store.TaskState("task-1", "attempt-1")
+	requireNoError(t, err)
+	if state.Status != localtaskstore.TaskStatusRunning {
+		t.Fatalf("state = %#v", state)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+}
+
+func TestClientDuplicateTaskDeliverReacksWithoutDuplicateQueue(t *testing.T) {
+	store := newClientTestStore(t)
+	requireNoError(t, store.RecordStarted("task-1", "attempt-1"))
+	enqueuer := &fakeTaskEnqueuer{}
+	conn := newFakeConn()
+	dialer := &fakeDialer{conn: conn}
+	client := newTestClient(t, dialer, WithReceiptStore(store), WithTaskEnqueuer(enqueuer))
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- client.Start(runCtx) }()
+
+	hello := conn.waitForWrite(t)
+	conn.readCh <- helloAckEnvelope(hello.MessageID)
+	conn.readCh <- deliverEnvelope("msg_deliver", "task-1", "attempt-1", "printf hi", 2)
+
+	started := conn.waitForWrite(t)
+	if started.Type != wsprotocol.TypeTaskStarted {
+		t.Fatalf("started type = %q", started.Type)
+	}
+	if len(enqueuer.tasks()) != 0 {
+		t.Fatalf("queued tasks = %#v, want none", enqueuer.tasks())
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+}
+
+func TestClientReceivedDuplicateTaskDeliverReacksWithoutDuplicateQueue(t *testing.T) {
+	store := newClientTestStore(t)
+	_, err := store.RecordReceived(localtaskstore.TaskReceipt{TaskID: "task-1", ExecutionAttemptID: "attempt-1"})
+	requireNoError(t, err)
+	enqueuer := &fakeTaskEnqueuer{}
+	conn := newFakeConn()
+	dialer := &fakeDialer{conn: conn}
+	client := newTestClient(t, dialer, WithReceiptStore(store), WithTaskEnqueuer(enqueuer))
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- client.Start(runCtx) }()
+
+	hello := conn.waitForWrite(t)
+	conn.readCh <- helloAckEnvelope(hello.MessageID)
+	conn.readCh <- deliverEnvelope("msg_deliver", "task-1", "attempt-1", "printf hi", 2)
+
+	received := conn.waitForWrite(t)
+	if received.Type != wsprotocol.TypeTaskReceived {
+		t.Fatalf("received type = %q", received.Type)
+	}
+	if len(enqueuer.tasks()) != 0 {
+		t.Fatalf("queued tasks = %#v, want none", enqueuer.tasks())
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+}
+
+func TestClientFinalDuplicateTaskDeliverResendsUnackedFinalWithoutQueue(t *testing.T) {
+	store := newClientTestStore(t)
+	requireNoError(t, store.RecordFinal(localtaskstore.FinalResult{
+		MessageID:          "msg-final-1",
+		TaskID:             "task-1",
+		ExecutionAttemptID: "attempt-1",
+		Status:             "completed",
+		ExitCode:           0,
+		Payload:            `{"status":"completed","exit_code":0,"output_truncated":false,"error_truncated":false}`,
+	}))
+	enqueuer := &fakeTaskEnqueuer{}
+	conn := newFakeConn()
+	dialer := &fakeDialer{conn: conn}
+	client := newTestClient(t, dialer, WithReceiptStore(store), WithResultOutbox(store), WithTaskEnqueuer(enqueuer))
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- client.Start(runCtx) }()
+
+	hello := conn.waitForWrite(t)
+	conn.readCh <- helloAckEnvelope(hello.MessageID)
+	replayed := conn.waitForWrite(t)
+	if replayed.Type != wsprotocol.TypeTaskFinal {
+		t.Fatalf("hello replay type = %q", replayed.Type)
+	}
+	conn.readCh <- deliverEnvelope("msg_deliver", "task-1", "attempt-1", "printf hi", 2)
+
+	final := conn.waitForWrite(t)
+	if final.Type != wsprotocol.TypeTaskFinal || final.MessageID != "msg-final-1" {
+		t.Fatalf("final duplicate response = %#v", final)
+	}
+	if len(enqueuer.tasks()) != 0 {
+		t.Fatalf("queued tasks = %#v, want none", enqueuer.tasks())
 	}
 	cancel()
 	if err := <-done; err != nil {
@@ -419,6 +592,14 @@ func WithResultOutbox(outbox localtaskstore.ResultOutbox) clientOption {
 	return func(cfg *Config) { cfg.ResultOutbox = outbox }
 }
 
+func WithReceiptStore(store localtaskstore.ReceiptStore) clientOption {
+	return func(cfg *Config) { cfg.ReceiptStore = store }
+}
+
+func WithTaskEnqueuer(enqueuer TaskEnqueuer) clientOption {
+	return func(cfg *Config) { cfg.TaskEnqueuer = enqueuer }
+}
+
 type fakeDialer struct {
 	mu      sync.Mutex
 	conn    *fakeConn
@@ -542,6 +723,64 @@ func ackEnvelope(messageID, ackedMessageID string, ackedType wsprotocol.MessageT
 			"acked_type":       string(ackedType),
 		},
 	}
+}
+
+func helloAckEnvelope(ackedMessageID string) wsprotocol.Envelope {
+	return wsprotocol.Envelope{
+		ProtocolVersion: wsprotocol.ProtocolVersion,
+		MessageID:       "msg_hello_ack",
+		Type:            wsprotocol.TypeAgentHelloAck,
+		AgentID:         "agent_ws_test",
+		SentAt:          time.Now().UTC().Format(time.RFC3339),
+		Payload: payloadMapForTest(wsprotocol.BuildAck(wsprotocol.AckOptions{
+			AckedMessageID: ackedMessageID,
+			AckedType:      wsprotocol.TypeAgentHello,
+		})),
+	}
+}
+
+func deliverEnvelope(messageID, taskID, attemptID, command string, priority int) wsprotocol.Envelope {
+	return wsprotocol.Envelope{
+		ProtocolVersion:    wsprotocol.ProtocolVersion,
+		MessageID:          messageID,
+		Type:               wsprotocol.TypeTaskDeliver,
+		AgentID:            "agent_ws_test",
+		TaskID:             taskID,
+		ExecutionAttemptID: attemptID,
+		SentAt:             time.Now().UTC().Format(time.RFC3339),
+		Payload: map[string]any{
+			"command":  command,
+			"priority": priority,
+		},
+	}
+}
+
+func payloadMapForTest(value any) map[string]any {
+	data, _ := json.Marshal(value)
+	var payload map[string]any
+	_ = json.Unmarshal(data, &payload)
+	return payload
+}
+
+type fakeTaskEnqueuer struct {
+	mu      sync.Mutex
+	queued  []task.Task
+	enqueue error
+}
+
+func (f *fakeTaskEnqueuer) Enqueue(ctx context.Context, t task.Task) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.queued = append(f.queued, t)
+	return f.enqueue
+}
+
+func (f *fakeTaskEnqueuer) tasks() []task.Task {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	tasks := make([]task.Task, len(f.queued))
+	copy(tasks, f.queued)
+	return tasks
 }
 
 func newClientTestStore(t *testing.T) *localtaskstore.Store {

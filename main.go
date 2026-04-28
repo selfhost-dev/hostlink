@@ -268,8 +268,9 @@ func runServer(ctx context.Context, cmd *cli.Command) error {
 		<-registeredChan
 		log.Println("Agent registered, starting task job...")
 		var resultChannel taskjob.ResultChannel
+		taskJob := taskjob.New()
 		startWebSocketClientIfEnabled(ctx, func() (webSocketRuntime, error) {
-			runtime, err := newDefaultWebSocketRuntime(localStore)
+			runtime, err := newDefaultWebSocketRuntime(localStore, taskJob)
 			if err == nil {
 				resultChannel = runtime.(taskjob.ResultChannel)
 			}
@@ -286,7 +287,6 @@ func runServer(ctx context.Context, cmd *cli.Command) error {
 			log.Printf("failed to initialize task reporter: %v", err)
 			return
 		}
-		taskJob := taskjob.New()
 		taskJob.Register(ctx, fetcher, reporter, resultChannel)
 
 		metricsReporter, err := metrics.New()
@@ -335,7 +335,7 @@ func startWebSocketClientIfEnabled(ctx context.Context, constructor func() (webS
 	return true
 }
 
-func newDefaultWebSocketRuntime(localStore *localtaskstore.Store) (webSocketRuntime, error) {
+func newDefaultWebSocketRuntime(localStore *localtaskstore.Store, enqueuer wsclient.TaskEnqueuer) (webSocketRuntime, error) {
 	state := agentstate.New(appconf.AgentStatePath())
 	if err := state.Load(); err != nil {
 		return nil, fmt.Errorf("failed to load agent state: %w", err)
@@ -351,6 +351,8 @@ func newDefaultWebSocketRuntime(localStore *localtaskstore.Store) (webSocketRunt
 		ReconnectMax:   appconf.WebSocketReconnectMax(),
 		PingInterval:   appconf.WebSocketPingInterval(),
 		ResultOutbox:   localStore,
+		ReceiptStore:   localStore,
+		TaskEnqueuer:   enqueuer,
 	})
 }
 
