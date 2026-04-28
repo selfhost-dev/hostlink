@@ -31,14 +31,16 @@ type TaskJobConfig struct {
 }
 
 type ResultChannel interface {
+	SendStarted(context.Context, localtaskstore.TaskReceipt) error
 	SendOutput(context.Context, localtaskstore.OutputChunk) error
 	SendFinal(context.Context, localtaskstore.FinalResult) error
 }
 
 type TaskJob struct {
-	config TaskJobConfig
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	config    TaskJobConfig
+	enqueueCh chan task.Task
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
 }
 
 func New() *TaskJob {
@@ -59,7 +61,8 @@ func NewJobWithConf(cfg TaskJobConfig) *TaskJob {
 	}
 
 	return &TaskJob{
-		config: cfg,
+		config:    cfg,
+		enqueueCh: make(chan task.Task, 16),
 	}
 }
 
@@ -70,6 +73,18 @@ func (tj *TaskJob) Register(ctx context.Context, tf taskfetcher.TaskFetcher, tr 
 	if len(channels) > 0 {
 		channel = channels[0]
 	}
+	tj.wg.Add(1)
+	go func() {
+		defer tj.wg.Done()
+		for {
+			select {
+			case queued := <-tj.enqueueCh:
+				tj.processTask(ctx, queued, tr, channel)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 	tj.wg.Add(1)
 	go func() {
 		defer tj.wg.Done()
@@ -91,6 +106,15 @@ func (tj *TaskJob) Register(ctx context.Context, tf taskfetcher.TaskFetcher, tr 
 		})
 	}()
 	return cancel
+}
+
+func (tj *TaskJob) Enqueue(ctx context.Context, t task.Task) error {
+	select {
+	case tj.enqueueCh <- t:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (tj *TaskJob) processTask(ctx context.Context, t task.Task, tr taskreporter.TaskReporter, channel ResultChannel) {
@@ -182,6 +206,11 @@ func (tj *TaskJob) processTaskWithResultChannel(ctx context.Context, t task.Task
 
 	if err := execCmd.Start(); err != nil {
 		tj.reportHTTPResult(t, tr, "failed", "", err.Error(), 1)
+		return
+	}
+	if err := channel.SendStarted(ctx, localtaskstore.TaskReceipt{TaskID: t.ID, ExecutionAttemptID: t.ExecutionAttemptID}); err != nil {
+		_ = execCmd.Process.Kill()
+		tj.reportHTTPResult(t, tr, "failed", "", fmt.Sprintf("failed to report task start: %v", err), 1)
 		return
 	}
 

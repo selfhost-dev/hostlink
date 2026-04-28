@@ -13,6 +13,7 @@ import (
 
 	"hostlink/app/services/agentstate"
 	"hostlink/app/services/requestsigner"
+	"hostlink/domain/task"
 	"hostlink/internal/wsprotocol"
 )
 
@@ -31,6 +32,10 @@ type Conn interface {
 
 type SleepFunc func(context.Context, time.Duration) error
 
+type TaskEnqueuer interface {
+	Enqueue(context.Context, task.Task) error
+}
+
 type Config struct {
 	URL            string
 	AgentState     *agentstate.AgentState
@@ -41,6 +46,8 @@ type Config struct {
 	PingInterval   time.Duration
 	SleepFunc      SleepFunc
 	ResultOutbox   localtaskstore.ResultOutbox
+	ReceiptStore   localtaskstore.ReceiptStore
+	TaskEnqueuer   TaskEnqueuer
 }
 
 type Client struct {
@@ -53,12 +60,14 @@ type Client struct {
 	pingInterval time.Duration
 	sleep        SleepFunc
 
-	mu      sync.RWMutex
-	writeMu sync.Mutex
-	active  bool
-	lastAck *wsprotocol.AckPayload
-	conn    Conn
-	outbox  localtaskstore.ResultOutbox
+	mu       sync.RWMutex
+	writeMu  sync.Mutex
+	active   bool
+	lastAck  *wsprotocol.AckPayload
+	conn     Conn
+	outbox   localtaskstore.ResultOutbox
+	receipts localtaskstore.ReceiptStore
+	enqueuer TaskEnqueuer
 }
 
 func New(cfg Config) (*Client, error) {
@@ -99,6 +108,8 @@ func New(cfg Config) (*Client, error) {
 		pingInterval: cfg.PingInterval,
 		sleep:        cfg.SleepFunc,
 		outbox:       cfg.ResultOutbox,
+		receipts:     cfg.ReceiptStore,
+		enqueuer:     cfg.TaskEnqueuer,
 	}, nil
 }
 
@@ -234,10 +245,80 @@ func (c *Client) readLoop(ctx context.Context, conn Conn, helloMessageID string)
 				continue
 			}
 			return fmt.Errorf("websocket protocol error: %s", env.MessageID)
+		case wsprotocol.TypeTaskDeliver:
+			if err := c.receiveTaskDeliver(ctx, conn, env); err != nil {
+				return err
+			}
 		default:
 			return fmt.Errorf("unsupported inbound websocket message type: %s", env.Type)
 		}
 	}
+}
+
+func (c *Client) receiveTaskDeliver(ctx context.Context, conn Conn, env wsprotocol.Envelope) error {
+	if c.receipts == nil {
+		return fmt.Errorf("receipt store is not configured")
+	}
+	payload, err := wsprotocol.DecodePayload[wsprotocol.TaskDeliverPayload](env)
+	if err != nil {
+		return err
+	}
+	if err := payload.Validate(); err != nil {
+		return err
+	}
+
+	previous, err := c.receipts.TaskState(env.TaskID, env.ExecutionAttemptID)
+	if err != nil {
+		return err
+	}
+	state, err := c.receipts.RecordReceived(localtaskstore.TaskReceipt{
+		TaskID:             env.TaskID,
+		ExecutionAttemptID: env.ExecutionAttemptID,
+	})
+	if err != nil {
+		return err
+	}
+	if previous.Exists && previous.Status == localtaskstore.TaskStatusRunning {
+		return c.writeEnvelope(ctx, conn, c.buildTaskStateEnvelope(wsprotocol.TypeTaskStarted, env.TaskID, env.ExecutionAttemptID))
+	}
+	if previous.Exists && (previous.Status == localtaskstore.TaskStatusFinal || previous.Status == localtaskstore.TaskStatusInterrupted) {
+		replayed, err := c.replayTaskFinal(ctx, conn, env.TaskID, env.ExecutionAttemptID)
+		if err != nil {
+			return err
+		}
+		if replayed {
+			return nil
+		}
+	}
+	if err := c.writeEnvelope(ctx, conn, c.buildTaskStateEnvelope(wsprotocol.TypeTaskReceived, env.TaskID, env.ExecutionAttemptID)); err != nil {
+		return err
+	}
+	if !previous.Exists && state.Status == localtaskstore.TaskStatusReceived && c.enqueuer != nil {
+		return c.enqueuer.Enqueue(ctx, task.Task{
+			ID:                 env.TaskID,
+			ExecutionAttemptID: env.ExecutionAttemptID,
+			Command:            payload.Command,
+			Status:             "pending",
+			Priority:           payload.Priority,
+		})
+	}
+	return nil
+}
+
+func (c *Client) replayTaskFinal(ctx context.Context, conn Conn, taskID, executionAttemptID string) (bool, error) {
+	if c.outbox == nil {
+		return false, nil
+	}
+	messages, err := c.outbox.UnackedMessages()
+	if err != nil {
+		return false, err
+	}
+	for _, message := range messages {
+		if message.TaskID == taskID && message.ExecutionAttemptID == executionAttemptID && message.Type == localtaskstore.OutboxMessageTypeFinal {
+			return true, c.writeEnvelope(ctx, conn, envelopeFromOutboxMessage(c.agentID, message))
+		}
+	}
+	return false, nil
 }
 
 func (c *Client) SendOutput(ctx context.Context, chunk localtaskstore.OutputChunk) error {
@@ -283,6 +364,16 @@ func (c *Client) SendFinal(ctx context.Context, result localtaskstore.FinalResul
 	return nil
 }
 
+func (c *Client) SendStarted(ctx context.Context, receipt localtaskstore.TaskReceipt) error {
+	if c.receipts == nil {
+		return fmt.Errorf("receipt store cannot record started state")
+	}
+	if err := c.receipts.RecordStarted(receipt.TaskID, receipt.ExecutionAttemptID); err != nil {
+		return err
+	}
+	return c.sendIfActive(ctx, c.buildTaskStateEnvelope(wsprotocol.TypeTaskStarted, receipt.TaskID, receipt.ExecutionAttemptID))
+}
+
 func (c *Client) buildHello() wsprotocol.Envelope {
 	return wsprotocol.Envelope{
 		ProtocolVersion: wsprotocol.ProtocolVersion,
@@ -291,6 +382,19 @@ func (c *Client) buildHello() wsprotocol.Envelope {
 		AgentID:         c.agentID,
 		SentAt:          time.Now().UTC().Format(time.RFC3339),
 		Payload:         map[string]any{},
+	}
+}
+
+func (c *Client) buildTaskStateEnvelope(messageType wsprotocol.MessageType, taskID, executionAttemptID string) wsprotocol.Envelope {
+	return wsprotocol.Envelope{
+		ProtocolVersion:    wsprotocol.ProtocolVersion,
+		MessageID:          fmt.Sprintf("msg_%s_%s_%d", taskID, messageType, time.Now().UnixNano()),
+		Type:               messageType,
+		AgentID:            c.agentID,
+		TaskID:             taskID,
+		ExecutionAttemptID: executionAttemptID,
+		SentAt:             time.Now().UTC().Format(time.RFC3339),
+		Payload:            map[string]any{},
 	}
 }
 
