@@ -11,6 +11,7 @@ import (
 	"hostlink/app/services/localtaskstore"
 	"hostlink/app/services/rollout"
 	"hostlink/domain/task"
+	"hostlink/internal/telemetry/telemetrytest"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -111,6 +112,97 @@ func TestClientHelloAckUpdatesPollingCoordinator(t *testing.T) {
 	now = now.Add(6 * time.Second)
 	if !coordinator.ShouldPoll() {
 		t.Fatal("polling did not resume after fallback threshold elapsed")
+	}
+}
+
+func TestClientReconnectAttemptEmitsTelemetry(t *testing.T) {
+	telemetryPath := filepath.Join(t.TempDir(), "hostlink-ws-telemetry.jsonl")
+	t.Setenv("HOSTLINK_WS_TELEMETRY_PATH", telemetryPath)
+	first := newFakeConn()
+	second := newFakeConn()
+	dialer := &fakeDialer{conns: []*fakeConn{first, second}}
+	sleeps := make(chan time.Duration, 2)
+	client := newTestClient(t, dialer, WithSleepFunc(func(ctx context.Context, d time.Duration) error {
+		sleeps <- d
+		return nil
+	}))
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- client.Start(runCtx) }()
+
+	first.waitForWrite(t)
+	first.readErr <- errors.New("server closed")
+	select {
+	case <-sleeps:
+	case <-time.After(time.Second):
+		t.Fatal("expected reconnect backoff sleep")
+	}
+	second.waitForWrite(t)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	entries := telemetryEntries(t, telemetryPath)
+	reconnectMetric := findTelemetryEntry(entries, func(entry map[string]any) bool {
+		return entry["metric_name"] == "hostlink.agent_ws.reconnect.attempts"
+	})
+	if reconnectMetric["agent_id"] != "agent_ws_test" {
+		t.Fatalf("reconnect metric = %#v", reconnectMetric)
+	}
+}
+
+func TestClientSessionLifecycleEmitsTelemetry(t *testing.T) {
+	telemetryPath := filepath.Join(t.TempDir(), "hostlink-ws-telemetry.jsonl")
+	t.Setenv("HOSTLINK_WS_TELEMETRY_PATH", telemetryPath)
+	conn := newFakeConn()
+	dialer := &fakeDialer{conn: conn}
+	client := newTestClient(t, dialer)
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- client.Start(runCtx) }()
+
+	hello := conn.waitForWrite(t)
+	conn.readCh <- helloAckEnvelope(hello.MessageID)
+	waitFor(t, func() bool { return client.IsActive() }, "client to become active")
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	entries := telemetryEntries(t, telemetryPath)
+	activated := findTelemetryEntry(entries, func(entry map[string]any) bool {
+		return entry["event"] == "hostlink.agent_ws.session.activated"
+	})
+	opened := findTelemetryEntry(entries, func(entry map[string]any) bool {
+		return entry["metric_name"] == "hostlink.agent_ws.connections.opened"
+	})
+	connected := findTelemetryEntry(entries, func(entry map[string]any) bool {
+		return entry["metric_name"] == "hostlink.agent_ws.connection.active" && entry["value"] == float64(1)
+	})
+	disconnected := findTelemetryEntry(entries, func(entry map[string]any) bool {
+		return entry["event"] == "hostlink.agent_ws.session.disconnected"
+	})
+	closed := findTelemetryEntry(entries, func(entry map[string]any) bool {
+		return entry["metric_name"] == "hostlink.agent_ws.connections.closed"
+	})
+
+	if activated["agent_id"] != "agent_ws_test" {
+		t.Fatalf("activated entry = %#v", activated)
+	}
+	if opened["agent_id"] != "agent_ws_test" {
+		t.Fatalf("opened metric = %#v", opened)
+	}
+	if connected["agent_id"] != "agent_ws_test" {
+		t.Fatalf("connected metric = %#v", connected)
+	}
+	if disconnected["agent_id"] != "agent_ws_test" {
+		t.Fatalf("disconnected entry = %#v", disconnected)
+	}
+	if closed["agent_id"] != "agent_ws_test" {
+		t.Fatalf("closed metric = %#v", closed)
 	}
 }
 
@@ -297,6 +389,8 @@ func TestClientDeliveryOnlySendsStartedButFallsBackToHTTPFinal(t *testing.T) {
 }
 
 func TestClientDuplicateTaskDeliverReacksWithoutDuplicateQueue(t *testing.T) {
+	telemetryPath := filepath.Join(t.TempDir(), "hostlink-ws-telemetry.jsonl")
+	t.Setenv("HOSTLINK_WS_TELEMETRY_PATH", telemetryPath)
 	store := newClientTestStore(t)
 	requireNoError(t, store.RecordStarted("task-1", "attempt-1"))
 	enqueuer := &fakeTaskEnqueuer{}
@@ -320,6 +414,19 @@ func TestClientDuplicateTaskDeliverReacksWithoutDuplicateQueue(t *testing.T) {
 	if len(enqueuer.tasks()) != 0 {
 		t.Fatalf("queued tasks = %#v, want none", enqueuer.tasks())
 	}
+	entries := telemetryEntries(t, telemetryPath)
+	duplicate := findTelemetryEntry(entries, func(entry map[string]any) bool {
+		return entry["event"] == "hostlink.agent_ws.task.deliver.duplicate"
+	})
+	duplicateMetric := findTelemetryEntry(entries, func(entry map[string]any) bool {
+		return entry["metric_name"] == "hostlink.agent_ws.delivery.duplicates"
+	})
+	if duplicate["task_id"] != "task-1" || duplicate["execution_attempt_id"] != "attempt-1" {
+		t.Fatalf("duplicate entry = %#v", duplicate)
+	}
+	if duplicateMetric["task_id"] != "task-1" {
+		t.Fatalf("duplicate metric = %#v", duplicateMetric)
+	}
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("Start returned error: %v", err)
@@ -327,6 +434,8 @@ func TestClientDuplicateTaskDeliverReacksWithoutDuplicateQueue(t *testing.T) {
 }
 
 func TestClientReceivedDuplicateTaskDeliverReacksWithoutDuplicateQueue(t *testing.T) {
+	telemetryPath := filepath.Join(t.TempDir(), "hostlink-ws-telemetry.jsonl")
+	t.Setenv("HOSTLINK_WS_TELEMETRY_PATH", telemetryPath)
 	store := newClientTestStore(t)
 	_, err := store.RecordReceived(localtaskstore.TaskReceipt{TaskID: "task-1", ExecutionAttemptID: "attempt-1"})
 	requireNoError(t, err)
@@ -350,6 +459,19 @@ func TestClientReceivedDuplicateTaskDeliverReacksWithoutDuplicateQueue(t *testin
 	}
 	if len(enqueuer.tasks()) != 0 {
 		t.Fatalf("queued tasks = %#v, want none", enqueuer.tasks())
+	}
+	entries := telemetryEntries(t, telemetryPath)
+	duplicate := findTelemetryEntry(entries, func(entry map[string]any) bool {
+		return entry["event"] == "hostlink.agent_ws.task.deliver.duplicate"
+	})
+	duplicateMetric := findTelemetryEntry(entries, func(entry map[string]any) bool {
+		return entry["metric_name"] == "hostlink.agent_ws.delivery.duplicates"
+	})
+	if duplicate["state"] != localtaskstore.TaskStatusReceived {
+		t.Fatalf("duplicate entry = %#v", duplicate)
+	}
+	if duplicateMetric["task_id"] != "task-1" {
+		t.Fatalf("duplicate metric = %#v", duplicateMetric)
 	}
 	cancel()
 	if err := <-done; err != nil {
@@ -398,7 +520,52 @@ func TestClientFinalDuplicateTaskDeliverResendsUnackedFinalWithoutQueue(t *testi
 	}
 }
 
+func TestClientHelloAckAcknowledgedFinalsEmitOutboxAcknowledgementTelemetry(t *testing.T) {
+	telemetryPath := filepath.Join(t.TempDir(), "hostlink-ws-telemetry.jsonl")
+	t.Setenv("HOSTLINK_WS_TELEMETRY_PATH", telemetryPath)
+	store := newClientTestStore(t)
+	requireNoError(t, store.RecordFinal(localtaskstore.FinalResult{
+		MessageID:          "msg-final-1",
+		TaskID:             "task-1",
+		ExecutionAttemptID: "attempt-1",
+		Status:             "completed",
+		ExitCode:           0,
+		Payload:            `{"status":"completed","exit_code":0,"output_truncated":false,"error_truncated":false}`,
+	}))
+	conn := newFakeConn()
+	dialer := &fakeDialer{conn: conn}
+	client := newTestClient(t, dialer, WithResultOutbox(store))
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- client.Start(runCtx) }()
+
+	hello := conn.waitForWrite(t)
+	conn.readCh <- helloAckEnvelopeWithDirectives(hello.MessageID, wsprotocol.HelloAckPayload{
+		AcknowledgedFinalMessageIDs: []string{"msg-final-1"},
+	})
+
+	waitFor(t, func() bool {
+		messages, err := store.UnackedMessages()
+		return err == nil && len(messages) == 0
+	}, "hello ack to remove final outbox message")
+	entries := telemetryEntries(t, telemetryPath)
+	acknowledged := findTelemetryEntry(entries, func(entry map[string]any) bool {
+		return entry["event"] == "hostlink.agent_ws.outbox.acknowledged" && entry["acked_message_id"] == "msg-final-1"
+	})
+	if acknowledged["acked_type"] != string(wsprotocol.TypeTaskFinal) || acknowledged["task_id"] != "task-1" {
+		t.Fatalf("acknowledged event = %#v", acknowledged)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+}
+
 func TestClientAckRemovesResultMessageFromOutbox(t *testing.T) {
+	telemetryPath := filepath.Join(t.TempDir(), "hostlink-ws-telemetry.jsonl")
+	t.Setenv("HOSTLINK_WS_TELEMETRY_PATH", telemetryPath)
 	store := newClientTestStore(t)
 	requireNoError(t, store.AppendOutputChunk(localtaskstore.OutputChunk{
 		MessageID:          "msg-output-1",
@@ -425,6 +592,19 @@ func TestClientAckRemovesResultMessageFromOutbox(t *testing.T) {
 		messages, err := store.UnackedMessages()
 		return err == nil && len(messages) == 0
 	}, "ack to remove outbox message")
+	entries := telemetryEntries(t, telemetryPath)
+	ackMetric := findTelemetryEntry(entries, func(entry map[string]any) bool {
+		return entry["metric_name"] == "hostlink.local_store.outbox.pending_messages" && entry["value"] == float64(0)
+	})
+	finalPendingAck := findTelemetryEntry(entries, func(entry map[string]any) bool {
+		return entry["event"] == "hostlink.agent_ws.outbox.acknowledged" && entry["acked_message_id"] == "msg-output-1"
+	})
+	if ackMetric["metric_name"] != "hostlink.local_store.outbox.pending_messages" {
+		t.Fatalf("ack metric = %#v", ackMetric)
+	}
+	if finalPendingAck["task_id"] != "task-1" || finalPendingAck["execution_attempt_id"] != "attempt-1" {
+		t.Fatalf("ack event = %#v", finalPendingAck)
+	}
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("Start returned error: %v", err)
@@ -432,6 +612,8 @@ func TestClientAckRemovesResultMessageFromOutbox(t *testing.T) {
 }
 
 func TestClientReplaysUnackedMessagesAfterHelloAck(t *testing.T) {
+	telemetryPath := filepath.Join(t.TempDir(), "hostlink-ws-telemetry.jsonl")
+	t.Setenv("HOSTLINK_WS_TELEMETRY_PATH", telemetryPath)
 	store := newClientTestStore(t)
 	requireNoError(t, store.AppendOutputChunk(localtaskstore.OutputChunk{
 		MessageID:          "msg-output-1",
@@ -479,6 +661,19 @@ func TestClientReplaysUnackedMessagesAfterHelloAck(t *testing.T) {
 	}
 	if final.MessageID != "msg-final-1" || final.Type != wsprotocol.TypeTaskFinal {
 		t.Fatalf("second replay = %#v", final)
+	}
+	entries := telemetryEntries(t, telemetryPath)
+	outputResend := findTelemetryEntry(entries, func(entry map[string]any) bool {
+		return entry["metric_name"] == "hostlink.agent_ws.outbox.resends" && entry["message_id"] == "msg-output-1"
+	})
+	finalResend := findTelemetryEntry(entries, func(entry map[string]any) bool {
+		return entry["metric_name"] == "hostlink.agent_ws.outbox.resends" && entry["message_id"] == "msg-final-1"
+	})
+	if outputResend["message_type"] != string(wsprotocol.TypeTaskOutput) {
+		t.Fatalf("output resend = %#v", outputResend)
+	}
+	if finalResend["message_type"] != string(wsprotocol.TypeTaskFinal) {
+		t.Fatalf("final resend = %#v", finalResend)
 	}
 	cancel()
 	if err := <-done; err != nil {
@@ -529,6 +724,121 @@ func TestClientRetryableErrorKeepsConnectionAndOutboxMessage(t *testing.T) {
 	}
 	if len(messages) != 1 || messages[0].MessageID != "msg-output-1" {
 		t.Fatalf("messages = %#v", messages)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+}
+
+func TestClientRetryableOutputGapReplaysFromHighestAcceptedSequence(t *testing.T) {
+	store := newClientTestStore(t)
+	conn := newFakeConn()
+	dialer := &fakeDialer{conn: conn}
+	client := newTestClient(t, dialer, WithResultOutbox(store))
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- client.Start(runCtx) }()
+
+	hello := conn.waitForWrite(t)
+	conn.readCh <- helloAckEnvelopeWithDirectives(hello.MessageID, wsprotocol.HelloAckPayload{OutputReplay: []wsprotocol.OutputReplayDirective{}})
+	waitFor(t, func() bool { return client.IsActive() }, "client to become active")
+	requireNoError(t, client.SendOutput(context.Background(), localtaskstore.OutputChunk{
+		MessageID: "msg-output-1", TaskID: "task-1", ExecutionAttemptID: "attempt-1", Stream: "stdout", Sequence: 1, Payload: "hello", ByteCount: 5,
+	}))
+	requireNoError(t, client.SendOutput(context.Background(), localtaskstore.OutputChunk{
+		MessageID: "msg-output-2", TaskID: "task-1", ExecutionAttemptID: "attempt-1", Stream: "stdout", Sequence: 2, Payload: "world", ByteCount: 5,
+	}))
+	_ = conn.waitForWrite(t)
+	_ = conn.waitForWrite(t)
+
+	zero := 0
+	conn.readCh <- wsprotocol.Envelope{
+		ProtocolVersion: wsprotocol.ProtocolVersion,
+		MessageID:       "msg_error",
+		Type:            wsprotocol.TypeError,
+		AgentID:         "agent_ws_test",
+		SentAt:          time.Now().UTC().Format(time.RFC3339),
+		Payload: payloadMap(t, wsprotocol.BuildError(wsprotocol.ErrorOptions{
+			Code:                    "output_sequence_gap",
+			Message:                 "expected sequence 1",
+			Retryable:               true,
+			RelatedMessageID:        "msg-output-2",
+			HighestAcceptedSequence: &zero,
+		})),
+	}
+
+	replayedFirst := conn.waitForWrite(t)
+	replayedSecond := conn.waitForWrite(t)
+	if replayedFirst.MessageID != "msg-output-1" || replayedSecond.MessageID != "msg-output-2" {
+		t.Fatalf("replayed messages = %#v then %#v", replayedFirst, replayedSecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+}
+
+func TestClientDuplicateOutputChaosSendsChunkTwice(t *testing.T) {
+	t.Setenv("HOSTLINK_WS_CHAOS_DUPLICATE_OUTPUT", "true")
+	store := newClientTestStore(t)
+	conn := newFakeConn()
+	dialer := &fakeDialer{conn: conn}
+	client := newTestClient(t, dialer, WithResultOutbox(store))
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- client.Start(runCtx) }()
+
+	hello := conn.waitForWrite(t)
+	conn.readCh <- helloAckEnvelopeWithDirectives(hello.MessageID, wsprotocol.HelloAckPayload{OutputReplay: []wsprotocol.OutputReplayDirective{}})
+	waitFor(t, func() bool { return client.IsActive() }, "client to become active")
+	requireNoError(t, client.SendOutput(context.Background(), localtaskstore.OutputChunk{
+		MessageID: "msg-output-1", TaskID: "task-1", ExecutionAttemptID: "attempt-1", Stream: "stdout", Sequence: 1, Payload: "hello", ByteCount: 5,
+	}))
+
+	first := conn.waitForWrite(t)
+	duplicate := conn.waitForWrite(t)
+	if first.MessageID != "msg-output-1" || duplicate.MessageID != "msg-output-1" {
+		t.Fatalf("duplicate output writes = %#v then %#v", first, duplicate)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+}
+
+func TestClientDropOutputSequenceChaosStoresButDoesNotSendOnce(t *testing.T) {
+	t.Setenv("HOSTLINK_WS_CHAOS_DROP_OUTPUT_SEQUENCE", "1")
+	store := newClientTestStore(t)
+	conn := newFakeConn()
+	dialer := &fakeDialer{conn: conn}
+	client := newTestClient(t, dialer, WithResultOutbox(store))
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- client.Start(runCtx) }()
+
+	hello := conn.waitForWrite(t)
+	conn.readCh <- helloAckEnvelopeWithDirectives(hello.MessageID, wsprotocol.HelloAckPayload{OutputReplay: []wsprotocol.OutputReplayDirective{}})
+	waitFor(t, func() bool { return client.IsActive() }, "client to become active")
+	requireNoError(t, client.SendOutput(context.Background(), localtaskstore.OutputChunk{
+		MessageID: "msg-output-1", TaskID: "task-1", ExecutionAttemptID: "attempt-1", Stream: "stdout", Sequence: 1, Payload: "hello", ByteCount: 5,
+	}))
+
+	select {
+	case written := <-conn.writeCh:
+		t.Fatalf("unexpected output write = %#v", written)
+	case <-time.After(20 * time.Millisecond):
+	}
+	messages, err := store.UnackedMessages()
+	requireNoError(t, err)
+	if len(messages) != 1 || messages[0].MessageID != "msg-output-1" {
+		t.Fatalf("stored messages = %#v", messages)
 	}
 	cancel()
 	if err := <-done; err != nil {
@@ -669,14 +979,14 @@ func newTestClient(t *testing.T, dialer Dialer, opts ...clientOption) *Client {
 		t.Fatalf("set agent ID: %v", err)
 	}
 	cfg := Config{
-		URL:            "ws://example.test/api/v1/agents/ws",
-		AgentState:     state,
-		PrivateKeyPath: saveTestPrivateKey(t, t.TempDir()),
-		Dialer:         dialer,
-		ReconnectMin:   time.Millisecond,
-		ReconnectMax:   10 * time.Millisecond,
-		PingInterval:   time.Hour,
-		ResultsEnabled: true,
+		URL:             "ws://example.test/api/v1/agents/ws",
+		AgentState:      state,
+		PrivateKeyPath:  saveTestPrivateKey(t, t.TempDir()),
+		Dialer:          dialer,
+		ReconnectMin:    time.Millisecond,
+		ReconnectMax:    10 * time.Millisecond,
+		PingInterval:    time.Hour,
+		ResultsEnabled:  true,
 		DeliveryEnabled: true,
 	}
 	for _, opt := range opts {
@@ -940,6 +1250,15 @@ func requireNoError(t *testing.T, err error) {
 
 func intValuePtr(value int) *int {
 	return &value
+}
+
+func telemetryEntries(t *testing.T, path string) []map[string]any {
+	t.Helper()
+	return telemetrytest.ReadEntries(t, path)
+}
+
+func findTelemetryEntry(entries []map[string]any, match func(map[string]any) bool) map[string]any {
+	return telemetrytest.FindEntry(entries, match)
 }
 
 func saveTestPrivateKey(t *testing.T, dir string) string {

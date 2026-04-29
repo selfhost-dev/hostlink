@@ -164,6 +164,42 @@ func WebSocketPingInterval() time.Duration {
 	return parseDurationClamped("HOSTLINK_WS_PING_INTERVAL", 30*time.Second, 5*time.Second, 5*time.Minute)
 }
 
+// RegistrationRetryInitialDelay returns the first retry delay for agent registration.
+// Controlled by HOSTLINK_REGISTRATION_RETRY_INITIAL_DELAY (default: 10s, clamped to [10ms, 5m]).
+func RegistrationRetryInitialDelay() time.Duration {
+	return parseDurationClamped("HOSTLINK_REGISTRATION_RETRY_INITIAL_DELAY", 10*time.Second, 10*time.Millisecond, 5*time.Minute)
+}
+
+// TaskPollInterval returns the interval between task polling attempts.
+// Controlled by HOSTLINK_TASK_POLL_INTERVAL (default: 10s, clamped to [10ms, 5m]).
+func TaskPollInterval() time.Duration {
+	return parseDurationClamped("HOSTLINK_TASK_POLL_INTERVAL", 10*time.Second, 10*time.Millisecond, 5*time.Minute)
+}
+
+// TaskOutputFlushInterval returns how often buffered task output is flushed.
+// Controlled by HOSTLINK_TASK_OUTPUT_FLUSH_INTERVAL (default: 100ms, clamped to [1ms, 5s]).
+func TaskOutputFlushInterval() time.Duration {
+	return parseDurationClamped("HOSTLINK_TASK_OUTPUT_FLUSH_INTERVAL", 100*time.Millisecond, time.Millisecond, 5*time.Second)
+}
+
+// TaskOutputFlushThreshold returns the buffered task output byte threshold.
+// Controlled by HOSTLINK_TASK_OUTPUT_FLUSH_THRESHOLD (default: 16KiB).
+func TaskOutputFlushThreshold() int {
+	return int(parseInt64Positive("HOSTLINK_TASK_OUTPUT_FLUSH_THRESHOLD", 16*1024))
+}
+
+// MetricsPushInterval returns the interval between metrics push attempts.
+// Controlled by HOSTLINK_METRICS_PUSH_INTERVAL (default: 20s, clamped to [10ms, 5m]).
+func MetricsPushInterval() time.Duration {
+	return parseDurationClamped("HOSTLINK_METRICS_PUSH_INTERVAL", 20*time.Second, 10*time.Millisecond, 5*time.Minute)
+}
+
+// HeartbeatInterval returns the interval between heartbeat attempts.
+// Controlled by HOSTLINK_HEARTBEAT_INTERVAL (default: 5s, clamped to [10ms, 5m]).
+func HeartbeatInterval() time.Duration {
+	return parseDurationClamped("HOSTLINK_HEARTBEAT_INTERVAL", 5*time.Second, 10*time.Millisecond, 5*time.Minute)
+}
+
 // UpdateCheckInterval returns the interval between update checks.
 // Controlled by HOSTLINK_UPDATE_CHECK_INTERVAL (default: 5m, clamped to [1m, 24h]).
 func UpdateCheckInterval() time.Duration {

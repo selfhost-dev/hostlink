@@ -71,6 +71,8 @@ type UnackedFinalSnapshot struct {
 	ExecutionAttemptID string      `json:"execution_attempt_id"`
 	Status             FinalStatus `json:"status"`
 	ExitCode           int         `json:"exit_code"`
+	Output             string      `json:"output,omitempty"`
+	Error              string      `json:"error,omitempty"`
 	OutputTruncated    bool        `json:"output_truncated"`
 	ErrorTruncated     bool        `json:"error_truncated"`
 }

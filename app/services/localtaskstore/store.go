@@ -1,8 +1,10 @@
 package localtaskstore
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"hostlink/internal/telemetry"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,6 +96,8 @@ type UnackedFinalSnapshot struct {
 	ExecutionAttemptID string
 	Status             string
 	ExitCode           int
+	Output             string
+	Error              string
 	OutputTruncated    bool
 	ErrorTruncated     bool
 }
@@ -140,6 +144,7 @@ type ResultOutbox interface {
 	AppendOutputChunk(OutputChunk) error
 	RecordFinal(FinalResult) error
 	UnackedMessages() ([]OutboxMessage, error)
+	UnackedMessage(messageID string) (OutboxMessage, bool, error)
 	AckMessage(messageID string) error
 	UnackedMessagesFrom(taskID, executionAttemptID, stream string, nextSequence int64) ([]OutboxMessage, error)
 }
@@ -339,7 +344,7 @@ func (s *Store) AppendOutputChunk(chunk OutputChunk) error {
 		return err
 	}
 
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := s.upsertExecutionState(tx, taskExecutionRecord{
 			TaskID:             chunk.TaskID,
 			ExecutionAttemptID: chunk.ExecutionAttemptID,
@@ -363,6 +368,10 @@ func (s *Store) AppendOutputChunk(chunk OutputChunk) error {
 		}
 		return s.enforceChunkCap(tx)
 	})
+	if err == nil {
+		s.emitOutboxMetrics(chunk.TaskID, chunk.ExecutionAttemptID)
+	}
+	return err
 }
 
 func (s *Store) RecordFinal(result FinalResult) error {
@@ -370,7 +379,7 @@ func (s *Store) RecordFinal(result FinalResult) error {
 		return err
 	}
 
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := s.rotateChunksForTerminal(tx, int64(len(result.Payload))); err != nil {
 			return err
 		}
@@ -396,6 +405,10 @@ func (s *Store) RecordFinal(result FinalResult) error {
 		}
 		return tx.Create(&record).Error
 	})
+	if err == nil {
+		s.emitOutboxMetrics(result.TaskID, result.ExecutionAttemptID)
+	}
+	return err
 }
 
 func (s *Store) ensureTerminalReserveAvailable(tx *gorm.DB) error {
@@ -469,6 +482,18 @@ func (s *Store) rotateOldestChunk(tx *gorm.DB) (bool, error) {
 	if err := s.markLocalOutputTruncated(tx, oldest.TaskID, oldest.ExecutionAttemptID); err != nil {
 		return false, err
 	}
+	telemetry.Event("hostlink.local_store.output.rotated", map[string]any{
+		"task_id":              oldest.TaskID,
+		"execution_attempt_id": oldest.ExecutionAttemptID,
+		"message_id":           oldest.MessageID,
+		"stream":               oldest.Stream,
+		"sequence":             oldest.Sequence,
+	})
+	telemetry.Metric("hostlink.local_store.output.rotated_chunks", 1, map[string]any{
+		"task_id":              oldest.TaskID,
+		"execution_attempt_id": oldest.ExecutionAttemptID,
+		"message_id":           oldest.MessageID,
+	})
 	return true, nil
 }
 
@@ -510,6 +535,18 @@ func (s *Store) UnackedMessages() ([]OutboxMessage, error) {
 	return messages, nil
 }
 
+func (s *Store) UnackedMessage(messageID string) (OutboxMessage, bool, error) {
+	var record outboxMessageRecord
+	err := s.db.Where("message_id = ? AND acked_at IS NULL", messageID).First(&record).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return OutboxMessage{}, false, nil
+	}
+	if err != nil {
+		return OutboxMessage{}, false, fmt.Errorf("load unacked message: %w", err)
+	}
+	return outboxMessageFromRecord(record), true, nil
+}
+
 func (s *Store) AckMessage(messageID string) error {
 	if messageID == "" {
 		return fmt.Errorf("message ID is required")
@@ -518,6 +555,7 @@ func (s *Store) AckMessage(messageID string) error {
 	if err := s.db.Model(&outboxMessageRecord{}).Where("message_id = ? AND acked_at IS NULL", messageID).Update("acked_at", now).Error; err != nil {
 		return fmt.Errorf("ack message: %w", err)
 	}
+	s.emitOutboxMetrics("", "")
 	return nil
 }
 
@@ -582,12 +620,17 @@ func (s *Store) Snapshot() (Snapshot, error) {
 	for _, msg := range outboxRecords {
 		switch msg.Type {
 		case OutboxMessageTypeFinal:
+			final := finalSnapshotFromOutboxRecord(msg)
 			snapshot.UnackedFinals = append(snapshot.UnackedFinals, UnackedFinalSnapshot{
 				MessageID:          msg.MessageID,
 				TaskID:             msg.TaskID,
 				ExecutionAttemptID: msg.ExecutionAttemptID,
-				Status:             msg.Payload, // simplified; full status parsing not needed for compilation
-				ExitCode:           0,
+				Status:             final.Status,
+				ExitCode:           final.ExitCode,
+				Output:             final.Output,
+				Error:              final.Error,
+				OutputTruncated:    final.OutputTruncated,
+				ErrorTruncated:     final.ErrorTruncated,
 			})
 		case OutboxMessageTypeOutput:
 			snapshot.UnackedOutput = append(snapshot.UnackedOutput, UnackedOutputRange{
@@ -602,6 +645,35 @@ func (s *Store) Snapshot() (Snapshot, error) {
 	}
 
 	return snapshot, nil
+}
+
+type finalSnapshotPayload struct {
+	Status          string `json:"status"`
+	ExitCode        int    `json:"exit_code"`
+	Output          string `json:"output"`
+	Error           string `json:"error"`
+	OutputTruncated bool   `json:"output_truncated"`
+	ErrorTruncated  bool   `json:"error_truncated"`
+}
+
+func finalSnapshotFromOutboxRecord(record outboxMessageRecord) UnackedFinalSnapshot {
+	snapshot := UnackedFinalSnapshot{
+		MessageID:          record.MessageID,
+		TaskID:             record.TaskID,
+		ExecutionAttemptID: record.ExecutionAttemptID,
+	}
+	var payload finalSnapshotPayload
+	if err := json.Unmarshal([]byte(record.Payload), &payload); err != nil {
+		snapshot.Status = record.Payload
+		return snapshot
+	}
+	snapshot.Status = payload.Status
+	snapshot.ExitCode = payload.ExitCode
+	snapshot.Output = payload.Output
+	snapshot.Error = payload.Error
+	snapshot.OutputTruncated = payload.OutputTruncated
+	snapshot.ErrorTruncated = payload.ErrorTruncated
+	return snapshot
 }
 
 func (s *Store) MarkInterruptedRunningTasks() error {
@@ -739,4 +811,29 @@ func outboxMessageFromRecord(record outboxMessageRecord) OutboxMessage {
 
 func interruptedMessageID(taskID, executionAttemptID string) string {
 	return "local-interrupted-" + strings.NewReplacer("/", "-", " ", "-", "|", "-").Replace(taskID+"-"+executionAttemptID)
+}
+
+func (s *Store) emitOutboxMetrics(taskID, executionAttemptID string) {
+	messages, err := s.UnackedMessages()
+	if err != nil {
+		return
+	}
+	var bytesUsed int64
+	var finalsPending int64
+	for _, message := range messages {
+		bytesUsed += message.ByteCount
+		if message.Type == OutboxMessageTypeFinal {
+			finalsPending++
+		}
+	}
+	fields := map[string]any{}
+	if taskID != "" {
+		fields["task_id"] = taskID
+	}
+	if executionAttemptID != "" {
+		fields["execution_attempt_id"] = executionAttemptID
+	}
+	telemetry.Metric("hostlink.local_store.outbox.pending_messages", len(messages), fields)
+	telemetry.Metric("hostlink.local_store.outbox.pending_bytes", bytesUsed, fields)
+	telemetry.Metric("hostlink.local_store.outbox.pending_finals", finalsPending, fields)
 }

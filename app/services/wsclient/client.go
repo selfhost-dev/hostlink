@@ -6,8 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"hostlink/app/services/localtaskstore"
+	"hostlink/internal/telemetry"
 	"math/rand/v2"
 	"net/http"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,21 +47,21 @@ type DeliveryCoordinator interface {
 }
 
 type Config struct {
-	URL            string
-	AgentState     *agentstate.AgentState
-	PrivateKeyPath string
-	Dialer         Dialer
-	ReconnectMin   time.Duration
-	ReconnectMax   time.Duration
-	PingInterval   time.Duration
-	SleepFunc      SleepFunc
-	ResultOutbox   localtaskstore.ResultOutbox
-	ReceiptStore   localtaskstore.ReceiptStore
-	RecoveryStore  localtaskstore.RecoveryStore
-	TaskEnqueuer   TaskEnqueuer
-	ResultsEnabled       bool
-	DeliveryEnabled      bool
-	DeliveryCoordinator  DeliveryCoordinator
+	URL                 string
+	AgentState          *agentstate.AgentState
+	PrivateKeyPath      string
+	Dialer              Dialer
+	ReconnectMin        time.Duration
+	ReconnectMax        time.Duration
+	PingInterval        time.Duration
+	SleepFunc           SleepFunc
+	ResultOutbox        localtaskstore.ResultOutbox
+	ReceiptStore        localtaskstore.ReceiptStore
+	RecoveryStore       localtaskstore.RecoveryStore
+	TaskEnqueuer        TaskEnqueuer
+	ResultsEnabled      bool
+	DeliveryEnabled     bool
+	DeliveryCoordinator DeliveryCoordinator
 }
 
 type Client struct {
@@ -70,15 +74,15 @@ type Client struct {
 	pingInterval time.Duration
 	sleep        SleepFunc
 
-	mu       sync.RWMutex
-	writeMu  sync.Mutex
-	active   bool
-	lastAck  *wsprotocol.AckPayload
-	conn     Conn
-	outbox   localtaskstore.ResultOutbox
-	receipts localtaskstore.ReceiptStore
-	recovery localtaskstore.RecoveryStore
-	enqueuer TaskEnqueuer
+	mu                  sync.RWMutex
+	writeMu             sync.Mutex
+	active              bool
+	lastAck             *wsprotocol.AckPayload
+	conn                Conn
+	outbox              localtaskstore.ResultOutbox
+	receipts            localtaskstore.ReceiptStore
+	recovery            localtaskstore.RecoveryStore
+	enqueuer            TaskEnqueuer
 	resultsEnabled      bool
 	deliveryEnabled     bool
 	deliveryCoordinator DeliveryCoordinator
@@ -113,15 +117,15 @@ func New(cfg Config) (*Client, error) {
 	}
 
 	return &Client{
-		url:          cfg.URL,
-		agentID:      agentID,
-		signer:       signer,
-		dialer:       cfg.Dialer,
-		reconnectMin: cfg.ReconnectMin,
-		reconnectMax: cfg.ReconnectMax,
-		pingInterval: cfg.PingInterval,
-		sleep:        cfg.SleepFunc,
-		outbox:       cfg.ResultOutbox,
+		url:                 cfg.URL,
+		agentID:             agentID,
+		signer:              signer,
+		dialer:              cfg.Dialer,
+		reconnectMin:        cfg.ReconnectMin,
+		reconnectMax:        cfg.ReconnectMax,
+		pingInterval:        cfg.PingInterval,
+		sleep:               cfg.SleepFunc,
+		outbox:              cfg.ResultOutbox,
 		receipts:            cfg.ReceiptStore,
 		recovery:            cfg.RecoveryStore,
 		enqueuer:            cfg.TaskEnqueuer,
@@ -133,9 +137,14 @@ func New(cfg Config) (*Client, error) {
 
 func (c *Client) Start(ctx context.Context) error {
 	backoff := c.reconnectMin
+	attempt := 0
 	for {
 		if ctx.Err() != nil {
 			return nil
+		}
+		attempt++
+		if attempt > 1 {
+			telemetry.Metric("hostlink.agent_ws.reconnect.attempts", 1, map[string]any{"agent_id": c.agentID, "attempt": attempt})
 		}
 
 		err := c.runOnce(ctx)
@@ -241,6 +250,13 @@ func (c *Client) readLoop(ctx context.Context, conn Conn, helloMessageID string)
 					return err
 				}
 				c.setActive(true)
+				telemetry.Event("hostlink.agent_ws.session.activated", map[string]any{
+					"agent_id":         c.agentID,
+					"delivery_enabled": c.deliveryEnabled && helloAck.DeliveryEnabled,
+					"acked_message_id": helloAck.AckedMessageID,
+				})
+				telemetry.Metric("hostlink.agent_ws.connections.opened", 1, map[string]any{"agent_id": c.agentID})
+				telemetry.Metric("hostlink.agent_ws.connection.active", 1, map[string]any{"agent_id": c.agentID})
 				if c.deliveryCoordinator != nil {
 					c.deliveryCoordinator.SetSessionDeliveryEnabled(c.deliveryEnabled && helloAck.DeliveryEnabled)
 				}
@@ -262,8 +278,21 @@ func (c *Client) readLoop(ctx context.Context, conn Conn, helloMessageID string)
 				return err
 			}
 			if c.outbox != nil && ack.AckedMessageID != "" {
+				message, found, err := c.outbox.UnackedMessage(ack.AckedMessageID)
+				if err != nil {
+					return err
+				}
 				if err := c.outbox.AckMessage(ack.AckedMessageID); err != nil {
 					return err
+				}
+				if found {
+					telemetry.Event("hostlink.agent_ws.outbox.acknowledged", map[string]any{
+						"agent_id":             c.agentID,
+						"task_id":              message.TaskID,
+						"execution_attempt_id": message.ExecutionAttemptID,
+						"acked_message_id":     ack.AckedMessageID,
+						"acked_type":           string(ack.AckedType),
+					})
 				}
 			}
 			c.setLastAck(&ack)
@@ -273,6 +302,9 @@ func (c *Client) readLoop(ctx context.Context, conn Conn, helloMessageID string)
 				return err
 			}
 			if payload.Retryable {
+				if err := c.handleRetryableError(ctx, conn, payload); err != nil {
+					return err
+				}
 				continue
 			}
 			return fmt.Errorf("websocket protocol error: %s", env.MessageID)
@@ -304,6 +336,9 @@ func (c *Client) receiveTaskDeliver(ctx context.Context, conn Conn, env wsprotoc
 	previous, err := c.receipts.TaskState(env.TaskID, env.ExecutionAttemptID)
 	if err != nil {
 		return err
+	}
+	if previous.Exists {
+		c.emitDuplicateDeliveryTelemetry(env, previous.Status)
 	}
 	state, err := c.receipts.RecordReceived(localtaskstore.TaskReceipt{
 		TaskID:             env.TaskID,
@@ -339,6 +374,20 @@ func (c *Client) receiveTaskDeliver(ctx context.Context, conn Conn, env wsprotoc
 	return nil
 }
 
+func (c *Client) emitDuplicateDeliveryTelemetry(env wsprotocol.Envelope, state string) {
+	telemetry.Event("hostlink.agent_ws.task.deliver.duplicate", map[string]any{
+		"agent_id":             c.agentID,
+		"task_id":              env.TaskID,
+		"execution_attempt_id": env.ExecutionAttemptID,
+		"state":                state,
+	})
+	telemetry.Metric("hostlink.agent_ws.delivery.duplicates", 1, map[string]any{
+		"agent_id":             c.agentID,
+		"task_id":              env.TaskID,
+		"execution_attempt_id": env.ExecutionAttemptID,
+	})
+}
+
 func (c *Client) replayTaskFinal(ctx context.Context, conn Conn, taskID, executionAttemptID string) (bool, error) {
 	if c.outbox == nil {
 		return false, nil
@@ -349,7 +398,7 @@ func (c *Client) replayTaskFinal(ctx context.Context, conn Conn, taskID, executi
 	}
 	for _, message := range messages {
 		if message.TaskID == taskID && message.ExecutionAttemptID == executionAttemptID && message.Type == localtaskstore.OutboxMessageTypeFinal {
-			return true, c.writeEnvelope(ctx, conn, envelopeFromOutboxMessage(c.agentID, message))
+			return true, c.resendOutboxMessage(ctx, conn, message, "duplicate_delivery")
 		}
 	}
 	return false, nil
@@ -365,7 +414,7 @@ func (c *Client) SendOutput(ctx context.Context, chunk localtaskstore.OutputChun
 	if err := c.outbox.AppendOutputChunk(chunk); err != nil {
 		return err
 	}
-	return c.sendIfActive(ctx, envelopeFromOutboxMessage(c.agentID, localtaskstore.OutboxMessage{
+	message := localtaskstore.OutboxMessage{
 		MessageID:          chunk.MessageID,
 		TaskID:             chunk.TaskID,
 		ExecutionAttemptID: chunk.ExecutionAttemptID,
@@ -374,7 +423,24 @@ func (c *Client) SendOutput(ctx context.Context, chunk localtaskstore.OutputChun
 		Sequence:           chunk.Sequence,
 		Payload:            chunk.Payload,
 		ByteCount:          chunk.ByteCount,
-	}))
+	}
+	if shouldDropOutputForChaos(chunk.Sequence) {
+		telemetry.Event("hostlink.agent_ws.chaos.output_dropped", map[string]any{
+			"agent_id":             c.agentID,
+			"task_id":              chunk.TaskID,
+			"execution_attempt_id": chunk.ExecutionAttemptID,
+			"message_id":           chunk.MessageID,
+			"sequence":             chunk.Sequence,
+		})
+		return nil
+	}
+	if err := c.sendIfActive(ctx, envelopeFromOutboxMessage(c.agentID, message)); err != nil {
+		return err
+	}
+	if chaosEnabled("HOSTLINK_WS_CHAOS_DUPLICATE_OUTPUT") {
+		return c.sendIfActive(ctx, envelopeFromOutboxMessage(c.agentID, message))
+	}
+	return nil
 }
 
 func (c *Client) SendFinal(ctx context.Context, result localtaskstore.FinalResult) error {
@@ -400,6 +466,27 @@ func (c *Client) SendFinal(ctx context.Context, result localtaskstore.FinalResul
 	}
 	if !c.IsActive() {
 		return fmt.Errorf("websocket result channel is inactive")
+	}
+	return nil
+}
+
+func (c *Client) handleRetryableError(ctx context.Context, conn Conn, payload wsprotocol.ErrorPayload) error {
+	if c.outbox == nil || payload.Code != "output_sequence_gap" || payload.RelatedMessageID == "" || payload.HighestAcceptedSequence == nil {
+		return nil
+	}
+	message, found, err := c.outbox.UnackedMessage(payload.RelatedMessageID)
+	if err != nil || !found {
+		return err
+	}
+	nextSequence := int64(*payload.HighestAcceptedSequence + 1)
+	messages, err := c.outbox.UnackedMessagesFrom(message.TaskID, message.ExecutionAttemptID, message.Stream, nextSequence)
+	if err != nil {
+		return err
+	}
+	for _, replay := range messages {
+		if err := c.resendOutboxMessage(ctx, conn, replay, "retryable_output_gap"); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -480,6 +567,8 @@ func (c *Client) buildHelloPayload() wsprotocol.HelloPayload {
 			ExecutionAttemptID: final.ExecutionAttemptID,
 			Status:             wsprotocol.FinalStatus(final.Status),
 			ExitCode:           final.ExitCode,
+			Output:             final.Output,
+			Error:              final.Error,
 			OutputTruncated:    final.OutputTruncated,
 			ErrorTruncated:     final.ErrorTruncated,
 		})
@@ -505,8 +594,21 @@ func (c *Client) buildHelloPayload() wsprotocol.HelloPayload {
 func (c *Client) applyHelloAckLocalState(ack wsprotocol.HelloAckPayload) error {
 	if c.outbox != nil {
 		for _, messageID := range ack.AcknowledgedFinalMessageIDs {
+			message, found, err := c.outbox.UnackedMessage(messageID)
+			if err != nil {
+				return err
+			}
 			if err := c.outbox.AckMessage(messageID); err != nil {
 				return err
+			}
+			if found {
+				telemetry.Event("hostlink.agent_ws.outbox.acknowledged", map[string]any{
+					"agent_id":             c.agentID,
+					"task_id":              message.TaskID,
+					"execution_attempt_id": message.ExecutionAttemptID,
+					"acked_message_id":     messageID,
+					"acked_type":           string(protocolMessageTypeForOutboxMessage(message)),
+				})
 			}
 		}
 	}
@@ -530,7 +632,7 @@ func (c *Client) replayRequestedOutput(ctx context.Context, conn Conn, replayReq
 			return err
 		}
 		for _, message := range messages {
-			if err := c.writeEnvelope(ctx, conn, envelopeFromOutboxMessage(c.agentID, message)); err != nil {
+			if err := c.resendOutboxMessage(ctx, conn, message, "output_replay"); err != nil {
 				return err
 			}
 		}
@@ -558,6 +660,11 @@ func (c *Client) setActive(active bool) {
 	c.active = active
 	if wasActive && !active && c.deliveryCoordinator != nil {
 		c.deliveryCoordinator.MarkSessionInactive()
+	}
+	if wasActive && !active {
+		telemetry.Event("hostlink.agent_ws.session.disconnected", map[string]any{"agent_id": c.agentID})
+		telemetry.Metric("hostlink.agent_ws.connections.closed", 1, map[string]any{"agent_id": c.agentID})
+		telemetry.Metric("hostlink.agent_ws.connection.active", 0, map[string]any{"agent_id": c.agentID})
 	}
 }
 
@@ -610,11 +717,23 @@ func (c *Client) replayUnacked(ctx context.Context, conn Conn) error {
 		return err
 	}
 	for _, message := range messages {
-		if err := c.writeEnvelope(ctx, conn, envelopeFromOutboxMessage(c.agentID, message)); err != nil {
+		if err := c.resendOutboxMessage(ctx, conn, message, "hello_replay"); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (c *Client) resendOutboxMessage(ctx context.Context, conn Conn, message localtaskstore.OutboxMessage, reason string) error {
+	telemetry.Metric("hostlink.agent_ws.outbox.resends", 1, map[string]any{
+		"agent_id":             c.agentID,
+		"task_id":              message.TaskID,
+		"execution_attempt_id": message.ExecutionAttemptID,
+		"message_id":           message.MessageID,
+		"message_type":         string(protocolMessageTypeForOutboxMessage(message)),
+		"reason":               reason,
+	})
+	return c.writeEnvelope(ctx, conn, envelopeFromOutboxMessage(c.agentID, message))
 }
 
 func (c *Client) writeEnvelope(ctx context.Context, conn Conn, env wsprotocol.Envelope) error {
@@ -666,6 +785,14 @@ func envelopeFromOutboxMessage(agentID string, message localtaskstore.OutboxMess
 	}
 }
 
+func protocolMessageTypeForOutboxMessage(message localtaskstore.OutboxMessage) wsprotocol.MessageType {
+	if message.Type == localtaskstore.OutboxMessageTypeOutput {
+		return wsprotocol.TypeTaskOutput
+	}
+
+	return wsprotocol.TypeTaskFinal
+}
+
 func sleepContext(ctx context.Context, d time.Duration) error {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
@@ -675,6 +802,19 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func chaosEnabled(name string) bool {
+	return strings.EqualFold(os.Getenv(name), "true") || os.Getenv(name) == "1"
+}
+
+func shouldDropOutputForChaos(sequence int64) bool {
+	raw := strings.TrimSpace(os.Getenv("HOSTLINK_WS_CHAOS_DROP_OUTPUT_SEQUENCE"))
+	if raw == "" {
+		return false
+	}
+	dropSequence, err := strconv.ParseInt(raw, 10, 64)
+	return err == nil && dropSequence == sequence
 }
 
 func jitter(d time.Duration) time.Duration {
