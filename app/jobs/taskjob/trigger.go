@@ -34,6 +34,10 @@ func triggerWithConfig(ctx context.Context, fn func() error, config TriggerConfi
 	}
 }
 
+func TriggerWithConfig(ctx context.Context, fn func() error, config TriggerConfig) {
+	triggerWithConfig(ctx, fn, config)
+}
+
 func Trigger(ctx context.Context, fn func() error) {
 	triggerWithConfig(ctx, fn, DefaultTriggerConfig())
 }

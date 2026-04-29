@@ -252,7 +252,8 @@ func runServer(ctx context.Context, cmd *cli.Command) error {
 
 	// Agent-related jobs run in goroutine after registration
 	go func() {
-		ctx := context.Background()
+		jobCtx, cancelJobs := context.WithCancel(ctx)
+		defer cancelJobs()
 		localStore, err := recoverLocalTaskStore()
 		if err != nil {
 			log.Printf("failed to initialize local task store: %v", err)
@@ -262,7 +263,17 @@ func runServer(ctx context.Context, cmd *cli.Command) error {
 
 		registeredChan := make(chan bool, 1)
 
-		registrationJob := registrationjob.New()
+		registrationJob := registrationjob.NewWithConfig(&registrationjob.Config{
+			FingerprintPath: appconf.AgentFingerprintPath(),
+			AgentState:      agentstate.New(appconf.AgentStatePath()),
+			Trigger: func(fn func() error) {
+				registrationjob.TriggerWithConfig(fn, registrationjob.TriggerConfig{
+					MaxRetries:    5,
+					InitialDelay:  appconf.RegistrationRetryInitialDelay(),
+					BackoffFactor: 2,
+				})
+			},
+		})
 		registrationJob.Register(registeredChan)
 
 		// Wait for registration to complete
@@ -270,8 +281,15 @@ func runServer(ctx context.Context, cmd *cli.Command) error {
 		log.Println("Agent registered, starting task job...")
 		deliveryCoordinator := rollout.NewCoordinator(appconf.WebSocketDeliveryEnabled(), appconf.WebSocketPollingFallbackThreshold())
 		var resultChannel taskjob.ResultChannel
-		taskJob := taskjob.NewJobWithConf(taskjob.TaskJobConfig{PollingGate: deliveryCoordinator})
-		startWebSocketClientIfEnabled(ctx, func() (webSocketRuntime, error) {
+		taskJob := taskjob.NewJobWithConf(taskjob.TaskJobConfig{
+			PollingGate:          deliveryCoordinator,
+			OutputFlushInterval:  appconf.TaskOutputFlushInterval(),
+			OutputFlushThreshold: appconf.TaskOutputFlushThreshold(),
+			Trigger: func(ctx context.Context, fn func() error) {
+				taskjob.TriggerWithConfig(ctx, fn, taskjob.TriggerConfig{InitialDelay: appconf.TaskPollInterval()})
+			},
+		})
+		startWebSocketClientIfEnabled(jobCtx, func() (webSocketRuntime, error) {
 			runtime, err := newDefaultWebSocketRuntime(localStore, taskJob, deliveryCoordinator)
 			if err == nil {
 				resultChannel = runtime.(taskjob.ResultChannel)
@@ -289,28 +307,39 @@ func runServer(ctx context.Context, cmd *cli.Command) error {
 			log.Printf("failed to initialize task reporter: %v", err)
 			return
 		}
-		taskJob.Register(ctx, fetcher, reporter, resultChannel)
+		taskJob.Register(jobCtx, fetcher, reporter, resultChannel)
 
 		metricsReporter, err := metrics.New()
 		if err != nil {
 			log.Printf("failed to initialize metrics reporter: %v", err)
 			return
 		}
-		metricsJob := metricsjob.New()
-		metricsJob.Register(ctx, metricsReporter, metricsReporter)
+		metricsJob := metricsjob.NewJobWithConf(metricsjob.MetricsJobConfig{
+			Trigger: func(ctx context.Context, fn func() error) {
+				metricsjob.TriggerWithConfig(ctx, fn, metricsjob.TriggerConfig{InitialDelay: appconf.MetricsPushInterval()})
+			},
+			CredFetchInterval: 2,
+		})
+		metricsJob.Register(jobCtx, metricsReporter, metricsReporter)
 
 		heartbeatSvc, err := heartbeat.New()
 		if err != nil {
 			log.Printf("failed to initialize heartbeat service: %v", err)
 			return
 		}
-		heartbeatJob := heartbeatjob.New()
-		heartbeatJob.Register(ctx, heartbeatSvc)
+		heartbeatJob := heartbeatjob.NewWithConfig(heartbeatjob.HeartbeatJobConfig{
+			Trigger: func(ctx context.Context, fn func() error) {
+				heartbeatjob.TriggerWithConfig(ctx, fn, heartbeatjob.TriggerConfig{Interval: appconf.HeartbeatInterval()})
+			},
+		})
+		heartbeatJob.Register(jobCtx, heartbeatSvc)
 
 		// Self-update job (gated by config)
 		if appconf.SelfUpdateEnabled() {
-			startSelfUpdateJob(ctx)
+			startSelfUpdateJob(jobCtx)
 		}
+
+		<-jobCtx.Done()
 	}()
 
 	return e.Start(fmt.Sprintf(":%s", appconf.Port()))

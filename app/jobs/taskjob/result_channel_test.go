@@ -6,8 +6,10 @@ import (
 	"errors"
 	"hostlink/app/services/localtaskstore"
 	"hostlink/app/services/taskreporter"
+	"hostlink/internal/telemetry/telemetrytest"
 	"hostlink/domain/task"
 	"io"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -166,6 +168,24 @@ func TestCaptureStreamRetainsChunkWhenPersistFails(t *testing.T) {
 
 	if channel.outputs[1].Payload != "retry" || channel.outputs[1].Sequence != 1 {
 		t.Fatalf("retry output = %#v", channel.outputs[1])
+	}
+}
+
+func TestTaskJobEnqueueEmitsRunnerQueueDepthTelemetry(t *testing.T) {
+	telemetryPath := filepath.Join(t.TempDir(), "hostlink-taskjob-telemetry.jsonl")
+	t.Setenv("HOSTLINK_WS_TELEMETRY_PATH", telemetryPath)
+	job := NewJobWithConf(TaskJobConfig{Trigger: runOnceTrigger})
+
+	if err := job.Enqueue(context.Background(), task.Task{ID: "task-1", ExecutionAttemptID: "attempt-1"}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	entries := telemetrytest.ReadEntries(t, telemetryPath)
+	depth := telemetrytest.FindEntry(entries, func(entry map[string]any) bool {
+		return entry["metric_name"] == "hostlink.task_runner.queue.depth" && entry["value"] == float64(1)
+	})
+	if depth["task_id"] != "task-1" || depth["execution_attempt_id"] != "attempt-1" {
+		t.Fatalf("queue depth metric = %#v", depth)
 	}
 }
 

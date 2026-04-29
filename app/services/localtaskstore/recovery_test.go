@@ -41,6 +41,27 @@ func TestMarkInterruptedRunningTasksQueuesTerminalRecordAcrossRestart(t *testing
 	require.Contains(t, messages[0].Payload, "interrupted")
 }
 
+func TestSnapshotParsesUnackedFinalPayload(t *testing.T) {
+	store := newTestStore(t, 1024*1024, 1024)
+	require.NoError(t, store.RecordFinal(FinalResult{
+		MessageID:          "msg-final-1",
+		TaskID:             "task-1",
+		ExecutionAttemptID: "attempt-1",
+		Status:             "failed",
+		ExitCode:           -1,
+		Payload:            `{"status":"interrupted","exit_code":-1,"output":"partial stdout","error":"interrupted during hostlink restart","output_truncated":true,"error_truncated":false}`,
+	}))
+
+	snapshot, err := store.Snapshot()
+	require.NoError(t, err)
+	require.Len(t, snapshot.UnackedFinals, 1)
+	require.Equal(t, "interrupted", snapshot.UnackedFinals[0].Status)
+	require.Equal(t, -1, snapshot.UnackedFinals[0].ExitCode)
+	require.Equal(t, "partial stdout", snapshot.UnackedFinals[0].Output)
+	require.Equal(t, "interrupted during hostlink restart", snapshot.UnackedFinals[0].Error)
+	require.True(t, snapshot.UnackedFinals[0].OutputTruncated)
+}
+
 func TestMarkInterruptedRunningTasksIsIdempotent(t *testing.T) {
 	store := newTestStore(t, 1024*1024, 1024)
 

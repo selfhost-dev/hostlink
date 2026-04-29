@@ -178,6 +178,34 @@ func TestWebSocketPingInterval_CustomValue(t *testing.T) {
 	assert.Equal(t, 45*time.Second, WebSocketPingInterval())
 }
 
+func TestRegistrationRetryInitialDelay_CustomValue(t *testing.T) {
+	t.Setenv("HOSTLINK_REGISTRATION_RETRY_INITIAL_DELAY", "50ms")
+	assert.Equal(t, 50*time.Millisecond, RegistrationRetryInitialDelay())
+}
+
+func TestTaskPollInterval_CustomValue(t *testing.T) {
+	t.Setenv("HOSTLINK_TASK_POLL_INTERVAL", "100ms")
+	assert.Equal(t, 100*time.Millisecond, TaskPollInterval())
+}
+
+func TestTaskOutputFlushConfig_CustomValues(t *testing.T) {
+	t.Setenv("HOSTLINK_TASK_OUTPUT_FLUSH_INTERVAL", "25ms")
+	t.Setenv("HOSTLINK_TASK_OUTPUT_FLUSH_THRESHOLD", "512")
+
+	assert.Equal(t, 25*time.Millisecond, TaskOutputFlushInterval())
+	assert.Equal(t, 512, TaskOutputFlushThreshold())
+}
+
+func TestMetricsPushInterval_CustomValue(t *testing.T) {
+	t.Setenv("HOSTLINK_METRICS_PUSH_INTERVAL", "250ms")
+	assert.Equal(t, 250*time.Millisecond, MetricsPushInterval())
+}
+
+func TestHeartbeatInterval_CustomValue(t *testing.T) {
+	t.Setenv("HOSTLINK_HEARTBEAT_INTERVAL", "200ms")
+	assert.Equal(t, 200*time.Millisecond, HeartbeatInterval())
+}
+
 func TestLocalTaskStorePath_DefaultUnderAgentStatePath(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("HOSTLINK_STATE_PATH", stateDir)

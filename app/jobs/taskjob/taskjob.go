@@ -12,6 +12,7 @@ import (
 	"hostlink/app/services/taskfetcher"
 	"hostlink/app/services/taskreporter"
 	"hostlink/domain/task"
+	"hostlink/internal/telemetry"
 	"io"
 	"os"
 	"os/exec"
@@ -119,6 +120,10 @@ func (tj *TaskJob) Register(ctx context.Context, tf taskfetcher.TaskFetcher, tr 
 func (tj *TaskJob) Enqueue(ctx context.Context, t task.Task) error {
 	select {
 	case tj.enqueueCh <- t:
+		telemetry.Metric("hostlink.task_runner.queue.depth", len(tj.enqueueCh), map[string]any{
+			"task_id":              t.ID,
+			"execution_attempt_id": t.ExecutionAttemptID,
+		})
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()

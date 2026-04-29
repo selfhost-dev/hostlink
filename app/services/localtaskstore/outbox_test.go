@@ -1,6 +1,7 @@
 package localtaskstore
 
 import (
+	"hostlink/internal/telemetry/telemetrytest"
 	"path/filepath"
 	"testing"
 
@@ -84,4 +85,43 @@ func TestAckFinalRemovesOutboxButPreservesTaskState(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, state.Exists)
 	require.Equal(t, TaskStatusFinal, state.Status)
+}
+
+func TestOutboxMetricsTrackPendingMessagesBytesAndFinals(t *testing.T) {
+	telemetryPath := filepath.Join(t.TempDir(), "hostlink-store-telemetry.jsonl")
+	t.Setenv("HOSTLINK_WS_TELEMETRY_PATH", telemetryPath)
+	store := newTestStore(t, 1024*1024, 1024)
+
+	require.NoError(t, store.AppendOutputChunk(OutputChunk{
+		MessageID:          "msg-output-1",
+		TaskID:             "task-1",
+		ExecutionAttemptID: "attempt-1",
+		Stream:             "stdout",
+		Sequence:           1,
+		Payload:            "hello",
+		ByteCount:          5,
+	}))
+	require.NoError(t, store.RecordFinal(FinalResult{
+		MessageID:          "msg-final-1",
+		TaskID:             "task-1",
+		ExecutionAttemptID: "attempt-1",
+		Status:             "completed",
+		ExitCode:           0,
+		Payload:            `{"status":"completed"}`,
+	}))
+
+	entries := telemetrytest.ReadEntries(t, telemetryPath)
+	pendingMessages := telemetrytest.FindEntry(entries, func(entry map[string]any) bool {
+		return entry["metric_name"] == "hostlink.local_store.outbox.pending_messages" && entry["value"] == float64(2)
+	})
+	pendingBytes := telemetrytest.FindEntry(entries, func(entry map[string]any) bool {
+		return entry["metric_name"] == "hostlink.local_store.outbox.pending_bytes" && entry["value"] == float64(27)
+	})
+	pendingFinals := telemetrytest.FindEntry(entries, func(entry map[string]any) bool {
+		return entry["metric_name"] == "hostlink.local_store.outbox.pending_finals" && entry["value"] == float64(1)
+	})
+	require.Equal(t, "task-1", pendingMessages["task_id"])
+	require.Equal(t, "attempt-1", pendingMessages["execution_attempt_id"])
+	require.Equal(t, "task-1", pendingBytes["task_id"])
+	require.Equal(t, "task-1", pendingFinals["task_id"])
 }
