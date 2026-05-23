@@ -72,6 +72,7 @@ func TestRegister_CachesCredsWithinThreshold(t *testing.T) {
 		credFetchInterval int
 		totalBeats        int
 		expectedCredCalls int
+		expectedPushCalls int
 		description       string
 	}{
 		{
@@ -79,6 +80,7 @@ func TestRegister_CachesCredsWithinThreshold(t *testing.T) {
 			credFetchInterval: 0,
 			totalBeats:        5,
 			expectedCredCalls: 1,
+			expectedPushCalls: 5,
 			description:       "When passed zero, function called once on beat 1 only",
 		},
 		{
@@ -86,21 +88,24 @@ func TestRegister_CachesCredsWithinThreshold(t *testing.T) {
 			credFetchInterval: 1,
 			totalBeats:        6,
 			expectedCredCalls: 6,
+			expectedPushCalls: 6,
 			description:       "Should call every beat: 1,2,3,4,5,6",
 		},
 		{
 			name:              "SkipCredFetchBeat=2_FetchEverySecondBeat",
 			credFetchInterval: 2,
 			totalBeats:        8,
-			expectedCredCalls: 5, // Changed from 4
-			description:       "Should call on beats 1,2,4,6,8",
+			expectedCredCalls: 5,
+			expectedPushCalls: 8,
+			description:       "Should push every beat, fetch on beats 1,2,4,6,8",
 		},
 		{
 			name:              "SkipCredFetchBeat=3_FetchEveryThirdBeat",
 			credFetchInterval: 3,
 			totalBeats:        9,
-			expectedCredCalls: 4, // Changed from 3
-			description:       "Should call on beats 1,3,6,9",
+			expectedCredCalls: 4,
+			expectedPushCalls: 9,
+			description:       "Should push every beat, fetch on beats 1,3,6,9",
 		},
 	}
 
@@ -135,16 +140,16 @@ func TestRegister_CachesCredsWithinThreshold(t *testing.T) {
 					tt.description, tt.expectedCredCalls, authGetter.calls)
 			}
 
-			// Verify Push was called same number of times as GetCreds
-			if len(pusher.pushCalls) != tt.expectedCredCalls {
+			// Push is called on every beat regardless of cred fetch
+			if len(pusher.pushCalls) != tt.expectedPushCalls {
 				t.Errorf("expected %d Push calls, got %d",
-					tt.expectedCredCalls, len(pusher.pushCalls))
+					tt.expectedPushCalls, len(pusher.pushCalls))
 			}
 		})
 	}
 }
 
-func TestRegister_NoPushAfterEmptyCreds(t *testing.T) {
+func TestRegister_AlwaysPushesOnEveryBeat(t *testing.T) {
 	tests := []struct {
 		name              string
 		credFetchInterval int
@@ -158,56 +163,56 @@ func TestRegister_NoPushAfterEmptyCreds(t *testing.T) {
 			credFetchInterval: 0,
 			totalBeats:        5,
 			emptyCredsAfter:   0,
-			expectedPushCalls: 1,
-			description:       "With interval=0, creds emptied after beat 1, only 1 push (beat 1), no refetch",
+			expectedPushCalls: 5,
+			description:       "Pushes every beat even after creds emptied",
 		},
 		{
 			name:              "Interval=0_NeverEmpty",
 			credFetchInterval: 0,
 			totalBeats:        5,
 			emptyCredsAfter:   -1,
-			expectedPushCalls: 1,
-			description:       "With interval=0, creds never emptied, only 1 push (beat 1), never refetch",
+			expectedPushCalls: 5,
+			description:       "Pushes every beat with same creds",
 		},
 		{
 			name:              "Interval=1_EmptyAfterFirstBeat",
 			credFetchInterval: 1,
 			totalBeats:        5,
 			emptyCredsAfter:   0,
-			expectedPushCalls: 1,
-			description:       "With interval=1, creds emptied after beat 1, only 1 push (beat 1)",
+			expectedPushCalls: 5,
+			description:       "Pushes every beat even after creds emptied",
 		},
 		{
 			name:              "Interval=2_EmptyAfterFirstBeat",
 			credFetchInterval: 2,
 			totalBeats:        5,
 			emptyCredsAfter:   0,
-			expectedPushCalls: 1,
-			description:       "With interval=2, creds emptied after beat 1, only 1 push (beat 1)",
+			expectedPushCalls: 5,
+			description:       "Pushes every beat even after creds emptied",
 		},
 		{
 			name:              "Interval=3_EmptyAfterFirstBeat",
 			credFetchInterval: 3,
 			totalBeats:        6,
 			emptyCredsAfter:   0,
-			expectedPushCalls: 1,
-			description:       "With interval=3, creds emptied after beat 1, only 1 push (beat 1)",
+			expectedPushCalls: 6,
+			description:       "Pushes every beat even after creds emptied",
 		},
 		{
 			name:              "Interval=1_EmptyAfterThirdBeat",
 			credFetchInterval: 1,
 			totalBeats:        5,
 			emptyCredsAfter:   2,
-			expectedPushCalls: 3,
-			description:       "With interval=1, creds emptied after beat 3, pushes on beats 1,2,3",
+			expectedPushCalls: 5,
+			description:       "Pushes every beat, creds change mid-way",
 		},
 		{
 			name:              "Interval=2_NeverEmpty",
 			credFetchInterval: 2,
 			totalBeats:        8,
 			emptyCredsAfter:   -1,
-			expectedPushCalls: 5,
-			description:       "With interval=2, creds never emptied, pushes on beats 1,2,4,6,8",
+			expectedPushCalls: 8,
+			description:       "Pushes every beat with same creds",
 		},
 	}
 
@@ -224,7 +229,6 @@ func TestRegister_NoPushAfterEmptyCreds(t *testing.T) {
 				for i := range tt.totalBeats {
 					_ = fn()
 					if i == tt.emptyCredsAfter {
-						// After specified beat, all subsequent calls return empty credentials
 						authGetter.creds = []credential.Credential{}
 					}
 				}
@@ -266,7 +270,8 @@ func TestRegister_HandlesGetCredsError(t *testing.T) {
 
 	job.Shutdown()
 
-	// Should not push when GetCreds fails
+	// GetCreds fails on first fetch attempt (shouldFetch=true, len(creds)==0)
+	// The error is returned, so Push is not called
 	if len(pusher.pushCalls) != 0 {
 		t.Errorf("expected 0 Push calls on error, got %d", len(pusher.pushCalls))
 	}

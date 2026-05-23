@@ -44,6 +44,7 @@ func (mj *MetricsJob) Register(ctx context.Context, mp metrics.Pusher, mcred met
 	ctx, cancel := context.WithCancel(ctx)
 	mj.cancel = cancel
 	var creds []credential.Credential
+	var lastPgCred credential.Credential
 	var beatCount int
 	mj.wg.Add(1)
 	go func() {
@@ -51,7 +52,6 @@ func (mj *MetricsJob) Register(ctx context.Context, mp metrics.Pusher, mcred met
 		mj.config.Trigger(ctx, func() (err error) {
 			beatCount++
 
-			// Determine if we should fetch credentials this beat
 			shouldFetch := len(creds) == 0 ||
 				(mj.config.CredFetchInterval > 0 && beatCount%mj.config.CredFetchInterval == 0)
 
@@ -61,26 +61,16 @@ func (mj *MetricsJob) Register(ctx context.Context, mp metrics.Pusher, mcred met
 					return err
 				}
 
-				if len(creds) == 0 {
-					// no op, waiting for the creds to be available
-					return nil
-				}
-
-				var pgcred credential.Credential
+				lastPgCred = credential.Credential{}
 				for _, cred := range creds {
-					// only support one db for now, first match will exit the finding of creds
 					if cred.Dialect == "postgresql" {
-						pgcred = cred
+						lastPgCred = cred
 						break
 					}
 				}
-
-				// Only push when we actually fetch credentials
-				return mp.Push(pgcred)
 			}
 
-			// If we didn't fetch this beat, return nil (no push)
-			return nil
+			return mp.Push(lastPgCred)
 		})
 	}()
 	return cancel
