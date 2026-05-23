@@ -19,10 +19,9 @@ import (
 	"sync"
 	"time"
 
+	"hostlink/config/appconf"
 	domainmetrics "hostlink/domain/metrics"
 )
-
-const defaultEndpoint = "http://localhost:8080/metrics"
 
 type Collector interface {
 	Collect(ctx context.Context) ([]ServiceMetricSet, error)
@@ -46,7 +45,7 @@ type traefikCollector struct {
 }
 
 func New() Collector {
-	return NewWithEndpoint(defaultEndpoint)
+	return NewWithEndpoint(appconf.TraefikEndpoint())
 }
 
 func NewWithEndpoint(endpoint string) Collector {
