@@ -66,17 +66,24 @@ func (mj *MetricsJob) Register(ctx context.Context, mp metrics.Pusher, mcred met
 					return nil
 				}
 
-				var pgcred credential.Credential
+				// Prefer postgresql; fall back to any other supported dialect.
+				// Future: extend to push once per dialect when multi-DB payloads are supported.
+				var dbcred credential.Credential
 				for _, cred := range creds {
-					// only support one db for now, first match will exit the finding of creds
 					if cred.Dialect == "postgresql" {
-						pgcred = cred
+						dbcred = cred
 						break
+					}
+					if dbcred.Dialect == "" {
+						switch cred.Dialect {
+						case "mysql", "mariadb", "mongodb", "redis":
+							dbcred = cred
+						}
 					}
 				}
 
 				// Only push when we actually fetch credentials
-				return mp.Push(pgcred)
+				return mp.Push(dbcred)
 			}
 
 			// If we didn't fetch this beat, return nil (no push)
