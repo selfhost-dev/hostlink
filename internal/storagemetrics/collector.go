@@ -223,7 +223,6 @@ func (c *collector) Collect(ctx context.Context) ([]StorageMetricSet, error) {
 					sectorsWrittenDelta := currentStats.SectorsWritten - lastStats.SectorsWritten
 					m.ReadBytesPerSecond = asValidFloat(float64(sectorsReadDelta*512) / elapsed)
 					m.WriteBytesPerSecond = asValidFloat(float64(sectorsWrittenDelta*512) / elapsed)
-					m.ReadWriteBytesPerSecond = asValidFloat(m.ReadBytesPerSecond + m.WriteBytesPerSecond)
 
 					readsDelta := currentStats.ReadsCompleted - lastStats.ReadsCompleted
 					writesDelta := currentStats.WritesCompleted - lastStats.WritesCompleted

@@ -111,7 +111,7 @@ func NewWithDependencies(
 		syscollector:       syscollector,
 		netcollector:       netcollector,
 		storagecollector:   storagecollector,
-		pgbouncercollector: pgbouncercollector,
+		pgbouncercollector: pgbouncermetrics.New(),
 		mysqlcollector:     mysqlcollector,
 		mongodbcollector:   mongodbcollector,
 		rediscollector:     rediscollector,
@@ -311,19 +311,29 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 		log.Warnf("container metrics collection failed: %v", err)
 	} else {
 		for _, cm := range containerSets {
+			attrs := map[string]any{
+				"container_id":   cm.Attributes.ContainerID,
+				"container_name": cm.Attributes.ContainerName,
+				"image":          cm.Attributes.Image,
+			}
+			// Omit empty Coolify metadata
+			if cm.Attributes.CoolifyAppID != "" {
+				attrs["coolify_app_id"] = cm.Attributes.CoolifyAppID
+			}
+			if cm.Attributes.CoolifyProjectID != "" {
+				attrs["coolify_project_id"] = cm.Attributes.CoolifyProjectID
+			}
+			if cm.Attributes.CoolifyEnvironmentID != "" {
+				attrs["coolify_environment_id"] = cm.Attributes.CoolifyEnvironmentID
+			}
+			if cm.Attributes.CoolifyType != "" {
+				attrs["coolify_type"] = cm.Attributes.CoolifyType
+			}
+
 			metricSets = append(metricSets, domainmetrics.MetricSet{
-				Type: domainmetrics.MetricTypeContainer,
-				Attributes: map[string]any{
-					"container_id":           cm.Attributes.ContainerID,
-					"container_name":         cm.Attributes.ContainerName,
-					"image":                  cm.Attributes.Image,
-					"coolify_app_id":         cm.Attributes.CoolifyAppID,
-					"coolify_project_id":     cm.Attributes.CoolifyProjectID,
-					"coolify_environment_id": cm.Attributes.CoolifyEnvironmentID,
-					"coolify_type":           cm.Attributes.CoolifyType,
-					"coolify_name":           cm.Attributes.CoolifyName,
-				},
-				Metrics: cm.Metrics,
+				Type:       domainmetrics.MetricTypeContainer,
+				Attributes: attrs,
+				Metrics:    cm.Metrics,
 			})
 		}
 	}
@@ -380,7 +390,7 @@ func (mp *metricspusher) collectDockerPGMetrics(ctx context.Context, d dockerdis
 		dbMetrics.Up = true
 	}
 	*metricSets = append(*metricSets, domainmetrics.MetricSet{
-		Type: domainmetrics.MetricTypePostgreSQLDatabase,
+		Type:    domainmetrics.MetricTypePostgreSQLDatabase,
 		Attributes: map[string]any{
 			"container_id":   d.ContainerID[:12],
 			"container_name": d.ContainerName,
@@ -412,7 +422,7 @@ func (mp *metricspusher) collectDockerMySQLMetrics(ctx context.Context, d docker
 		m.Up = true
 	}
 	*metricSets = append(*metricSets, domainmetrics.MetricSet{
-		Type: domainmetrics.MetricTypeMySQLDatabase,
+		Type:    domainmetrics.MetricTypeMySQLDatabase,
 		Attributes: map[string]any{
 			"container_id":   d.ContainerID[:12],
 			"container_name": d.ContainerName,
@@ -444,7 +454,7 @@ func (mp *metricspusher) collectDockerMongoDBMetrics(ctx context.Context, d dock
 		m.Up = true
 	}
 	*metricSets = append(*metricSets, domainmetrics.MetricSet{
-		Type: domainmetrics.MetricTypeMongoDBDatabase,
+		Type:    domainmetrics.MetricTypeMongoDBDatabase,
 		Attributes: map[string]any{
 			"container_id":   d.ContainerID[:12],
 			"container_name": d.ContainerName,
@@ -455,3 +465,4 @@ func (mp *metricspusher) collectDockerMongoDBMetrics(ctx context.Context, d dock
 		Metrics: m,
 	})
 }
+

@@ -17,6 +17,7 @@ import (
 	"github.com/docker/docker/api/types/filters"
 
 	domainmetrics "hostlink/domain/metrics"
+	"hostlink/internal/dockerutil"
 )
 
 type Collector interface {
@@ -242,11 +243,10 @@ func (cc *containerCollector) collectOne(
 		}
 	}
 
-	// Container name — Docker prefixes names with '/'
-	name := id[:12]
-	if len(names) > 0 {
-		name = strings.TrimPrefix(names[0], "/")
-	}
+	// Resolve a human-readable name for the container. We prioritize Coolify's 
+	// internal name label, followed by Docker Compose service names, before 
+	// falling back to the raw Docker container name or truncated ID.
+	name := dockerutil.ResolveContainerName(id, names, labels)
 
 	attrs := domainmetrics.ContainerAttributes{
 		ContainerID:          id[:12],

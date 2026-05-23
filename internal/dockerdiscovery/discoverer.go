@@ -8,6 +8,8 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
+
+	"hostlink/internal/dockerutil"
 )
 
 type dockerClient interface {
@@ -228,7 +230,7 @@ func inspectContainer(ctx context.Context, cli dockerClient, c container.Summary
 		return DiscoveredDatabase{}, fmt.Errorf("inspect %s: %w", c.ID[:12], err)
 	}
 
-	containerName := strings.TrimPrefix(c.Names[0], "/")
+	containerName := dockerutil.ResolveContainerName(c.ID, c.Names, c.Labels)
 
 	port := defaultPorts[dbType]
 	if info.NetworkSettings != nil {
