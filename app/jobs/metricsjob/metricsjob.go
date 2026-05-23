@@ -44,7 +44,7 @@ func (mj *MetricsJob) Register(ctx context.Context, mp metrics.Pusher, mcred met
 	ctx, cancel := context.WithCancel(ctx)
 	mj.cancel = cancel
 	var creds []credential.Credential
-	var lastPgCred credential.Credential
+	var lastDbCred credential.Credential
 	var beatCount int
 	mj.wg.Add(1)
 	go func() {
@@ -61,16 +61,22 @@ func (mj *MetricsJob) Register(ctx context.Context, mp metrics.Pusher, mcred met
 					return err
 				}
 
-				lastPgCred = credential.Credential{}
+				lastDbCred = credential.Credential{}
 				for _, cred := range creds {
 					if cred.Dialect == "postgresql" {
-						lastPgCred = cred
+						lastDbCred = cred
 						break
+					}
+					if lastDbCred.Dialect == "" {
+						switch cred.Dialect {
+						case "mysql", "mariadb", "mongodb", "redis":
+							lastDbCred = cred
+						}
 					}
 				}
 			}
 
-			return mp.Push(lastPgCred)
+			return mp.Push(lastDbCred)
 		})
 	}()
 	return cancel

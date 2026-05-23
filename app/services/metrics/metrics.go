@@ -13,13 +13,18 @@ import (
 	"hostlink/domain/credential"
 	domainmetrics "hostlink/domain/metrics"
 	"hostlink/internal/apiserver"
+	"hostlink/internal/containermetrics"
 	"hostlink/internal/crypto"
 	"hostlink/internal/dockerdiscovery"
+	"hostlink/internal/mongodbmetrics"
+	"hostlink/internal/mysqlmetrics"
 	"hostlink/internal/networkmetrics"
 	"hostlink/internal/pgbouncermetrics"
 	"hostlink/internal/pgmetrics"
+	"hostlink/internal/redismetrics"
 	"hostlink/internal/storagemetrics"
 	"hostlink/internal/sysmetrics"
+	"hostlink/internal/traefikmetrics"
 )
 
 type AuthGetter interface {
@@ -38,6 +43,11 @@ type metricspusher struct {
 	netcollector       networkmetrics.Collector
 	storagecollector   storagemetrics.Collector
 	pgbouncercollector pgbouncermetrics.Collector
+	mysqlcollector     mysqlmetrics.Collector
+	mongodbcollector   mongodbmetrics.Collector
+	rediscollector     redismetrics.Collector
+	containercollector containermetrics.Collector
+	traefikcollector   traefikmetrics.Collector
 	dockerDiscoverer   dockerdiscovery.Discoverer
 	crypto             crypto.Service
 	privateKeyPath     string
@@ -61,6 +71,11 @@ func NewWithConf() (*metricspusher, error) {
 		netcollector:       networkmetrics.New(),
 		storagecollector:   storagemetrics.New(),
 		pgbouncercollector: pgbouncermetrics.New(),
+		mysqlcollector:     mysqlmetrics.New(),
+		mongodbcollector:   mongodbmetrics.New(),
+		rediscollector:     redismetrics.New(),
+		containercollector: containermetrics.New(),
+		traefikcollector:   traefikmetrics.New(),
 		dockerDiscoverer:   dockerdiscovery.New(),
 		crypto:             crypto.NewService(),
 		privateKeyPath:     appconf.AgentPrivateKeyPath(),
@@ -71,7 +86,7 @@ func New() (*metricspusher, error) {
 	return NewWithConf()
 }
 
-// NewWithDependencies allows full dependency injection for testing
+// NewWithDependencies allows full dependency injection for testing.
 func NewWithDependencies(
 	apiserver apiserver.MetricsOperations,
 	agentstate agentstate.Operations,
@@ -80,6 +95,11 @@ func NewWithDependencies(
 	netcollector networkmetrics.Collector,
 	storagecollector storagemetrics.Collector,
 	pgbouncercollector pgbouncermetrics.Collector,
+	mysqlcollector mysqlmetrics.Collector,
+	mongodbcollector mongodbmetrics.Collector,
+	rediscollector redismetrics.Collector,
+	containercollector containermetrics.Collector,
+	traefikcollector traefikmetrics.Collector,
 	dockerDiscoverer dockerdiscovery.Discoverer,
 	crypto crypto.Service,
 	privateKeyPath string,
@@ -92,6 +112,11 @@ func NewWithDependencies(
 		netcollector:       netcollector,
 		storagecollector:   storagecollector,
 		pgbouncercollector: pgbouncercollector,
+		mysqlcollector:     mysqlcollector,
+		mongodbcollector:   mongodbcollector,
+		rediscollector:     rediscollector,
+		containercollector: containercollector,
+		traefikcollector:   traefikcollector,
 		dockerDiscoverer:   dockerDiscoverer,
 		crypto:             crypto,
 		privateKeyPath:     privateKeyPath,
@@ -143,6 +168,8 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 	ctx := context.Background()
 	var metricSets []domainmetrics.MetricSet
 
+	// ── Infrastructure metrics (always collected) ────────────────────────────
+
 	sysMetrics, err := mp.syscollector.Collect(ctx)
 	if err != nil {
 		log.Warnf("system metrics collection failed: %v", err)
@@ -163,34 +190,85 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 		})
 	}
 
-	// Collect from control-plane credential (primary PG)
-	hasPrimaryCred := cred.Host != "" || cred.Port != 0
-	if hasPrimaryCred {
-		dbMetrics, err := mp.metricscollector.Collect(cred)
-		if err != nil {
-			log.Warnf("primary database metrics collection failed: %v", err)
-			dbMetrics = domainmetrics.PostgreSQLDatabaseMetrics{Up: false}
-		} else {
-			dbMetrics.Up = true
-		}
-		metricSets = append(metricSets, domainmetrics.MetricSet{
-			Type:    domainmetrics.MetricTypePostgreSQLDatabase,
-			Metrics: dbMetrics,
-		})
+	// ── Database metrics (dispatched by credential dialect) ──────────────────
 
-		pgbouncerMetrics, err := mp.pgbouncercollector.Collect(cred)
-		if err != nil {
-			pgbouncerMetrics = domainmetrics.PgBouncerMetrics{Up: false}
-		} else {
-			pgbouncerMetrics.Up = true
+	switch cred.Dialect {
+	case "mysql", "mariadb":
+		if cred.Host != "" || cred.Port != 0 {
+			m, err := mp.mysqlcollector.Collect(cred)
+			if err != nil {
+				log.Warnf("mysql metrics collection failed: %v", err)
+				m = domainmetrics.MySQLDatabaseMetrics{Up: false}
+			} else {
+				m.Up = true
+			}
+			metricSets = append(metricSets, domainmetrics.MetricSet{
+				Type:    domainmetrics.MetricTypeMySQLDatabase,
+				Metrics: m,
+			})
 		}
-		metricSets = append(metricSets, domainmetrics.MetricSet{
-			Type:    domainmetrics.MetricTypePgBouncer,
-			Metrics: pgbouncerMetrics,
-		})
+
+	case "mongodb":
+		if cred.Host != "" || cred.Port != 0 {
+			m, err := mp.mongodbcollector.Collect(cred)
+			if err != nil {
+				log.Warnf("mongodb metrics collection failed: %v", err)
+				m = domainmetrics.MongoDBMetrics{Up: false}
+			} else {
+				m.Up = true
+			}
+			metricSets = append(metricSets, domainmetrics.MetricSet{
+				Type:    domainmetrics.MetricTypeMongoDBDatabase,
+				Metrics: m,
+			})
+		}
+
+	case "redis":
+		if cred.Host != "" || cred.Port != 0 {
+			m, err := mp.rediscollector.Collect(cred)
+			if err != nil {
+				log.Warnf("redis metrics collection failed: %v", err)
+				m = domainmetrics.RedisMetrics{Up: false}
+			} else {
+				m.Up = true
+			}
+			metricSets = append(metricSets, domainmetrics.MetricSet{
+				Type:    domainmetrics.MetricTypeRedis,
+				Metrics: m,
+			})
+		}
+
+	default: // "postgresql", "supabase", or empty — existing behaviour
+		hasPrimaryCred := cred.Host != "" || cred.Port != 0
+		if hasPrimaryCred {
+			dbMetrics, err := mp.metricscollector.Collect(cred)
+			if err != nil {
+				log.Warnf("database metrics collection failed: %v", err)
+				dbMetrics = domainmetrics.PostgreSQLDatabaseMetrics{Up: false}
+			} else {
+				dbMetrics.Up = true
+			}
+			metricSets = append(metricSets, domainmetrics.MetricSet{
+				Type:    domainmetrics.MetricTypePostgreSQLDatabase,
+				Metrics: dbMetrics,
+			})
+
+			// PgBouncer is co-located with PostgreSQL — try-connect, silently skip if absent
+			pgbouncerMetrics, err := mp.pgbouncercollector.Collect(cred)
+			if err != nil {
+				pgbouncerMetrics = domainmetrics.PgBouncerMetrics{Up: false}
+			} else {
+				pgbouncerMetrics.Up = true
+			}
+			metricSets = append(metricSets, domainmetrics.MetricSet{
+				Type:    domainmetrics.MetricTypePgBouncer,
+				Metrics: pgbouncerMetrics,
+			})
+		}
 	}
 
-	// Discover Docker containers and collect PG metrics from each
+	// ── Docker-discovered database containers ────────────────────────────────
+
 	dockerDBs, err := mp.dockerDiscoverer.DiscoverDatabases(ctx)
 	if err != nil {
 		log.Warnf("docker database discovery failed: %v", err)
@@ -199,10 +277,14 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 		switch d.Type {
 		case dockerdiscovery.DatabaseTypePostgreSQL:
 			mp.collectDockerPGMetrics(ctx, d, &metricSets)
-		default:
-			// MySQL and MongoDB collectors not yet implemented
+		case dockerdiscovery.DatabaseTypeMySQL:
+			mp.collectDockerMySQLMetrics(ctx, d, &metricSets)
+		case dockerdiscovery.DatabaseTypeMongoDB:
+			mp.collectDockerMongoDBMetrics(ctx, d, &metricSets)
 		}
 	}
+
+	// ── Storage metrics ──────────────────────────────────────────────────────
 
 	storageMetrics, err := mp.storagecollector.Collect(ctx)
 	if err != nil {
@@ -218,6 +300,47 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 					"is_read_only":    sm.Attributes.IsReadOnly,
 				},
 				Metrics: sm.Metrics,
+			})
+		}
+	}
+
+	// ── Container metrics (Coolify apps) ─────────────────────────────────────
+
+	containerSets, err := mp.containercollector.Collect(ctx)
+	if err != nil {
+		log.Warnf("container metrics collection failed: %v", err)
+	} else {
+		for _, cm := range containerSets {
+			metricSets = append(metricSets, domainmetrics.MetricSet{
+				Type: domainmetrics.MetricTypeContainer,
+				Attributes: map[string]any{
+					"container_id":           cm.Attributes.ContainerID,
+					"container_name":         cm.Attributes.ContainerName,
+					"image":                  cm.Attributes.Image,
+					"coolify_app_id":         cm.Attributes.CoolifyAppID,
+					"coolify_project_id":     cm.Attributes.CoolifyProjectID,
+					"coolify_environment_id": cm.Attributes.CoolifyEnvironmentID,
+					"coolify_type":           cm.Attributes.CoolifyType,
+					"coolify_name":           cm.Attributes.CoolifyName,
+				},
+				Metrics: cm.Metrics,
+			})
+		}
+	}
+
+	// ── Traefik metrics (HTTP requests / response time / error rate per app) ──
+
+	traefikSets, err := mp.traefikcollector.Collect(ctx)
+	if err != nil {
+		log.Warnf("traefik metrics collection failed: %v", err)
+	} else {
+		for _, ts := range traefikSets {
+			metricSets = append(metricSets, domainmetrics.MetricSet{
+				Type: domainmetrics.MetricTypeTraefikService,
+				Attributes: map[string]any{
+					"service_name": ts.Attributes.ServiceName,
+				},
+				Metrics: ts.Metrics,
 			})
 		}
 	}
@@ -266,5 +389,69 @@ func (mp *metricspusher) collectDockerPGMetrics(ctx context.Context, d dockerdis
 			"source":         "docker",
 		},
 		Metrics: dbMetrics,
+	})
+}
+
+func (mp *metricspusher) collectDockerMySQLMetrics(ctx context.Context, d dockerdiscovery.DiscoveredDatabase, metricSets *[]domainmetrics.MetricSet) {
+	dockerCred := credential.Credential{
+		Host:     d.Host,
+		Port:     int(d.Port),
+		Username: d.Username,
+		Database: d.Database,
+		Dialect:  "mysql",
+	}
+	if d.Password != "" {
+		dockerCred.Password = &d.Password
+	}
+
+	m, err := mp.mysqlcollector.Collect(dockerCred)
+	if err != nil {
+		log.Warnf("docker MySQL metrics collection failed for %s: %v", d.ContainerName, err)
+		m = domainmetrics.MySQLDatabaseMetrics{Up: false}
+	} else {
+		m.Up = true
+	}
+	*metricSets = append(*metricSets, domainmetrics.MetricSet{
+		Type: domainmetrics.MetricTypeMySQLDatabase,
+		Attributes: map[string]any{
+			"container_id":   d.ContainerID[:12],
+			"container_name": d.ContainerName,
+			"database_name":  d.Database,
+			"port":           d.Port,
+			"source":         "docker",
+		},
+		Metrics: m,
+	})
+}
+
+func (mp *metricspusher) collectDockerMongoDBMetrics(ctx context.Context, d dockerdiscovery.DiscoveredDatabase, metricSets *[]domainmetrics.MetricSet) {
+	dockerCred := credential.Credential{
+		Host:     d.Host,
+		Port:     int(d.Port),
+		Username: d.Username,
+		Database: d.Database,
+		Dialect:  "mongodb",
+	}
+	if d.Password != "" {
+		dockerCred.Password = &d.Password
+	}
+
+	m, err := mp.mongodbcollector.Collect(dockerCred)
+	if err != nil {
+		log.Warnf("docker MongoDB metrics collection failed for %s: %v", d.ContainerName, err)
+		m = domainmetrics.MongoDBMetrics{Up: false}
+	} else {
+		m.Up = true
+	}
+	*metricSets = append(*metricSets, domainmetrics.MetricSet{
+		Type: domainmetrics.MetricTypeMongoDBDatabase,
+		Attributes: map[string]any{
+			"container_id":   d.ContainerID[:12],
+			"container_name": d.ContainerName,
+			"database_name":  d.Database,
+			"port":           d.Port,
+			"source":         "docker",
+		},
+		Metrics: m,
 	})
 }

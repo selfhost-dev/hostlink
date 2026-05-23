@@ -550,10 +550,16 @@ func TestClientHelloAckAcknowledgedFinalsEmitOutboxAcknowledgementTelemetry(t *t
 		messages, err := store.UnackedMessages()
 		return err == nil && len(messages) == 0
 	}, "hello ack to remove final outbox message")
-	entries := telemetryEntries(t, telemetryPath)
-	acknowledged := findTelemetryEntry(entries, func(entry map[string]any) bool {
-		return entry["event"] == "hostlink.agent_ws.outbox.acknowledged" && entry["acked_message_id"] == "msg-final-1"
-	})
+
+	var acknowledged map[string]any
+	waitFor(t, func() bool {
+		entries := telemetryEntries(t, telemetryPath)
+		acknowledged = findTelemetryEntry(entries, func(entry map[string]any) bool {
+			return entry["event"] == "hostlink.agent_ws.outbox.acknowledged" && entry["acked_message_id"] == "msg-final-1"
+		})
+		return len(acknowledged) > 0
+	}, "telemetry for outbox acknowledgement")
+
 	if acknowledged["acked_type"] != string(wsprotocol.TypeTaskFinal) || acknowledged["task_id"] != "task-1" {
 		t.Fatalf("acknowledged event = %#v", acknowledged)
 	}

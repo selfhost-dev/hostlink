@@ -7,6 +7,11 @@ const (
 	MetricTypePostgreSQLDatabase = "postgresql.database"
 	MetricTypeStorage            = "storage"
 	MetricTypePgBouncer          = "pgbouncer.stats"
+	MetricTypeMySQLDatabase      = "mysql.database"
+	MetricTypeMongoDBDatabase    = "mongodb.database"
+	MetricTypeRedis              = "redis"
+	MetricTypeContainer          = "container"
+	MetricTypeTraefikService     = "traefik.service"
 )
 
 type MetricPayload struct {
@@ -96,4 +101,97 @@ type StorageAttributes struct {
 	Device         string `json:"device"`
 	FilesystemType string `json:"filesystem_type"`
 	IsReadOnly     bool   `json:"is_read_only"`
+}
+
+type MySQLDatabaseMetrics struct {
+	Up                    bool    `json:"up"`
+	ThreadsConnected      int     `json:"threads_connected"`
+	ThreadsRunning        int     `json:"threads_running"`
+	MaxConnections        int     `json:"max_connections"`
+	MaxUsedConnections    int64   `json:"max_used_connections"`
+	QueriesPerSecond      float64 `json:"queries_per_second"`
+	SlowQueries           int64   `json:"slow_queries"`
+	InnoDBCacheHitRatio   float64 `json:"innodb_cache_hit_ratio"`
+	ReplicationLagSeconds *int    `json:"replication_lag_seconds,omitempty"`
+	ReplicationConnected  *bool   `json:"replication_connected,omitempty"`
+}
+
+type MongoDBMetrics struct {
+	Up                   bool    `json:"up"`
+	ConnectionsCurrent   int     `json:"connections_current"`
+	ConnectionsAvailable int     `json:"connections_available"`
+	OpsPerSecond         float64 `json:"ops_per_second"`
+	QueriesPerSecond     float64 `json:"queries_per_second"`
+	InsertsPerSecond     float64 `json:"inserts_per_second"`
+	UpdatesPerSecond     float64 `json:"updates_per_second"`
+	DeletesPerSecond     float64 `json:"deletes_per_second"`
+	ResidentMemoryMB     int     `json:"resident_memory_mb"`
+	ReplicationLagSeconds *int   `json:"replication_lag_seconds,omitempty"`
+}
+
+type RedisMetrics struct {
+	Up                     bool    `json:"up"`
+	ConnectedClients       int     `json:"connected_clients"`
+	UsedMemoryBytes        int64   `json:"used_memory_bytes"`
+	UsedMemoryRSSBytes     int64   `json:"used_memory_rss_bytes"`
+	KeyspaceHitRatio       float64 `json:"keyspace_hit_ratio"`
+	InstantaneousOpsPerSec int     `json:"instantaneous_ops_per_sec"`
+	EvictedKeys            int64   `json:"evicted_keys"`
+	ExpiredKeys            int64   `json:"expired_keys"`
+	Role                   string  `json:"role"`
+	ReplicationLagSeconds  *int    `json:"replication_lag_seconds,omitempty"`
+	ReplicationConnected   *bool   `json:"replication_connected,omitempty"`
+}
+
+// ContainerMetrics holds resource and health data for a single Docker container.
+// RestartCount, ExitCode, Status, and UptimeSeconds come from ContainerInspect
+// and are the most actionable signals for a developer debugging a crashing app.
+type ContainerMetrics struct {
+	Up                    bool    `json:"up"`
+	CPUPercent            float64 `json:"cpu_percent"`
+	MemoryUsageBytes      int64   `json:"memory_usage_bytes"`
+	MemoryLimitBytes      int64   `json:"memory_limit_bytes"`
+	MemoryPercent         float64 `json:"memory_percent"`
+	NetRxBytesPerSec      float64 `json:"net_rx_bytes_per_sec"`
+	NetTxBytesPerSec      float64 `json:"net_tx_bytes_per_sec"`
+	BlockReadBytesPerSec  float64 `json:"block_read_bytes_per_sec"`
+	BlockWriteBytesPerSec float64 `json:"block_write_bytes_per_sec"`
+	PIDs                  int     `json:"pids"`
+	// Stability signals — most useful for developers
+	RestartCount  int    `json:"restart_count"`
+	ExitCode      int    `json:"exit_code"`
+	Status        string `json:"status"`
+	UptimeSeconds int64  `json:"uptime_seconds"`
+}
+
+// TraefikServiceMetrics holds per-service HTTP metrics scraped from Traefik's
+// Prometheus endpoint. These are real user-traffic signals — not health probes.
+// Up is false when Traefik is unreachable or metrics are not enabled.
+type TraefikServiceMetrics struct {
+	Up                bool    `json:"up"`
+	RequestsTotal     int64   `json:"requests_total"`
+	RequestsPerSecond float64 `json:"requests_per_second"`
+	ErrorRate         float64 `json:"error_rate"`          // % of 4xx + 5xx
+	Requests2xx       int64   `json:"requests_2xx"`
+	Requests4xx       int64   `json:"requests_4xx"`
+	Requests5xx       int64   `json:"requests_5xx"`
+	AvgResponseTimeMs float64 `json:"avg_response_time_ms"`
+	P50ResponseTimeMs float64 `json:"p50_response_time_ms"`
+	P95ResponseTimeMs float64 `json:"p95_response_time_ms"`
+	P99ResponseTimeMs float64 `json:"p99_response_time_ms"`
+}
+
+type TraefikServiceAttributes struct {
+	ServiceName string `json:"service_name"`
+}
+
+type ContainerAttributes struct {
+	ContainerID          string `json:"container_id"`
+	ContainerName        string `json:"container_name"`
+	Image                string `json:"image"`
+	CoolifyAppID         string `json:"coolify_app_id,omitempty"`
+	CoolifyProjectID     string `json:"coolify_project_id,omitempty"`
+	CoolifyEnvironmentID string `json:"coolify_environment_id,omitempty"`
+	CoolifyType          string `json:"coolify_type,omitempty"`
+	CoolifyName          string `json:"coolify_name,omitempty"`
 }

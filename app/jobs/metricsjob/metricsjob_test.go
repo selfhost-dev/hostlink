@@ -277,12 +277,12 @@ func TestRegister_HandlesGetCredsError(t *testing.T) {
 	}
 }
 
-func TestRegister_SkipsNonPostgresqlCreds(t *testing.T) {
+func TestRegister_SkipsUnsupportedDialects(t *testing.T) {
 	pusher := &mockPusher{}
 	authGetter := &mockAuthGetter{
 		creds: []credential.Credential{
 			{Dialect: "mysql"},
-			{Dialect: "sqlite"},
+			{Dialect: "sqlite"}, // unsupported — should be ignored
 		},
 	}
 
@@ -297,13 +297,13 @@ func TestRegister_SkipsNonPostgresqlCreds(t *testing.T) {
 
 	job.Shutdown()
 
-	// Push should be called with zero-value credential
+	// Push should be called with the mysql credential (first supported dialect found)
 	if len(pusher.pushCalls) != 1 {
 		t.Errorf("expected 1 Push call, got %d", len(pusher.pushCalls))
 	}
 
-	if pusher.pushCalls[0].Dialect != "" {
-		t.Errorf("expected empty dialect, got %s", pusher.pushCalls[0].Dialect)
+	if pusher.pushCalls[0].Dialect != "mysql" {
+		t.Errorf("expected mysql dialect, got %s", pusher.pushCalls[0].Dialect)
 	}
 }
 

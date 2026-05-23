@@ -9,8 +9,10 @@ import (
 
 	"hostlink/domain/credential"
 	domainmetrics "hostlink/domain/metrics"
+	"hostlink/internal/containermetrics"
 	"hostlink/internal/dockerdiscovery"
 	"hostlink/internal/storagemetrics"
+	"hostlink/internal/traefikmetrics"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -190,6 +192,57 @@ func (m *MockPgBouncerCollector) Collect(cred credential.Credential) (domainmetr
 	return args.Get(0).(domainmetrics.PgBouncerMetrics), args.Error(1)
 }
 
+type MockMySQLCollector struct {
+	mock.Mock
+}
+
+func (m *MockMySQLCollector) Collect(cred credential.Credential) (domainmetrics.MySQLDatabaseMetrics, error) {
+	args := m.Called(cred)
+	return args.Get(0).(domainmetrics.MySQLDatabaseMetrics), args.Error(1)
+}
+
+type MockMongoDBCollector struct {
+	mock.Mock
+}
+
+func (m *MockMongoDBCollector) Collect(cred credential.Credential) (domainmetrics.MongoDBMetrics, error) {
+	args := m.Called(cred)
+	return args.Get(0).(domainmetrics.MongoDBMetrics), args.Error(1)
+}
+
+type MockRedisCollector struct {
+	mock.Mock
+}
+
+func (m *MockRedisCollector) Collect(cred credential.Credential) (domainmetrics.RedisMetrics, error) {
+	args := m.Called(cred)
+	return args.Get(0).(domainmetrics.RedisMetrics), args.Error(1)
+}
+
+type MockContainerCollector struct {
+	mock.Mock
+}
+
+func (m *MockContainerCollector) Collect(ctx context.Context) ([]containermetrics.ContainerMetricSet, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]containermetrics.ContainerMetricSet), args.Error(1)
+}
+
+type MockTraefikCollector struct {
+	mock.Mock
+}
+
+func (m *MockTraefikCollector) Collect(ctx context.Context) ([]traefikmetrics.ServiceMetricSet, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]traefikmetrics.ServiceMetricSet), args.Error(1)
+}
+
 type MockDockerDiscoverer struct {
 	mock.Mock
 }
@@ -201,15 +254,20 @@ func (m *MockDockerDiscoverer) DiscoverDatabases(ctx context.Context) ([]dockerd
 
 // Test helpers
 type testMocks struct {
-	apiserver           *MockAPIServer
-	agentstate          *MockAgentState
-	collector           *MockCollector
-	syscollector        *MockSysCollector
-	netcollector        *MockNetCollector
-	storagecollector    *MockStorageCollector
-	pgbouncercollector  *MockPgBouncerCollector
-	dockerDiscoverer    *MockDockerDiscoverer
-	crypto              *MockCrypto
+	apiserver          *MockAPIServer
+	agentstate         *MockAgentState
+	collector          *MockCollector
+	syscollector       *MockSysCollector
+	netcollector       *MockNetCollector
+	storagecollector   *MockStorageCollector
+	pgbouncercollector *MockPgBouncerCollector
+	mysqlcollector     *MockMySQLCollector
+	mongodbcollector   *MockMongoDBCollector
+	rediscollector     *MockRedisCollector
+	containercollector *MockContainerCollector
+	traefikcollector   *MockTraefikCollector
+	dockerDiscoverer   *MockDockerDiscoverer
+	crypto             *MockCrypto
 }
 
 func setupTestMetricsPusher() (*metricspusher, *testMocks) {
@@ -221,6 +279,11 @@ func setupTestMetricsPusher() (*metricspusher, *testMocks) {
 		netcollector:       new(MockNetCollector),
 		storagecollector:   new(MockStorageCollector),
 		pgbouncercollector: new(MockPgBouncerCollector),
+		mysqlcollector:     new(MockMySQLCollector),
+		mongodbcollector:   new(MockMongoDBCollector),
+		rediscollector:     new(MockRedisCollector),
+		containercollector: new(MockContainerCollector),
+		traefikcollector:   new(MockTraefikCollector),
 		dockerDiscoverer:   new(MockDockerDiscoverer),
 		crypto:             new(MockCrypto),
 	}
@@ -233,6 +296,11 @@ func setupTestMetricsPusher() (*metricspusher, *testMocks) {
 		mocks.netcollector,
 		mocks.storagecollector,
 		mocks.pgbouncercollector,
+		mocks.mysqlcollector,
+		mocks.mongodbcollector,
+		mocks.rediscollector,
+		mocks.containercollector,
+		mocks.traefikcollector,
 		mocks.dockerDiscoverer,
 		mocks.crypto,
 		"/test/key/path",
@@ -241,6 +309,11 @@ func setupTestMetricsPusher() (*metricspusher, *testMocks) {
 	// Default: no Docker containers discovered
 	mocks.dockerDiscoverer.On("DiscoverDatabases", mock.Anything).
 		Return([]dockerdiscovery.DiscoveredDatabase{}, nil)
+	// Default: no running containers or Traefik services (no metric sets added)
+	mocks.containercollector.On("Collect", mock.Anything).
+		Return([]containermetrics.ContainerMetricSet(nil), nil)
+	mocks.traefikcollector.On("Collect", mock.Anything).
+		Return([]traefikmetrics.ServiceMetricSet(nil), nil)
 
 	return mp, mocks
 }
