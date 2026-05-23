@@ -38,24 +38,9 @@ builds:
     ldflags:
       - -s -w -X hostlink/version.Version={{.Version}}
 
-  - id: hlctl
-    binary: hlctl
-    main: ./cmd/hlctl
-    env:
-      - CGO_ENABLED=0
-    goos:
-      - linux
-      - darwin
-      - windows
-    goarch:
-      - amd64
-      - arm64
-    ldflags:
-      - -s -w -X hostlink/version.Version={{.Version}}
-
 archives:
   - id: hostlink-archive
-    ids: [hostlink, hlctl]
+    ids: [hostlink]
     formats: [tar.gz]
     name_template: >-
       {{ .ProjectName }}_
@@ -63,13 +48,23 @@ archives:
       {{- if eq .Arch "amd64" }}x86_64
       {{- else }}{{ .Arch }}{{ end }}
       {{- if .Arm }}v{{ .Arm }}{{ end }}
-    format_overrides:
-      - goos: windows
-        formats: [zip]
     files:
       - src: "scripts/**/*"
         dst: scripts
         strip_parent: true
+
+  - id: hlctl-archive
+    ids: [hlctl]
+    formats: [tar.gz]
+    name_template: >-
+      hlctl_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
 
 changelog:
   sort: asc
