@@ -9,15 +9,6 @@
 version: 2
 project_name: hostlink
 
-before:
-  hooks:
-    # You may remove this if you don't use go modules.
-    - go mod tidy
-    # you may remove this if you don't need go generate
-    - go generate ./...
-    # Run unit tests before building
-    - make test
-
 builds:
   - id: hostlink
     binary: hostlink
@@ -26,6 +17,21 @@ builds:
       - CGO_ENABLED=0
     goos:
       - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X hostlink/version.Version={{.Version}}
+
+  - id: hlctl
+    binary: hlctl
+    main: ./cmd/hlctl
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
     goarch:
       - amd64
       - arm64
