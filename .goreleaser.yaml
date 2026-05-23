@@ -38,6 +38,21 @@ builds:
     ldflags:
       - -s -w -X hostlink/version.Version={{.Version}}
 
+  - id: hlctl
+    binary: hlctl
+    main: ./cmd/hlctl
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X hostlink/version.Version={{.Version}}
+
 archives:
   - id: hostlink-archive
     ids: [hostlink, hlctl]
