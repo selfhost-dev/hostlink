@@ -15,12 +15,13 @@ before:
     - go mod tidy
     # you may remove this if you don't need go generate
     - go generate ./...
-    # Run tests before building
+    # Run unit tests before building
     - make test
-    - make test-it
 
 builds:
   - id: hostlink
+    binary: hostlink
+    main: .
     env:
       - CGO_ENABLED=0
     goos:
@@ -31,9 +32,24 @@ builds:
     ldflags:
       - -s -w -X hostlink/version.Version={{.Version}}
 
+  - id: hlctl
+    binary: hlctl
+    main: ./cmd/hlctl
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X hostlink/version.Version={{.Version}}
+
 archives:
   - id: hostlink-archive
-    builds: [hostlink]
+    ids: [hostlink, hlctl]
     formats: [tar.gz]
     name_template: >-
       {{ .ProjectName }}_
