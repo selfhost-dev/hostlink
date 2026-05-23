@@ -200,6 +200,15 @@ func HeartbeatInterval() time.Duration {
 	return parseDurationClamped("HOSTLINK_HEARTBEAT_INTERVAL", 5*time.Second, 10*time.Millisecond, 5*time.Minute)
 }
 
+// TraefikEndpoint returns the Traefik metrics endpoint.
+// Controlled by HOSTLINK_TRAEFIK_ENDPOINT (default: http://localhost:8080/metrics).
+func TraefikEndpoint() string {
+	if endpoint := strings.TrimSpace(os.Getenv("HOSTLINK_TRAEFIK_ENDPOINT")); endpoint != "" {
+		return endpoint
+	}
+	return "http://localhost:8080/metrics"
+}
+
 // UpdateCheckInterval returns the interval between update checks.
 // Controlled by HOSTLINK_UPDATE_CHECK_INTERVAL (default: 5m, clamped to [1m, 24h]).
 func UpdateCheckInterval() time.Duration {

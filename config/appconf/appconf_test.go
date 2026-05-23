@@ -206,6 +206,16 @@ func TestHeartbeatInterval_CustomValue(t *testing.T) {
 	assert.Equal(t, 200*time.Millisecond, HeartbeatInterval())
 }
 
+func TestTraefikEndpoint_Default(t *testing.T) {
+	t.Setenv("HOSTLINK_TRAEFIK_ENDPOINT", "")
+	assert.Equal(t, "http://localhost:8080/metrics", TraefikEndpoint())
+}
+
+func TestTraefikEndpoint_CustomValue(t *testing.T) {
+	t.Setenv("HOSTLINK_TRAEFIK_ENDPOINT", "http://traefik:8082/metrics")
+	assert.Equal(t, "http://traefik:8082/metrics", TraefikEndpoint())
+}
+
 func TestLocalTaskStorePath_DefaultUnderAgentStatePath(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("HOSTLINK_STATE_PATH", stateDir)
