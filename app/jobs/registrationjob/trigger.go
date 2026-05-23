@@ -44,6 +44,10 @@ func triggerWithConfig(fn func() error, config TriggerConfig) {
 	log.Error("Agent registration failed after all retry attempts")
 }
 
+func TriggerWithConfig(fn func() error, config TriggerConfig) {
+	triggerWithConfig(fn, config)
+}
+
 func Trigger(fn func() error) {
 	triggerWithConfig(fn, DefaultTriggerConfig())
 }

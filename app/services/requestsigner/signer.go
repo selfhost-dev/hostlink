@@ -65,23 +65,38 @@ func New2(privateKeyPath, agentStatePath string) (*RequestSigner, error) {
 }
 
 func (s *RequestSigner) SignRequest(req *http.Request) error {
+	headers, err := s.SignHeaders()
+	if err != nil {
+		return err
+	}
+	for key, values := range headers {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
+	}
+
+	return nil
+}
+
+func (s *RequestSigner) SignHeaders() (http.Header, error) {
 	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
 	nonceValue, err := s.generateNonce()
 	if err != nil {
-		return fmt.Errorf("failed to generate nonce: %w", err)
+		return nil, fmt.Errorf("failed to generate nonce: %w", err)
 	}
 
 	signature, err := s.generateSignature(s.agentID, timestamp, nonceValue)
 	if err != nil {
-		return fmt.Errorf("failed to generate signature: %w", err)
+		return nil, fmt.Errorf("failed to generate signature: %w", err)
 	}
 
-	req.Header.Set("X-Agent-ID", s.agentID)
-	req.Header.Set("X-Timestamp", timestamp)
-	req.Header.Set("X-Nonce", nonceValue)
-	req.Header.Set("X-Signature", signature)
+	headers := http.Header{}
+	headers.Set("X-Agent-ID", s.agentID)
+	headers.Set("X-Timestamp", timestamp)
+	headers.Set("X-Nonce", nonceValue)
+	headers.Set("X-Signature", signature)
 
-	return nil
+	return headers, nil
 }
 
 func (s *RequestSigner) generateSignature(agentID, timestamp, nonce string) (string, error) {

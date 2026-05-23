@@ -10,6 +10,7 @@ import (
 	"hostlink/domain/credential"
 	domainmetrics "hostlink/domain/metrics"
 	"hostlink/internal/containermetrics"
+	"hostlink/internal/dockerdiscovery"
 	"hostlink/internal/storagemetrics"
 	"hostlink/internal/traefikmetrics"
 
@@ -230,21 +231,43 @@ func (m *MockContainerCollector) Collect(ctx context.Context) ([]containermetric
 	return args.Get(0).([]containermetrics.ContainerMetricSet), args.Error(1)
 }
 
+type MockTraefikCollector struct {
+	mock.Mock
+}
+
+func (m *MockTraefikCollector) Collect(ctx context.Context) ([]traefikmetrics.ServiceMetricSet, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]traefikmetrics.ServiceMetricSet), args.Error(1)
+}
+
+type MockDockerDiscoverer struct {
+	mock.Mock
+}
+
+func (m *MockDockerDiscoverer) DiscoverDatabases(ctx context.Context) ([]dockerdiscovery.DiscoveredDatabase, error) {
+	args := m.Called(ctx)
+	return args.Get(0).([]dockerdiscovery.DiscoveredDatabase), args.Error(1)
+}
+
 // Test helpers
 type testMocks struct {
-	apiserver           *MockAPIServer
-	agentstate          *MockAgentState
-	collector           *MockCollector
-	syscollector        *MockSysCollector
-	netcollector        *MockNetCollector
-	storagecollector    *MockStorageCollector
-	pgbouncercollector  *MockPgBouncerCollector
-	mysqlcollector      *MockMySQLCollector
-	mongodbcollector    *MockMongoDBCollector
-	rediscollector      *MockRedisCollector
-	containercollector  *MockContainerCollector
-	traefikcollector    *MockTraefikCollector
-	crypto              *MockCrypto
+	apiserver          *MockAPIServer
+	agentstate         *MockAgentState
+	collector          *MockCollector
+	syscollector       *MockSysCollector
+	netcollector       *MockNetCollector
+	storagecollector   *MockStorageCollector
+	pgbouncercollector *MockPgBouncerCollector
+	mysqlcollector     *MockMySQLCollector
+	mongodbcollector   *MockMongoDBCollector
+	rediscollector     *MockRedisCollector
+	containercollector *MockContainerCollector
+	traefikcollector   *MockTraefikCollector
+	dockerDiscoverer   *MockDockerDiscoverer
+	crypto             *MockCrypto
 }
 
 func setupTestMetricsPusher() (*metricspusher, *testMocks) {
@@ -261,6 +284,7 @@ func setupTestMetricsPusher() (*metricspusher, *testMocks) {
 		rediscollector:     new(MockRedisCollector),
 		containercollector: new(MockContainerCollector),
 		traefikcollector:   new(MockTraefikCollector),
+		dockerDiscoverer:   new(MockDockerDiscoverer),
 		crypto:             new(MockCrypto),
 	}
 
@@ -277,31 +301,21 @@ func setupTestMetricsPusher() (*metricspusher, *testMocks) {
 		mocks.rediscollector,
 		mocks.containercollector,
 		mocks.traefikcollector,
+		mocks.dockerDiscoverer,
 		mocks.crypto,
 		"/test/key/path",
 	)
 
+	// Default: no Docker containers discovered
+	mocks.dockerDiscoverer.On("DiscoverDatabases", mock.Anything).
+		Return([]dockerdiscovery.DiscoveredDatabase{}, nil)
+	// Default: no running containers or Traefik services (no metric sets added)
+	mocks.containercollector.On("Collect", mock.Anything).
+		Return([]containermetrics.ContainerMetricSet(nil), nil)
+	mocks.traefikcollector.On("Collect", mock.Anything).
+		Return([]traefikmetrics.ServiceMetricSet(nil), nil)
+
 	return mp, mocks
-}
-
-func setupContainerCollectorMocks(collector *MockContainerCollector) {
-	collector.On("Collect", mock.Anything).Return(nil, nil)
-}
-
-type MockTraefikCollector struct {
-	mock.Mock
-}
-
-func (m *MockTraefikCollector) Collect(ctx context.Context) ([]traefikmetrics.ServiceMetricSet, error) {
-	args := m.Called(ctx)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]traefikmetrics.ServiceMetricSet), args.Error(1)
-}
-
-func setupTraefikCollectorMocks(collector *MockTraefikCollector) {
-	collector.On("Collect", mock.Anything).Return(nil, nil)
 }
 
 // Constructor Tests
@@ -547,10 +561,6 @@ func TestPush_SystemMetricsFailure_StillPushesDbMetrics(t *testing.T) {
 	setupNetCollectorMocks(mocks.netcollector)
 	setupStorageCollectorMocks(mocks.storagecollector)
 	setupPgBouncerCollectorMocks(mocks.pgbouncercollector)
-	setupContainerCollectorMocks(mocks.containercollector)
-	setupTraefikCollectorMocks(mocks.traefikcollector)
-	setupContainerCollectorMocks(mocks.containercollector)
-	setupTraefikCollectorMocks(mocks.traefikcollector)
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{Up: true, ConnectionsTotal: 5}, nil)
 	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {
@@ -590,10 +600,6 @@ func TestPush_DatabaseMetricsFailure_StillPushesSystemMetricsAndDbWithUpFalse(t 
 	setupNetCollectorMocks(mocks.netcollector)
 	setupStorageCollectorMocks(mocks.storagecollector)
 	setupPgBouncerCollectorMocks(mocks.pgbouncercollector)
-	setupContainerCollectorMocks(mocks.containercollector)
-	setupTraefikCollectorMocks(mocks.traefikcollector)
-	setupContainerCollectorMocks(mocks.containercollector)
-	setupTraefikCollectorMocks(mocks.traefikcollector)
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{}, collectErr)
 	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {
@@ -638,10 +644,6 @@ func TestPush_AllCollectionsFail_StillPushesDbWithUpFalse(t *testing.T) {
 		Return(domainmetrics.NetworkMetrics{}, errors.New("network failed"))
 	mocks.storagecollector.On("Collect", mock.Anything).
 		Return(nil, errors.New("storage failed"))
-	mocks.containercollector.On("Collect", mock.Anything).
-		Return(nil, errors.New("docker not available"))
-	mocks.traefikcollector.On("Collect", mock.Anything).
-		Return(nil, errors.New("traefik not available"))
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{}, errors.New("connection refused"))
 	mocks.pgbouncercollector.On("Collect", testCred).
@@ -682,8 +684,6 @@ func TestPush_APIServerPushFailure(t *testing.T) {
 	setupNetCollectorMocks(mocks.netcollector)
 	setupStorageCollectorMocks(mocks.storagecollector)
 	setupPgBouncerCollectorMocks(mocks.pgbouncercollector)
-	setupContainerCollectorMocks(mocks.containercollector)
-	setupTraefikCollectorMocks(mocks.traefikcollector)
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{Up: true, ConnectionsTotal: 5}, nil)
 	mocks.apiserver.On("PushMetrics", mock.Anything, mock.Anything).
@@ -709,8 +709,6 @@ func TestPush_Success_ValidatesPayloadSchema(t *testing.T) {
 	setupNetCollectorMocks(mocks.netcollector)
 	setupStorageCollectorMocks(mocks.storagecollector)
 	setupPgBouncerCollectorMocks(mocks.pgbouncercollector)
-	setupContainerCollectorMocks(mocks.containercollector)
-	setupTraefikCollectorMocks(mocks.traefikcollector)
 	connected := true
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{
@@ -831,15 +829,13 @@ func TestPush_Success_ValidatesPayloadSchema(t *testing.T) {
 
 func TestPush_ContextPropagation(t *testing.T) {
 	mp, mocks := setupTestMetricsPusher()
-	testCred := credential.Credential{DataDirectory: "/data"}
+	testCred := credential.Credential{Host: "localhost", Port: 5432, DataDirectory: "/data"}
 
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
 	setupSysCollectorMocks(mocks.syscollector)
 	setupNetCollectorMocks(mocks.netcollector)
 	setupStorageCollectorMocks(mocks.storagecollector)
 	setupPgBouncerCollectorMocks(mocks.pgbouncercollector)
-	setupContainerCollectorMocks(mocks.containercollector)
-	setupTraefikCollectorMocks(mocks.traefikcollector)
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{Up: true}, nil)
 	mocks.apiserver.On("PushMetrics", mock.MatchedBy(func(ctx context.Context) bool {
@@ -884,8 +880,6 @@ func TestPush_CredentialPassedCorrectly(t *testing.T) {
 	setupNetCollectorMocks(mocks.netcollector)
 	setupStorageCollectorMocks(mocks.storagecollector)
 	setupPgBouncerCollectorMocks(mocks.pgbouncercollector)
-	setupContainerCollectorMocks(mocks.containercollector)
-	setupTraefikCollectorMocks(mocks.traefikcollector)
 	mocks.collector.On("Collect", mock.MatchedBy(func(c credential.Credential) bool {
 		return c.Host == testCred.Host &&
 			c.Port == testCred.Port &&
@@ -957,8 +951,6 @@ func TestPush_DatabaseDown_SendsUpFalseWithZeroMetrics(t *testing.T) {
 	setupNetCollectorMocks(mocks.netcollector)
 	setupStorageCollectorMocks(mocks.storagecollector)
 	setupPgBouncerCollectorMocks(mocks.pgbouncercollector)
-	setupContainerCollectorMocks(mocks.containercollector)
-	setupTraefikCollectorMocks(mocks.traefikcollector)
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{}, errors.New("connection refused"))
 	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {
@@ -1009,15 +1001,13 @@ func TestPush_DatabaseDown_SendsUpFalseWithZeroMetrics(t *testing.T) {
 // Verifies storage metrics are included in the payload
 func TestPush_IncludesStorageMetrics(t *testing.T) {
 	mp, mocks := setupTestMetricsPusher()
-	testCred := credential.Credential{DataDirectory: "/data"}
+	testCred := credential.Credential{Host: "localhost", Port: 5432, DataDirectory: "/data"}
 
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
 	setupSysCollectorMocks(mocks.syscollector)
 	setupNetCollectorMocks(mocks.netcollector)
 	setupStorageCollectorMocks(mocks.storagecollector)
 	setupPgBouncerCollectorMocks(mocks.pgbouncercollector)
-	setupContainerCollectorMocks(mocks.containercollector)
-	setupTraefikCollectorMocks(mocks.traefikcollector)
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{Up: true}, nil)
 	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {
@@ -1040,7 +1030,7 @@ func TestPush_IncludesStorageMetrics(t *testing.T) {
 // Verifies when storage collection fails, other metrics still pushed
 func TestPush_StorageMetricsFailure_StillPushesOtherMetrics(t *testing.T) {
 	mp, mocks := setupTestMetricsPusher()
-	testCred := credential.Credential{DataDirectory: "/data"}
+	testCred := credential.Credential{Host: "localhost", Port: 5432, DataDirectory: "/data"}
 
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
 	setupSysCollectorMocks(mocks.syscollector)
@@ -1048,8 +1038,6 @@ func TestPush_StorageMetricsFailure_StillPushesOtherMetrics(t *testing.T) {
 	mocks.storagecollector.On("Collect", mock.Anything).
 		Return(nil, errors.New("storage collection failed"))
 	setupPgBouncerCollectorMocks(mocks.pgbouncercollector)
-	setupContainerCollectorMocks(mocks.containercollector)
-	setupTraefikCollectorMocks(mocks.traefikcollector)
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{Up: true}, nil)
 	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {
@@ -1079,7 +1067,7 @@ func TestPush_StorageMetricsFailure_StillPushesOtherMetrics(t *testing.T) {
 // Verifies each mount becomes a separate MetricSet
 func TestPush_StorageMetricsMultipleMounts(t *testing.T) {
 	mp, mocks := setupTestMetricsPusher()
-	testCred := credential.Credential{DataDirectory: "/data"}
+	testCred := credential.Credential{Host: "localhost", Port: 5432, DataDirectory: "/data"}
 
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
 	setupSysCollectorMocks(mocks.syscollector)
@@ -1095,8 +1083,6 @@ func TestPush_StorageMetricsMultipleMounts(t *testing.T) {
 		},
 	}, nil)
 	setupPgBouncerCollectorMocks(mocks.pgbouncercollector)
-	setupContainerCollectorMocks(mocks.containercollector)
-	setupTraefikCollectorMocks(mocks.traefikcollector)
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{Up: true}, nil)
 	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {
@@ -1118,7 +1104,7 @@ func TestPush_StorageMetricsMultipleMounts(t *testing.T) {
 // Verifies attributes are set correctly
 func TestPush_StorageMetricsWithAttributes(t *testing.T) {
 	mp, mocks := setupTestMetricsPusher()
-	testCred := credential.Credential{DataDirectory: "/data"}
+	testCred := credential.Credential{Host: "localhost", Port: 5432, DataDirectory: "/data"}
 
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
 	setupSysCollectorMocks(mocks.syscollector)
@@ -1135,8 +1121,6 @@ func TestPush_StorageMetricsWithAttributes(t *testing.T) {
 		},
 	}, nil)
 	setupPgBouncerCollectorMocks(mocks.pgbouncercollector)
-	setupContainerCollectorMocks(mocks.containercollector)
-	setupTraefikCollectorMocks(mocks.traefikcollector)
 	mocks.collector.On("Collect", testCred).
 		Return(domainmetrics.PostgreSQLDatabaseMetrics{Up: true}, nil)
 	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {

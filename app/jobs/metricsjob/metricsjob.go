@@ -44,6 +44,7 @@ func (mj *MetricsJob) Register(ctx context.Context, mp metrics.Pusher, mcred met
 	ctx, cancel := context.WithCancel(ctx)
 	mj.cancel = cancel
 	var creds []credential.Credential
+	var lastDbCred credential.Credential
 	var beatCount int
 	mj.wg.Add(1)
 	go func() {
@@ -51,7 +52,6 @@ func (mj *MetricsJob) Register(ctx context.Context, mp metrics.Pusher, mcred met
 		mj.config.Trigger(ctx, func() (err error) {
 			beatCount++
 
-			// Determine if we should fetch credentials this beat
 			shouldFetch := len(creds) == 0 ||
 				(mj.config.CredFetchInterval > 0 && beatCount%mj.config.CredFetchInterval == 0)
 
@@ -61,33 +61,22 @@ func (mj *MetricsJob) Register(ctx context.Context, mp metrics.Pusher, mcred met
 					return err
 				}
 
-				if len(creds) == 0 {
-					// no op, waiting for the creds to be available
-					return nil
-				}
-
-				// Prefer postgresql; fall back to any other supported dialect.
-				// Future: extend to push once per dialect when multi-DB payloads are supported.
-				var dbcred credential.Credential
+				lastDbCred = credential.Credential{}
 				for _, cred := range creds {
 					if cred.Dialect == "postgresql" {
-						dbcred = cred
+						lastDbCred = cred
 						break
 					}
-					if dbcred.Dialect == "" {
+					if lastDbCred.Dialect == "" {
 						switch cred.Dialect {
 						case "mysql", "mariadb", "mongodb", "redis":
-							dbcred = cred
+							lastDbCred = cred
 						}
 					}
 				}
-
-				// Only push when we actually fetch credentials
-				return mp.Push(dbcred)
 			}
 
-			// If we didn't fetch this beat, return nil (no push)
-			return nil
+			return mp.Push(lastDbCred)
 		})
 	}()
 	return cancel
