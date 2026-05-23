@@ -9,6 +9,7 @@ import (
 
 	"hostlink/domain/credential"
 	domainmetrics "hostlink/domain/metrics"
+	"hostlink/internal/dockerdiscovery"
 	"hostlink/internal/storagemetrics"
 
 	"github.com/stretchr/testify/assert"
@@ -189,6 +190,15 @@ func (m *MockPgBouncerCollector) Collect(cred credential.Credential) (domainmetr
 	return args.Get(0).(domainmetrics.PgBouncerMetrics), args.Error(1)
 }
 
+type MockDockerDiscoverer struct {
+	mock.Mock
+}
+
+func (m *MockDockerDiscoverer) DiscoverDatabases(ctx context.Context) ([]dockerdiscovery.DiscoveredDatabase, error) {
+	args := m.Called(ctx)
+	return args.Get(0).([]dockerdiscovery.DiscoveredDatabase), args.Error(1)
+}
+
 // Test helpers
 type testMocks struct {
 	apiserver           *MockAPIServer
@@ -198,6 +208,7 @@ type testMocks struct {
 	netcollector        *MockNetCollector
 	storagecollector    *MockStorageCollector
 	pgbouncercollector  *MockPgBouncerCollector
+	dockerDiscoverer    *MockDockerDiscoverer
 	crypto              *MockCrypto
 }
 
@@ -210,6 +221,7 @@ func setupTestMetricsPusher() (*metricspusher, *testMocks) {
 		netcollector:       new(MockNetCollector),
 		storagecollector:   new(MockStorageCollector),
 		pgbouncercollector: new(MockPgBouncerCollector),
+		dockerDiscoverer:   new(MockDockerDiscoverer),
 		crypto:             new(MockCrypto),
 	}
 
@@ -221,9 +233,14 @@ func setupTestMetricsPusher() (*metricspusher, *testMocks) {
 		mocks.netcollector,
 		mocks.storagecollector,
 		mocks.pgbouncercollector,
+		mocks.dockerDiscoverer,
 		mocks.crypto,
 		"/test/key/path",
 	)
+
+	// Default: no Docker containers discovered
+	mocks.dockerDiscoverer.On("DiscoverDatabases", mock.Anything).
+		Return([]dockerdiscovery.DiscoveredDatabase{}, nil)
 
 	return mp, mocks
 }
@@ -739,7 +756,7 @@ func TestPush_Success_ValidatesPayloadSchema(t *testing.T) {
 
 func TestPush_ContextPropagation(t *testing.T) {
 	mp, mocks := setupTestMetricsPusher()
-	testCred := credential.Credential{DataDirectory: "/data"}
+	testCred := credential.Credential{Host: "localhost", Port: 5432, DataDirectory: "/data"}
 
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
 	setupSysCollectorMocks(mocks.syscollector)
@@ -911,7 +928,7 @@ func TestPush_DatabaseDown_SendsUpFalseWithZeroMetrics(t *testing.T) {
 // Verifies storage metrics are included in the payload
 func TestPush_IncludesStorageMetrics(t *testing.T) {
 	mp, mocks := setupTestMetricsPusher()
-	testCred := credential.Credential{DataDirectory: "/data"}
+	testCred := credential.Credential{Host: "localhost", Port: 5432, DataDirectory: "/data"}
 
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
 	setupSysCollectorMocks(mocks.syscollector)
@@ -940,7 +957,7 @@ func TestPush_IncludesStorageMetrics(t *testing.T) {
 // Verifies when storage collection fails, other metrics still pushed
 func TestPush_StorageMetricsFailure_StillPushesOtherMetrics(t *testing.T) {
 	mp, mocks := setupTestMetricsPusher()
-	testCred := credential.Credential{DataDirectory: "/data"}
+	testCred := credential.Credential{Host: "localhost", Port: 5432, DataDirectory: "/data"}
 
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
 	setupSysCollectorMocks(mocks.syscollector)
@@ -977,7 +994,7 @@ func TestPush_StorageMetricsFailure_StillPushesOtherMetrics(t *testing.T) {
 // Verifies each mount becomes a separate MetricSet
 func TestPush_StorageMetricsMultipleMounts(t *testing.T) {
 	mp, mocks := setupTestMetricsPusher()
-	testCred := credential.Credential{DataDirectory: "/data"}
+	testCred := credential.Credential{Host: "localhost", Port: 5432, DataDirectory: "/data"}
 
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
 	setupSysCollectorMocks(mocks.syscollector)
@@ -1014,7 +1031,7 @@ func TestPush_StorageMetricsMultipleMounts(t *testing.T) {
 // Verifies attributes are set correctly
 func TestPush_StorageMetricsWithAttributes(t *testing.T) {
 	mp, mocks := setupTestMetricsPusher()
-	testCred := credential.Credential{DataDirectory: "/data"}
+	testCred := credential.Credential{Host: "localhost", Port: 5432, DataDirectory: "/data"}
 
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
 	setupSysCollectorMocks(mocks.syscollector)
