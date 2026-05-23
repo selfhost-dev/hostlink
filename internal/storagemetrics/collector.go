@@ -193,7 +193,6 @@ func (c *collector) Collect(ctx context.Context) ([]StorageMetricSet, error) {
 			m.WriteUtilizationPercent = cachedIO.WriteUtilizationPercent
 			m.ReadBytesPerSecond = cachedIO.ReadBytesPerSecond
 			m.WriteBytesPerSecond = cachedIO.WriteBytesPerSecond
-			m.ReadWriteBytesPerSecond = cachedIO.ReadWriteBytesPerSecond
 			m.ReadIOPerSecond = cachedIO.ReadIOPerSecond
 			m.WriteIOPerSecond = cachedIO.WriteIOPerSecond
 		} else {
@@ -242,7 +241,6 @@ func (c *collector) Collect(ctx context.Context) ([]StorageMetricSet, error) {
 				WriteUtilizationPercent: m.WriteUtilizationPercent,
 				ReadBytesPerSecond:      m.ReadBytesPerSecond,
 				WriteBytesPerSecond:     m.WriteBytesPerSecond,
-				ReadWriteBytesPerSecond: m.ReadWriteBytesPerSecond,
 				ReadIOPerSecond:         m.ReadIOPerSecond,
 				WriteIOPerSecond:        m.WriteIOPerSecond,
 			}

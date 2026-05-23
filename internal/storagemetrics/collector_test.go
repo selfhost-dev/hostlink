@@ -738,8 +738,8 @@ func TestCollect_CalculatesTotalThroughput(t *testing.T) {
 	m := results[0].Metrics
 	expectedTotal := m.ReadBytesPerSecond + m.WriteBytesPerSecond
 
-	if m.ReadWriteBytesPerSecond != expectedTotal {
-		t.Errorf("expected total bytes/sec %v, got %v", expectedTotal, m.ReadWriteBytesPerSecond)
+	if m.ReadBytesPerSecond+m.WriteBytesPerSecond != expectedTotal {
+		t.Errorf("expected total bytes/sec %v, got %v", expectedTotal, m.ReadBytesPerSecond+m.WriteBytesPerSecond)
 	}
 }
 
