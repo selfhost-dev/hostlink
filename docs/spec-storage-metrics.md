@@ -984,7 +984,6 @@ type StorageMetrics struct {
     WriteUtilizationPercent float64 `json:"write_utilization_percent"`
     ReadBytesPerSecond      float64 `json:"read_bytes_per_second"`
     WriteBytesPerSecond     float64 `json:"write_bytes_per_second"`
-    ReadWriteBytesPerSecond float64 `json:"read_write_bytes_per_second"`
     ReadIOPerSecond         float64 `json:"read_io_per_second"`
     WriteIOPerSecond        float64 `json:"write_io_per_second"`
     InodesUsed              uint64  `json:"inodes_used"`

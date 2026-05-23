@@ -108,7 +108,6 @@ func TestStorageMetricsCollector_NoNaNOrInfValues(t *testing.T) {
 		assertStorageValidFloat(t, m.WriteUtilizationPercent, "WriteUtilizationPercent")
 		assertStorageValidFloat(t, m.ReadBytesPerSecond, "ReadBytesPerSecond")
 		assertStorageValidFloat(t, m.WriteBytesPerSecond, "WriteBytesPerSecond")
-		assertStorageValidFloat(t, m.ReadWriteBytesPerSecond, "ReadWriteBytesPerSecond")
 		assertStorageValidFloat(t, m.ReadIOPerSecond, "ReadIOPerSecond")
 		assertStorageValidFloat(t, m.WriteIOPerSecond, "WriteIOPerSecond")
 	}
