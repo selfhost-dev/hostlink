@@ -14,6 +14,7 @@ import (
 	domainmetrics "hostlink/domain/metrics"
 	"hostlink/internal/apiserver"
 	"hostlink/internal/crypto"
+	"hostlink/internal/dockerdiscovery"
 	"hostlink/internal/networkmetrics"
 	"hostlink/internal/pgbouncermetrics"
 	"hostlink/internal/pgmetrics"
@@ -30,15 +31,16 @@ type Pusher interface {
 }
 
 type metricspusher struct {
-	apiserver              apiserver.MetricsOperations
-	agentstate             agentstate.Operations
-	metricscollector       pgmetrics.Collector
-	syscollector           sysmetrics.Collector
-	netcollector           networkmetrics.Collector
-	storagecollector       storagemetrics.Collector
-	pgbouncercollector     pgbouncermetrics.Collector
-	crypto                 crypto.Service
-	privateKeyPath         string
+	apiserver          apiserver.MetricsOperations
+	agentstate         agentstate.Operations
+	metricscollector   pgmetrics.Collector
+	syscollector       sysmetrics.Collector
+	netcollector       networkmetrics.Collector
+	storagecollector   storagemetrics.Collector
+	pgbouncercollector pgbouncermetrics.Collector
+	dockerDiscoverer   dockerdiscovery.Discoverer
+	crypto             crypto.Service
+	privateKeyPath     string
 }
 
 func NewWithConf() (*metricspusher, error) {
@@ -59,6 +61,7 @@ func NewWithConf() (*metricspusher, error) {
 		netcollector:       networkmetrics.New(),
 		storagecollector:   storagemetrics.New(),
 		pgbouncercollector: pgbouncermetrics.New(),
+		dockerDiscoverer:   dockerdiscovery.New(),
 		crypto:             crypto.NewService(),
 		privateKeyPath:     appconf.AgentPrivateKeyPath(),
 	}, nil
@@ -77,6 +80,7 @@ func NewWithDependencies(
 	netcollector networkmetrics.Collector,
 	storagecollector storagemetrics.Collector,
 	pgbouncercollector pgbouncermetrics.Collector,
+	dockerDiscoverer dockerdiscovery.Discoverer,
 	crypto crypto.Service,
 	privateKeyPath string,
 ) *metricspusher {
@@ -88,6 +92,7 @@ func NewWithDependencies(
 		netcollector:       netcollector,
 		storagecollector:   storagecollector,
 		pgbouncercollector: pgbouncercollector,
+		dockerDiscoverer:   dockerDiscoverer,
 		crypto:             crypto,
 		privateKeyPath:     privateKeyPath,
 	}
@@ -158,17 +163,46 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 		})
 	}
 
-	dbMetrics, err := mp.metricscollector.Collect(cred)
-	if err != nil {
-		log.Warnf("database metrics collection failed: %v", err)
-		dbMetrics = domainmetrics.PostgreSQLDatabaseMetrics{Up: false}
-	} else {
-		dbMetrics.Up = true
+	// Collect from control-plane credential (primary PG)
+	hasPrimaryCred := cred.Host != "" || cred.Port != 0
+	if hasPrimaryCred {
+		dbMetrics, err := mp.metricscollector.Collect(cred)
+		if err != nil {
+			log.Warnf("primary database metrics collection failed: %v", err)
+			dbMetrics = domainmetrics.PostgreSQLDatabaseMetrics{Up: false}
+		} else {
+			dbMetrics.Up = true
+		}
+		metricSets = append(metricSets, domainmetrics.MetricSet{
+			Type:    domainmetrics.MetricTypePostgreSQLDatabase,
+			Metrics: dbMetrics,
+		})
+
+		pgbouncerMetrics, err := mp.pgbouncercollector.Collect(cred)
+		if err != nil {
+			pgbouncerMetrics = domainmetrics.PgBouncerMetrics{Up: false}
+		} else {
+			pgbouncerMetrics.Up = true
+		}
+		metricSets = append(metricSets, domainmetrics.MetricSet{
+			Type:    domainmetrics.MetricTypePgBouncer,
+			Metrics: pgbouncerMetrics,
+		})
 	}
-	metricSets = append(metricSets, domainmetrics.MetricSet{
-		Type:    domainmetrics.MetricTypePostgreSQLDatabase,
-		Metrics: dbMetrics,
-	})
+
+	// Discover Docker containers and collect PG metrics from each
+	dockerDBs, err := mp.dockerDiscoverer.DiscoverDatabases(ctx)
+	if err != nil {
+		log.Warnf("docker database discovery failed: %v", err)
+	}
+	for _, d := range dockerDBs {
+		switch d.Type {
+		case dockerdiscovery.DatabaseTypePostgreSQL:
+			mp.collectDockerPGMetrics(ctx, d, &metricSets)
+		default:
+			// MySQL and MongoDB collectors not yet implemented
+		}
+	}
 
 	storageMetrics, err := mp.storagecollector.Collect(ctx)
 	if err != nil {
@@ -188,24 +222,6 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 		}
 	}
 
-	// PgBouncer stats — try-connect approach: silently skip when not running.
-	// The collector returns an error if PgBouncer is unreachable; we mark Up: false
-	// and still include the metric set so the server can track the pooler state.
-	pgbouncerMetrics, err := mp.pgbouncercollector.Collect(cred)
-	if err != nil {
-		pgbouncerMetrics = domainmetrics.PgBouncerMetrics{Up: false}
-	} else {
-		pgbouncerMetrics.Up = true
-	}
-	metricSets = append(metricSets, domainmetrics.MetricSet{
-		Type:    domainmetrics.MetricTypePgBouncer,
-		Metrics: pgbouncerMetrics,
-	})
-
-	// If only the postgresql.database metric set exists (with up=false) and
-	// all other collectors failed, we still push so the server knows the agent
-	// is alive and PostgreSQL status is reported.
-
 	hostname, _ := os.Hostname()
 
 	payload := domainmetrics.MetricPayload{
@@ -219,4 +235,36 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 	}
 
 	return mp.apiserver.PushMetrics(ctx, payload)
+}
+
+func (mp *metricspusher) collectDockerPGMetrics(ctx context.Context, d dockerdiscovery.DiscoveredDatabase, metricSets *[]domainmetrics.MetricSet) {
+	dockerCred := credential.Credential{
+		Host:     d.Host,
+		Port:     int(d.Port),
+		Username: d.Username,
+		Database: d.Database,
+		Dialect:  "postgresql",
+	}
+	if d.Password != "" {
+		dockerCred.Password = &d.Password
+	}
+
+	dbMetrics, err := mp.metricscollector.Collect(dockerCred)
+	if err != nil {
+		log.Warnf("docker PG metrics collection failed for %s: %v", d.ContainerName, err)
+		dbMetrics = domainmetrics.PostgreSQLDatabaseMetrics{Up: false}
+	} else {
+		dbMetrics.Up = true
+	}
+	*metricSets = append(*metricSets, domainmetrics.MetricSet{
+		Type: domainmetrics.MetricTypePostgreSQLDatabase,
+		Attributes: map[string]any{
+			"container_id":   d.ContainerID[:12],
+			"container_name": d.ContainerName,
+			"database_name":  d.Database,
+			"port":           d.Port,
+			"source":         "docker",
+		},
+		Metrics: dbMetrics,
+	})
 }
