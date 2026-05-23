@@ -278,14 +278,14 @@ func (s *Store) RecordReceived(receipt TaskReceipt) (TaskState, error) {
 			return err
 		}
 
-		var existing taskExecutionRecord
-		err := tx.Where("task_id = ? AND execution_attempt_id = ?", receipt.TaskID, receipt.ExecutionAttemptID).First(&existing).Error
-		if err == nil {
-			state = taskStateFromRecord(existing)
-			return nil
-		}
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
+		var existing []taskExecutionRecord
+		err := tx.Where("task_id = ? AND execution_attempt_id = ?", receipt.TaskID, receipt.ExecutionAttemptID).Limit(1).Find(&existing).Error
+		if err != nil {
 			return err
+		}
+		if len(existing) > 0 {
+			state = taskStateFromRecord(existing[0])
+			return nil
 		}
 
 		record := taskExecutionRecord{
@@ -311,15 +311,15 @@ func (s *Store) TaskState(taskID, executionAttemptID string) (TaskState, error) 
 		query = query.Where("execution_attempt_id = ?", executionAttemptID)
 	}
 
-	var record taskExecutionRecord
-	err := query.Order("updated_at DESC, id DESC").First(&record).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return TaskState{}, nil
-	}
+	var records []taskExecutionRecord
+	err := query.Order("updated_at DESC, id DESC").Limit(1).Find(&records).Error
 	if err != nil {
 		return TaskState{}, fmt.Errorf("load task state: %w", err)
 	}
-	return taskStateFromRecord(record), nil
+	if len(records) == 0 {
+		return TaskState{}, nil
+	}
+	return taskStateFromRecord(records[0]), nil
 }
 
 func (s *Store) RecordStarted(taskID, executionAttemptID string) error {
@@ -466,33 +466,34 @@ func (s *Store) rotateChunksForTerminal(tx *gorm.DB, terminalBytes int64) error 
 }
 
 func (s *Store) rotateOldestChunk(tx *gorm.DB) (bool, error) {
-	var oldest outboxMessageRecord
-	err := tx.Where("acked_at IS NULL AND type = ?", OutboxMessageTypeOutput).Order("created_at ASC, id ASC").First(&oldest).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return false, nil
-	}
+	var oldest []outboxMessageRecord
+	err := tx.Where("acked_at IS NULL AND type = ?", OutboxMessageTypeOutput).Order("created_at ASC, id ASC").Limit(1).Find(&oldest).Error
 	if err != nil {
 		return false, err
 	}
+	if len(oldest) == 0 {
+		return false, nil
+	}
 
+	record := oldest[0]
 	now := time.Now().UTC()
-	if err := tx.Model(&oldest).Update("acked_at", now).Error; err != nil {
+	if err := tx.Model(&record).Update("acked_at", now).Error; err != nil {
 		return false, err
 	}
-	if err := s.markLocalOutputTruncated(tx, oldest.TaskID, oldest.ExecutionAttemptID); err != nil {
+	if err := s.markLocalOutputTruncated(tx, record.TaskID, record.ExecutionAttemptID); err != nil {
 		return false, err
 	}
 	telemetry.Event("hostlink.local_store.output.rotated", map[string]any{
-		"task_id":              oldest.TaskID,
-		"execution_attempt_id": oldest.ExecutionAttemptID,
-		"message_id":           oldest.MessageID,
-		"stream":               oldest.Stream,
-		"sequence":             oldest.Sequence,
+		"task_id":              record.TaskID,
+		"execution_attempt_id": record.ExecutionAttemptID,
+		"message_id":           record.MessageID,
+		"stream":               record.Stream,
+		"sequence":             record.Sequence,
 	})
 	telemetry.Metric("hostlink.local_store.output.rotated_chunks", 1, map[string]any{
-		"task_id":              oldest.TaskID,
-		"execution_attempt_id": oldest.ExecutionAttemptID,
-		"message_id":           oldest.MessageID,
+		"task_id":              record.TaskID,
+		"execution_attempt_id": record.ExecutionAttemptID,
+		"message_id":           record.MessageID,
 	})
 	return true, nil
 }
@@ -536,15 +537,15 @@ func (s *Store) UnackedMessages() ([]OutboxMessage, error) {
 }
 
 func (s *Store) UnackedMessage(messageID string) (OutboxMessage, bool, error) {
-	var record outboxMessageRecord
-	err := s.db.Where("message_id = ? AND acked_at IS NULL", messageID).First(&record).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return OutboxMessage{}, false, nil
-	}
+	var records []outboxMessageRecord
+	err := s.db.Where("message_id = ? AND acked_at IS NULL", messageID).Limit(1).Find(&records).Error
 	if err != nil {
 		return OutboxMessage{}, false, fmt.Errorf("load unacked message: %w", err)
 	}
-	return outboxMessageFromRecord(record), true, nil
+	if len(records) == 0 {
+		return OutboxMessage{}, false, nil
+	}
+	return outboxMessageFromRecord(records[0]), true, nil
 }
 
 func (s *Store) AckMessage(messageID string) error {
@@ -692,13 +693,13 @@ func (s *Store) MarkInterruptedRunningTasks() error {
 			}
 
 			messageID := interruptedMessageID(record.TaskID, record.ExecutionAttemptID)
-			var existing outboxMessageRecord
-			err := tx.Where("message_id = ?", messageID).First(&existing).Error
-			if err == nil {
-				continue
-			}
-			if !errors.Is(err, gorm.ErrRecordNotFound) {
+			var existing []outboxMessageRecord
+			err := tx.Where("message_id = ?", messageID).Limit(1).Find(&existing).Error
+			if err != nil {
 				return err
+			}
+			if len(existing) > 0 {
+				continue
 			}
 
 			payload := fmt.Sprintf(`{"status":"interrupted","exit_code":-1,"output_truncated":%t,"error_truncated":%t}`, record.OutputTruncated, record.ErrorTruncated)
@@ -719,15 +720,16 @@ func (s *Store) MarkInterruptedRunningTasks() error {
 }
 
 func (s *Store) upsertExecutionState(tx *gorm.DB, next taskExecutionRecord) error {
-	var existing taskExecutionRecord
-	err := tx.Where("task_id = ? AND execution_attempt_id = ?", next.TaskID, next.ExecutionAttemptID).First(&existing).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return tx.Create(&next).Error
-	}
+	var existing []taskExecutionRecord
+	err := tx.Where("task_id = ? AND execution_attempt_id = ?", next.TaskID, next.ExecutionAttemptID).Limit(1).Find(&existing).Error
 	if err != nil {
 		return err
 	}
+	if len(existing) == 0 {
+		return tx.Create(&next).Error
+	}
 
+	record := existing[0]
 	updates := map[string]any{"status": next.Status}
 	if next.ExitCode != 0 {
 		updates["exit_code"] = next.ExitCode
@@ -741,7 +743,7 @@ func (s *Store) upsertExecutionState(tx *gorm.DB, next taskExecutionRecord) erro
 	if next.LocalOutputTruncated {
 		updates["local_output_truncated"] = true
 	}
-	return tx.Model(&existing).Updates(updates).Error
+	return tx.Model(&record).Updates(updates).Error
 }
 
 func validateOutputChunk(chunk OutputChunk) error {
