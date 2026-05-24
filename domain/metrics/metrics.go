@@ -167,18 +167,20 @@ type ContainerMetrics struct {
 // Traefik's Prometheus endpoint. These are real user-traffic signals captured
 // at the entrypoint level — not health probes.
 // Up is false when Traefik is unreachable or metrics are not enabled.
+// ConnectionsCurrent is reported even when there is no request traffic.
 type TraefikEntrypointMetrics struct {
-	Up                bool    `json:"up"`
-	RequestsTotal     int64   `json:"requests_total"`
-	RequestsPerSecond float64 `json:"requests_per_second"`
-	ErrorRate         float64 `json:"error_rate"`          // % of 4xx + 5xx
-	Requests2xx       int64   `json:"requests_2xx"`
-	Requests4xx       int64   `json:"requests_4xx"`
-	Requests5xx       int64   `json:"requests_5xx"`
-	AvgResponseTimeMs float64 `json:"avg_response_time_ms"`
-	P50ResponseTimeMs float64 `json:"p50_response_time_ms"`
-	P95ResponseTimeMs float64 `json:"p95_response_time_ms"`
-	P99ResponseTimeMs float64 `json:"p99_response_time_ms"`
+	Up                 bool    `json:"up"`
+	ConnectionsCurrent int64   `json:"connections_current"`
+	RequestsTotal      int64   `json:"requests_total"`
+	RequestsPerSecond  float64 `json:"requests_per_second"`
+	ErrorRate          float64 `json:"error_rate"`          // % of 4xx + 5xx
+	Requests2xx        int64   `json:"requests_2xx"`
+	Requests4xx        int64   `json:"requests_4xx"`
+	Requests5xx        int64   `json:"requests_5xx"`
+	AvgResponseTimeMs  float64 `json:"avg_response_time_ms"`
+	P50ResponseTimeMs  float64 `json:"p50_response_time_ms"`
+	P95ResponseTimeMs  float64 `json:"p95_response_time_ms"`
+	P99ResponseTimeMs  float64 `json:"p99_response_time_ms"`
 }
 
 type TraefikEntrypointAttributes struct {
