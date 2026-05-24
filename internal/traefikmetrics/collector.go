@@ -1,5 +1,5 @@
 // Package traefikmetrics scrapes Traefik's Prometheus metrics endpoint and
-// reports per-service HTTP signals: request rate, error rate, and response
+// reports per-entrypoint HTTP signals: request rate, error rate, and response
 // time percentiles. These reflect real user traffic, not synthetic probes.
 //
 // Prerequisites: Traefik must have metrics enabled.
@@ -24,15 +24,15 @@ import (
 )
 
 type Collector interface {
-	Collect(ctx context.Context) ([]ServiceMetricSet, error)
+	Collect(ctx context.Context) ([]EntrypointMetricSet, error)
 }
 
-type ServiceMetricSet struct {
-	Attributes domainmetrics.TraefikServiceAttributes
-	Metrics    domainmetrics.TraefikServiceMetrics
+type EntrypointMetricSet struct {
+	Attributes domainmetrics.TraefikEntrypointAttributes
+	Metrics    domainmetrics.TraefikEntrypointMetrics
 }
 
-type lastRequests struct {
+type lastRequestsEntrypoint struct {
 	total       int64
 	collectedAt time.Time
 }
@@ -41,7 +41,7 @@ type traefikCollector struct {
 	endpoint string
 	client   *http.Client
 	mu       sync.Mutex
-	lastReqs map[string]lastRequests // keyed by clean service name
+	lastReqs map[string]lastRequestsEntrypoint // keyed by entrypoint name
 }
 
 func New() Collector {
@@ -52,11 +52,11 @@ func NewWithEndpoint(endpoint string) Collector {
 	return &traefikCollector{
 		endpoint: endpoint,
 		client:   &http.Client{Timeout: 5 * time.Second},
-		lastReqs: make(map[string]lastRequests),
+		lastReqs: make(map[string]lastRequestsEntrypoint),
 	}
 }
 
-func (tc *traefikCollector) Collect(ctx context.Context) ([]ServiceMetricSet, error) {
+func (tc *traefikCollector) Collect(ctx context.Context) ([]EntrypointMetricSet, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tc.endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
@@ -166,9 +166,9 @@ func parseLabels(s string) map[string]string {
 	return labels
 }
 
-// ── Per-service aggregation ───────────────────────────────────────────────────
+// ── Per-entrypoint aggregation ───────────────────────────────────────────────
 
-type serviceAgg struct {
+type entrypointAgg struct {
 	requestsTotal int64
 	requests2xx   int64
 	requests4xx   int64
@@ -179,27 +179,26 @@ type serviceAgg struct {
 	durationCount float64 // total request count from _count samples
 }
 
-func (tc *traefikCollector) aggregate(text string) ([]ServiceMetricSet, error) {
+func (tc *traefikCollector) aggregate(text string) ([]EntrypointMetricSet, error) {
 	samples := parseSamples(text)
 
-	svcs := make(map[string]*serviceAgg)
-	ensure := func(name string) *serviceAgg {
-		if svcs[name] == nil {
-			svcs[name] = &serviceAgg{buckets: make(map[float64]float64)}
+	eps := make(map[string]*entrypointAgg)
+	ensure := func(name string) *entrypointAgg {
+		if eps[name] == nil {
+			eps[name] = &entrypointAgg{buckets: make(map[float64]float64)}
 		}
-		return svcs[name]
+		return eps[name]
 	}
 
 	for _, s := range samples {
-		svcRaw, ok := s.labels["service"]
+		entrypoint, ok := s.labels["entrypoint"]
 		if !ok {
 			continue
 		}
-		svc := cleanName(svcRaw)
-		agg := ensure(svc)
+		agg := ensure(entrypoint)
 
 		switch s.name {
-		case "traefik_service_requests_total":
+		case "traefik_entrypoint_requests_total":
 			count := int64(s.value)
 			agg.requestsTotal += count
 			switch {
@@ -211,7 +210,7 @@ func (tc *traefikCollector) aggregate(text string) ([]ServiceMetricSet, error) {
 				agg.requests5xx += count
 			}
 
-		case "traefik_service_request_duration_seconds_bucket":
+		case "traefik_entrypoint_request_duration_seconds_bucket":
 			leStr := s.labels["le"]
 			if leStr == "+Inf" {
 				continue // use _count instead
@@ -221,10 +220,10 @@ func (tc *traefikCollector) aggregate(text string) ([]ServiceMetricSet, error) {
 				agg.buckets[le] += s.value
 			}
 
-		case "traefik_service_request_duration_seconds_sum":
+		case "traefik_entrypoint_request_duration_seconds_sum":
 			agg.durationSum += s.value
 
-		case "traefik_service_request_duration_seconds_count":
+		case "traefik_entrypoint_request_duration_seconds_count":
 			agg.durationCount += s.value
 		}
 	}
@@ -233,9 +232,9 @@ func (tc *traefikCollector) aggregate(text string) ([]ServiceMetricSet, error) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 
-	var results []ServiceMetricSet
-	for svcName, agg := range svcs {
-		m := domainmetrics.TraefikServiceMetrics{
+	var results []EntrypointMetricSet
+	for epName, agg := range eps {
+		m := domainmetrics.TraefikEntrypointMetrics{
 			Up:            true,
 			RequestsTotal: agg.requestsTotal,
 			Requests2xx:   agg.requests2xx,
@@ -260,16 +259,16 @@ func (tc *traefikCollector) aggregate(text string) ([]ServiceMetricSet, error) {
 		}
 
 		// Requests/sec via delta on cumulative counter
-		if prev, ok := tc.lastReqs[svcName]; ok {
+		if prev, ok := tc.lastReqs[epName]; ok {
 			elapsed := now.Sub(prev.collectedAt).Seconds()
 			if elapsed > 0 && agg.requestsTotal >= prev.total {
 				m.RequestsPerSecond = float64(agg.requestsTotal-prev.total) / elapsed
 			}
 		}
-		tc.lastReqs[svcName] = lastRequests{total: agg.requestsTotal, collectedAt: now}
+		tc.lastReqs[epName] = lastRequestsEntrypoint{total: agg.requestsTotal, collectedAt: now}
 
-		results = append(results, ServiceMetricSet{
-			Attributes: domainmetrics.TraefikServiceAttributes{ServiceName: svcName},
+		results = append(results, EntrypointMetricSet{
+			Attributes: domainmetrics.TraefikEntrypointAttributes{EntrypointName: epName},
 			Metrics:    m,
 		})
 	}
@@ -311,11 +310,4 @@ func pct(buckets map[float64]float64, total, p float64) float64 {
 	return prevLe
 }
 
-// cleanName strips the provider suffix Traefik appends to service names
-// e.g. "myapp@docker" → "myapp", "api@internal" → "api".
-func cleanName(name string) string {
-	if idx := strings.LastIndexByte(name, '@'); idx != -1 {
-		return name[:idx]
-	}
-	return name
-}
+
