@@ -11,7 +11,7 @@ const (
 	MetricTypeMongoDBDatabase    = "mongodb.database"
 	MetricTypeRedis              = "redis"
 	MetricTypeContainer          = "container"
-	MetricTypeTraefikService     = "traefik.service"
+	MetricTypeTraefikService     = "traefik.proxy"
 )
 
 type MetricPayload struct {
