@@ -193,7 +193,7 @@ func (tc *traefikCollector) aggregate(text string) ([]EntrypointMetricSet, error
 
 	for _, s := range samples {
 		entrypoint, ok := s.labels["entrypoint"]
-		if !ok {
+		if !ok || entrypoint == "traefik" {
 			continue
 		}
 		agg := ensure(entrypoint)
