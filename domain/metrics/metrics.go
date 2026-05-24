@@ -163,10 +163,11 @@ type ContainerMetrics struct {
 	UptimeSeconds int64  `json:"uptime_seconds"`
 }
 
-// TraefikServiceMetrics holds per-service HTTP metrics scraped from Traefik's
-// Prometheus endpoint. These are real user-traffic signals — not health probes.
+// TraefikEntrypointMetrics holds per-entrypoint HTTP metrics scraped from
+// Traefik's Prometheus endpoint. These are real user-traffic signals captured
+// at the entrypoint level — not health probes.
 // Up is false when Traefik is unreachable or metrics are not enabled.
-type TraefikServiceMetrics struct {
+type TraefikEntrypointMetrics struct {
 	Up                bool    `json:"up"`
 	RequestsTotal     int64   `json:"requests_total"`
 	RequestsPerSecond float64 `json:"requests_per_second"`
@@ -180,8 +181,8 @@ type TraefikServiceMetrics struct {
 	P99ResponseTimeMs float64 `json:"p99_response_time_ms"`
 }
 
-type TraefikServiceAttributes struct {
-	ServiceName string `json:"service_name"`
+type TraefikEntrypointAttributes struct {
+	EntrypointName string `json:"entrypoint_name"`
 }
 
 type ContainerAttributes struct {

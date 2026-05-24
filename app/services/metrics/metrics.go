@@ -338,7 +338,7 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 		}
 	}
 
-	// ── Traefik metrics (HTTP requests / response time / error rate per app) ──
+	// ── Traefik metrics (HTTP requests / response time / error rate per entrypoint) ──
 
 	traefikSets, err := mp.traefikcollector.Collect(ctx)
 	if err != nil {
@@ -348,7 +348,7 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 			metricSets = append(metricSets, domainmetrics.MetricSet{
 				Type: domainmetrics.MetricTypeTraefikService,
 				Attributes: map[string]any{
-					"service_name": ts.Attributes.ServiceName,
+					"entrypoint_name": ts.Attributes.EntrypointName,
 				},
 				Metrics: ts.Metrics,
 			})

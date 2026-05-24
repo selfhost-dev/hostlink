@@ -235,12 +235,12 @@ type MockTraefikCollector struct {
 	mock.Mock
 }
 
-func (m *MockTraefikCollector) Collect(ctx context.Context) ([]traefikmetrics.ServiceMetricSet, error) {
+func (m *MockTraefikCollector) Collect(ctx context.Context) ([]traefikmetrics.EntrypointMetricSet, error) {
 	args := m.Called(ctx)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]traefikmetrics.ServiceMetricSet), args.Error(1)
+	return args.Get(0).([]traefikmetrics.EntrypointMetricSet), args.Error(1)
 }
 
 type MockDockerDiscoverer struct {
@@ -313,7 +313,7 @@ func setupTestMetricsPusher() (*metricspusher, *testMocks) {
 	mocks.containercollector.On("Collect", mock.Anything).
 		Return([]containermetrics.ContainerMetricSet(nil), nil)
 	mocks.traefikcollector.On("Collect", mock.Anything).
-		Return([]traefikmetrics.ServiceMetricSet(nil), nil)
+		Return([]traefikmetrics.EntrypointMetricSet(nil), nil)
 
 	return mp, mocks
 }
