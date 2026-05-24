@@ -14,7 +14,14 @@ func TestResolveContainerName(t *testing.T) {
 		expected string
 	}{
 		{
-			name:     "prefer coolify name label",
+			name:     "prefer compose service over coolify name",
+			id:       "12345678901234567890",
+			names:    []string{"/docker-name"},
+			labels:   map[string]string{"com.docker.compose.service": "web-service", "coolify.name": "uuid-resource-id"},
+			expected: "web-service",
+		},
+		{
+			name:     "fallback to coolify name when compose not set",
 			id:       "12345678901234567890",
 			names:    []string{"/docker-name"},
 			labels:   map[string]string{"coolify.name": "my-cool-app"},
