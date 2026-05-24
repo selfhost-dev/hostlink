@@ -169,10 +169,11 @@ func parseLabels(s string) map[string]string {
 // ── Per-entrypoint aggregation ───────────────────────────────────────────────
 
 type entrypointAgg struct {
-	requestsTotal int64
-	requests2xx   int64
-	requests4xx   int64
-	requests5xx   int64
+	connectionsCurrent int64
+	requestsTotal      int64
+	requests2xx        int64
+	requests4xx        int64
+	requests5xx        int64
 	// Histogram: le (seconds) → cumulative count aggregated across all label combos
 	buckets       map[float64]float64
 	durationSum   float64 // total response time in seconds
@@ -198,6 +199,9 @@ func (tc *traefikCollector) aggregate(text string) ([]EntrypointMetricSet, error
 		agg := ensure(entrypoint)
 
 		switch s.name {
+		case "traefik_open_connections":
+			agg.connectionsCurrent = int64(s.value)
+
 		case "traefik_entrypoint_requests_total":
 			count := int64(s.value)
 			agg.requestsTotal += count
@@ -235,11 +239,12 @@ func (tc *traefikCollector) aggregate(text string) ([]EntrypointMetricSet, error
 	var results []EntrypointMetricSet
 	for epName, agg := range eps {
 		m := domainmetrics.TraefikEntrypointMetrics{
-			Up:            true,
-			RequestsTotal: agg.requestsTotal,
-			Requests2xx:   agg.requests2xx,
-			Requests4xx:   agg.requests4xx,
-			Requests5xx:   agg.requests5xx,
+			Up:                 true,
+			ConnectionsCurrent: agg.connectionsCurrent,
+			RequestsTotal:      agg.requestsTotal,
+			Requests2xx:        agg.requests2xx,
+			Requests4xx:        agg.requests4xx,
+			Requests5xx:        agg.requests5xx,
 		}
 
 		if agg.requestsTotal > 0 {
