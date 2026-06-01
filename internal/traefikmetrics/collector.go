@@ -25,11 +25,17 @@ import (
 
 type Collector interface {
 	Collect(ctx context.Context) ([]EntrypointMetricSet, error)
+	CollectRouters(ctx context.Context) ([]RouterMetricSet, error)
 }
 
 type EntrypointMetricSet struct {
 	Attributes domainmetrics.TraefikEntrypointAttributes
 	Metrics    domainmetrics.TraefikEntrypointMetrics
+}
+
+type RouterMetricSet struct {
+	Attributes domainmetrics.TraefikRouterAttributes
+	Metrics    domainmetrics.TraefikRouterMetrics
 }
 
 type lastRequestsEntrypoint struct {
@@ -278,6 +284,124 @@ func (tc *traefikCollector) aggregate(text string) ([]EntrypointMetricSet, error
 		})
 	}
 
+	return results, nil
+}
+
+// CollectRouters scrapes per-router metrics from Traefik's Prometheus endpoint.
+// Routers map 1:1 to deployed apps — catchall@internal and traefik@internal are
+// excluded so the error rate reflects real app traffic only.
+func (tc *traefikCollector) CollectRouters(ctx context.Context) ([]RouterMetricSet, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tc.endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	resp, err := tc.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s: %w", tc.endpoint, err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read body: %w", err)
+	}
+	return tc.aggregateRouters(string(body))
+}
+
+type routerAgg struct {
+	entrypoint    string
+	service       string
+	requestsTotal int64
+	requests2xx   int64
+	requests4xx   int64
+	requests5xx   int64
+	buckets       map[float64]float64
+	durationSum   float64
+	durationCount float64
+}
+
+func (tc *traefikCollector) aggregateRouters(text string) ([]RouterMetricSet, error) {
+	samples := parseSamples(text)
+
+	// key: "router@entrypoint"
+	routers := make(map[string]*routerAgg)
+	ensure := func(router, entrypoint, service string) *routerAgg {
+		key := router + "@" + entrypoint
+		if routers[key] == nil {
+			routers[key] = &routerAgg{entrypoint: entrypoint, service: service, buckets: make(map[float64]float64)}
+		}
+		return routers[key]
+	}
+
+	for _, s := range samples {
+		router := s.labels["router"]
+		if router == "" {
+			continue
+		}
+		// Skip internal/catchall routers — they represent unmatched traffic noise
+		if strings.HasSuffix(router, "@internal") {
+			continue
+		}
+		entrypoint := s.labels["entrypoint"]
+		service := s.labels["service"]
+		agg := ensure(router, entrypoint, service)
+
+		switch s.name {
+		case "traefik_router_requests_total":
+			count := int64(s.value)
+			agg.requestsTotal += count
+			switch {
+			case strings.HasPrefix(s.labels["code"], "2"):
+				agg.requests2xx += count
+			case strings.HasPrefix(s.labels["code"], "4"):
+				agg.requests4xx += count
+			case strings.HasPrefix(s.labels["code"], "5"):
+				agg.requests5xx += count
+			}
+		case "traefik_router_request_duration_seconds_bucket":
+			leStr := s.labels["le"]
+			if leStr == "+Inf" {
+				continue
+			}
+			le, err := strconv.ParseFloat(leStr, 64)
+			if err == nil {
+				agg.buckets[le] += s.value
+			}
+		case "traefik_router_request_duration_seconds_sum":
+			agg.durationSum += s.value
+		case "traefik_router_request_duration_seconds_count":
+			agg.durationCount += s.value
+		}
+	}
+
+	var results []RouterMetricSet
+	for key, agg := range routers {
+		routerName := strings.SplitN(key, "@", 2)[0]
+		m := domainmetrics.TraefikRouterMetrics{
+			RequestsTotal: agg.requestsTotal,
+			Requests2xx:   agg.requests2xx,
+			Requests4xx:   agg.requests4xx,
+			Requests5xx:   agg.requests5xx,
+		}
+		if agg.requestsTotal > 0 {
+			m.ErrorRate = float64(agg.requests4xx+agg.requests5xx) / float64(agg.requestsTotal) * 100
+		}
+		if agg.durationCount > 0 {
+			m.AvgResponseTimeMs = (agg.durationSum / agg.durationCount) * 1000
+		}
+		if agg.durationCount > 0 && len(agg.buckets) > 0 {
+			m.P50ResponseTimeMs = pct(agg.buckets, agg.durationCount, 0.50) * 1000
+			m.P95ResponseTimeMs = pct(agg.buckets, agg.durationCount, 0.95) * 1000
+			m.P99ResponseTimeMs = pct(agg.buckets, agg.durationCount, 0.99) * 1000
+		}
+		results = append(results, RouterMetricSet{
+			Attributes: domainmetrics.TraefikRouterAttributes{
+				RouterName:     routerName,
+				EntrypointName: agg.entrypoint,
+				Service:        agg.service,
+			},
+			Metrics: m,
+		})
+	}
 	return results, nil
 }
 
