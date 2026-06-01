@@ -1122,6 +1122,8 @@ func TestPush_ContainerMetrics_IncludesCoolifyName(t *testing.T) {
 	setupPgBouncerCollectorMocks(mocks.pgbouncercollector)
 	mocks.collector.On("Collect", testCred).Return(domainmetrics.PostgreSQLDatabaseMetrics{Up: true}, nil)
 	mocks.storagecollector.On("Collect", mock.Anything).Return([]storagemetrics.StorageMetricSet(nil), nil)
+	// Clear the default nil-returning stub so the custom return below takes effect.
+	mocks.containercollector.ExpectedCalls = nil
 	mocks.containercollector.On("Collect", mock.Anything).Return([]containermetrics.ContainerMetricSet{
 		{
 			Attributes: domainmetrics.ContainerAttributes{
