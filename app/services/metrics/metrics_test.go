@@ -243,6 +243,14 @@ func (m *MockTraefikCollector) Collect(ctx context.Context) ([]traefikmetrics.En
 	return args.Get(0).([]traefikmetrics.EntrypointMetricSet), args.Error(1)
 }
 
+func (m *MockTraefikCollector) CollectRouters(ctx context.Context) ([]traefikmetrics.RouterMetricSet, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]traefikmetrics.RouterMetricSet), args.Error(1)
+}
+
 type MockDockerDiscoverer struct {
 	mock.Mock
 }
@@ -314,6 +322,8 @@ func setupTestMetricsPusher() (*metricspusher, *testMocks) {
 		Return([]containermetrics.ContainerMetricSet(nil), nil)
 	mocks.traefikcollector.On("Collect", mock.Anything).
 		Return([]traefikmetrics.EntrypointMetricSet(nil), nil)
+	mocks.traefikcollector.On("CollectRouters", mock.Anything).
+		Return([]traefikmetrics.RouterMetricSet(nil), nil)
 
 	return mp, mocks
 }
