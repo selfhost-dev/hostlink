@@ -1102,6 +1102,50 @@ func TestPush_StorageMetricsMultipleMounts(t *testing.T) {
 }
 
 // Verifies attributes are set correctly
+func TestPush_ContainerMetrics_IncludesCoolifyName(t *testing.T) {
+	mp, mocks := setupTestMetricsPusher()
+	testCred := credential.Credential{Host: "localhost", Port: 5432}
+
+	mocks.agentstate.On("GetAgentID").Return("agent-123")
+	setupSysCollectorMocks(mocks.syscollector)
+	setupNetCollectorMocks(mocks.netcollector)
+	setupPgBouncerCollectorMocks(mocks.pgbouncercollector)
+	mocks.collector.On("Collect", testCred).Return(domainmetrics.PostgreSQLDatabaseMetrics{Up: true}, nil)
+	mocks.storagecollector.On("Collect", mock.Anything).Return([]storagemetrics.StorageMetricSet(nil), nil)
+	mocks.containercollector.On("Collect", mock.Anything).Return([]containermetrics.ContainerMetricSet{
+		{
+			Attributes: domainmetrics.ContainerAttributes{
+				ContainerID:   "abc123def456",
+				ContainerName: "myapp-abc1",
+				Image:         "myapp:latest",
+				CoolifyAppID:  "app-uuid-001",
+				CoolifyType:   "application",
+				CoolifyName:   "myapp",
+			},
+			Metrics: domainmetrics.ContainerMetrics{Up: true, CPUPercent: 5.0},
+		},
+	}, nil)
+
+	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {
+		for _, ms := range p.MetricSets {
+			if ms.Type != domainmetrics.MetricTypeContainer {
+				continue
+			}
+			attrs := ms.Attributes
+			return attrs["coolify_name"] == "myapp" &&
+				attrs["coolify_app_id"] == "app-uuid-001" &&
+				attrs["coolify_type"] == "application" &&
+				attrs["container_name"] == "myapp-abc1"
+		}
+		return false
+	})).Return(nil)
+
+	err := mp.Push(testCred)
+
+	assert.NoError(t, err)
+	mocks.apiserver.AssertExpectations(t)
+}
+
 func TestPush_StorageMetricsWithAttributes(t *testing.T) {
 	mp, mocks := setupTestMetricsPusher()
 	testCred := credential.Credential{Host: "localhost", Port: 5432, DataDirectory: "/data"}
