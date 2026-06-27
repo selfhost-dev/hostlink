@@ -20,9 +20,13 @@ type Collector interface {
 }
 
 type mysqlCollector struct {
-	queryTimeout time.Duration
-	lastQueries  *int64
-	lastTime     time.Time
+	queryTimeout        time.Duration
+	lastQueries         *int64
+	lastSlowQueries     *int64
+	lastRowLockWaits    *int64
+	lastTmpDiskTables   *int64
+	lastSelectFullJoins *int64
+	lastTime            time.Time
 }
 
 func New() Collector {
@@ -73,9 +77,10 @@ func (mc *mysqlCollector) Collect(cred credential.Credential) (metrics.MySQLData
 func (mc *mysqlCollector) collectGlobalStatus(ctx context.Context, db *sql.DB, m *metrics.MySQLDatabaseMetrics) error {
 	rows, err := db.QueryContext(ctx, `
 		SHOW GLOBAL STATUS WHERE Variable_name IN (
-			'Threads_connected','Threads_running','Max_used_connections',
-			'Queries','Slow_queries',
-			'Innodb_buffer_pool_read_requests','Innodb_buffer_pool_reads'
+			'Threads_connected','Threads_running',
+			'Queries','Slow_queries','Aborted_connects',
+			'Innodb_buffer_pool_read_requests','Innodb_buffer_pool_reads',
+			'Innodb_row_lock_waits','Created_tmp_disk_tables','Select_full_join'
 		)
 	`)
 	if err != nil {
@@ -95,27 +100,38 @@ func (mc *mysqlCollector) collectGlobalStatus(ctx context.Context, db *sql.DB, m
 		return err
 	}
 
-	m.ThreadsConnected = parseInt(status["Threads_connected"])
+	m.ConnectionsTotal = parseInt(status["Threads_connected"])
 	m.ThreadsRunning = parseInt(status["Threads_running"])
-	m.MaxUsedConnections = parseInt64(status["Max_used_connections"])
-	m.SlowQueries = parseInt64(status["Slow_queries"])
+	m.ConnectionsAborted = parseInt64(status["Aborted_connects"])
 
 	readReqs := parseFloat64(status["Innodb_buffer_pool_read_requests"])
 	diskReads := parseFloat64(status["Innodb_buffer_pool_reads"])
 	if readReqs > 0 {
-		m.InnoDBCacheHitRatio = (readReqs - diskReads) / readReqs * 100
+		m.InnoDBBufferPoolHitRatio = (readReqs - diskReads) / readReqs * 100
 	}
 
-	// Delta-based QPS using cumulative Queries counter
+	// Delta-based rates using cumulative counters
 	currentQueries := parseInt64(status["Queries"])
+	currentSlowQueries := parseInt64(status["Slow_queries"])
+	currentRowLockWaits := parseInt64(status["Innodb_row_lock_waits"])
+	currentTmpDiskTables := parseInt64(status["Created_tmp_disk_tables"])
+	currentSelectFullJoins := parseInt64(status["Select_full_join"])
 	now := time.Now()
 	if mc.lastQueries != nil {
 		elapsed := now.Sub(mc.lastTime).Seconds()
 		if elapsed > 0 {
 			m.QueriesPerSecond = float64(currentQueries-*mc.lastQueries) / elapsed
+			m.SlowQueriesPerSecond = float64(currentSlowQueries-*mc.lastSlowQueries) / elapsed
+			m.InnoDBRowLockWaitsPerSecond = float64(currentRowLockWaits-*mc.lastRowLockWaits) / elapsed
+			m.TmpDiskTablesPerSecond = float64(currentTmpDiskTables-*mc.lastTmpDiskTables) / elapsed
+			m.SelectFullScansPerSecond = float64(currentSelectFullJoins-*mc.lastSelectFullJoins) / elapsed
 		}
 	}
 	mc.lastQueries = &currentQueries
+	mc.lastSlowQueries = &currentSlowQueries
+	mc.lastRowLockWaits = &currentRowLockWaits
+	mc.lastTmpDiskTables = &currentTmpDiskTables
+	mc.lastSelectFullJoins = &currentSelectFullJoins
 	mc.lastTime = now
 
 	return nil

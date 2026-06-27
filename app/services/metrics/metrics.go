@@ -341,7 +341,7 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 		}
 	}
 
-	// ── Traefik metrics (aggregate per entrypoint) ──────────────────────────────
+	// ── Traefik metrics (HTTP requests / response time / error rate per entrypoint) ──
 
 	traefikSets, err := mp.traefikcollector.Collect(ctx)
 	if err != nil {

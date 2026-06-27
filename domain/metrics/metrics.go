@@ -104,16 +104,19 @@ type StorageAttributes struct {
 }
 
 type MySQLDatabaseMetrics struct {
-	Up                    bool    `json:"up"`
-	ThreadsConnected      int     `json:"threads_connected"`
-	ThreadsRunning        int     `json:"threads_running"`
-	MaxConnections        int     `json:"max_connections"`
-	MaxUsedConnections    int64   `json:"max_used_connections"`
-	QueriesPerSecond      float64 `json:"queries_per_second"`
-	SlowQueries           int64   `json:"slow_queries"`
-	InnoDBCacheHitRatio   float64 `json:"innodb_cache_hit_ratio"`
-	ReplicationLagSeconds *int    `json:"replication_lag_seconds,omitempty"`
-	ReplicationConnected  *bool   `json:"replication_connected,omitempty"`
+	Up                            bool    `json:"up"`
+	ConnectionsTotal              int     `json:"connections_total"`
+	ConnectionsAborted            int64   `json:"connections_aborted"`
+	MaxConnections                int     `json:"max_connections"`
+	ThreadsRunning                int     `json:"threads_running"`
+	QueriesPerSecond              float64 `json:"queries_per_second"`
+	SlowQueriesPerSecond          float64 `json:"slow_queries_per_second"`
+	InnoDBBufferPoolHitRatio      float64 `json:"innodb_buffer_pool_hit_ratio"`
+	InnoDBRowLockWaitsPerSecond   float64 `json:"innodb_row_lock_waits_per_second"`
+	TmpDiskTablesPerSecond        float64 `json:"tmp_disk_tables_per_second"`
+	SelectFullScansPerSecond      float64 `json:"select_full_scans_per_second"`
+	ReplicationLagSeconds         *int    `json:"replication_lag_seconds,omitempty"`
+	ReplicationConnected          *bool   `json:"replication_connected,omitempty"`
 }
 
 type MongoDBMetrics struct {
@@ -204,9 +207,9 @@ type TraefikRouterMetrics struct {
 }
 
 type TraefikRouterAttributes struct {
-	RouterName    string `json:"router_name"`
+	RouterName     string `json:"router_name"`
 	EntrypointName string `json:"entrypoint_name"`
-	Service       string `json:"service,omitempty"`
+	Service        string `json:"service,omitempty"`
 }
 
 type ContainerAttributes struct {
