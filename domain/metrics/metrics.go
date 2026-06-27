@@ -12,6 +12,7 @@ const (
 	MetricTypeRedis              = "redis"
 	MetricTypeContainer          = "container"
 	MetricTypeTraefikService     = "traefik.proxy"
+	MetricTypeTraefikRouter      = "traefik.router"
 )
 
 type MetricPayload struct {
@@ -188,6 +189,27 @@ type TraefikEntrypointMetrics struct {
 
 type TraefikEntrypointAttributes struct {
 	EntrypointName string `json:"entrypoint_name"`
+}
+
+// TraefikRouterMetrics holds per-router HTTP metrics. Unlike entrypoint metrics
+// which are aggregate across all traffic, router metrics map 1:1 to a deployed
+// app and exclude unmatched/catchall traffic noise.
+type TraefikRouterMetrics struct {
+	RequestsTotal     int64   `json:"requests_total"`
+	Requests2xx       int64   `json:"requests_2xx"`
+	Requests4xx       int64   `json:"requests_4xx"`
+	Requests5xx       int64   `json:"requests_5xx"`
+	ErrorRate         float64 `json:"error_rate"`
+	AvgResponseTimeMs float64 `json:"avg_response_time_ms"`
+	P50ResponseTimeMs float64 `json:"p50_response_time_ms"`
+	P95ResponseTimeMs float64 `json:"p95_response_time_ms"`
+	P99ResponseTimeMs float64 `json:"p99_response_time_ms"`
+}
+
+type TraefikRouterAttributes struct {
+	RouterName     string `json:"router_name"`
+	EntrypointName string `json:"entrypoint_name"`
+	Service        string `json:"service,omitempty"`
 }
 
 type ContainerAttributes struct {

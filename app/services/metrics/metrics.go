@@ -329,6 +329,9 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 			if cm.Attributes.CoolifyType != "" {
 				attrs["coolify_type"] = cm.Attributes.CoolifyType
 			}
+			if cm.Attributes.CoolifyName != "" {
+				attrs["coolify_name"] = cm.Attributes.CoolifyName
+			}
 
 			metricSets = append(metricSets, domainmetrics.MetricSet{
 				Type:       domainmetrics.MetricTypeContainer,
@@ -351,6 +354,28 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 					"entrypoint_name": ts.Attributes.EntrypointName,
 				},
 				Metrics: ts.Metrics,
+			})
+		}
+	}
+
+	// ── Traefik router metrics (per-app, excludes catchall noise) ────────────────
+
+	routerSets, err := mp.traefikcollector.CollectRouters(ctx)
+	if err != nil {
+		log.Warnf("traefik router metrics collection failed: %v", err)
+	} else {
+		for _, rs := range routerSets {
+			attrs := map[string]any{
+				"router_name":      rs.Attributes.RouterName,
+				"entrypoint_name":  rs.Attributes.EntrypointName,
+			}
+			if rs.Attributes.Service != "" {
+				attrs["service"] = rs.Attributes.Service
+			}
+			metricSets = append(metricSets, domainmetrics.MetricSet{
+				Type:       domainmetrics.MetricTypeTraefikRouter,
+				Attributes: attrs,
+				Metrics:    rs.Metrics,
 			})
 		}
 	}

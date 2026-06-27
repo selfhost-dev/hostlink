@@ -598,13 +598,20 @@ func TestClientAckRemovesResultMessageFromOutbox(t *testing.T) {
 		messages, err := store.UnackedMessages()
 		return err == nil && len(messages) == 0
 	}, "ack to remove outbox message")
-	entries := telemetryEntries(t, telemetryPath)
-	ackMetric := findTelemetryEntry(entries, func(entry map[string]any) bool {
-		return entry["metric_name"] == "hostlink.local_store.outbox.pending_messages" && entry["value"] == float64(0)
-	})
-	finalPendingAck := findTelemetryEntry(entries, func(entry map[string]any) bool {
-		return entry["event"] == "hostlink.agent_ws.outbox.acknowledged" && entry["acked_message_id"] == "msg-output-1"
-	})
+	var ackMetric map[string]any
+	var finalPendingAck map[string]any
+	waitFor(t, func() bool {
+		entries := telemetryEntries(t, telemetryPath)
+		ackMetric = findTelemetryEntry(entries, func(entry map[string]any) bool {
+			return entry["metric_name"] == "hostlink.local_store.outbox.pending_messages" && entry["value"] == float64(0)
+		})
+		finalPendingAck = findTelemetryEntry(entries, func(entry map[string]any) bool {
+			return entry["event"] == "hostlink.agent_ws.outbox.acknowledged" && entry["acked_message_id"] == "msg-output-1"
+		})
+		return ackMetric["metric_name"] == "hostlink.local_store.outbox.pending_messages" &&
+			finalPendingAck["task_id"] == "task-1" &&
+			finalPendingAck["execution_attempt_id"] == "attempt-1"
+	}, "telemetry for output outbox acknowledgement")
 	if ackMetric["metric_name"] != "hostlink.local_store.outbox.pending_messages" {
 		t.Fatalf("ack metric = %#v", ackMetric)
 	}
