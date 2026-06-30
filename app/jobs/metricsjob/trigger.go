@@ -2,6 +2,7 @@ package metricsjob
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/labstack/gommon/log"
@@ -27,11 +28,21 @@ func triggerWithConfig(ctx context.Context, fn func() error, config TriggerConfi
 		case <-ctx.Done():
 			return
 		case <-time.After(config.InitialDelay):
-			if err := fn(); err != nil {
+			if err := safeCall(fn); err != nil {
 				log.Errorf("Failed while running metrics job: %s", err)
 			}
 		}
 	}
+}
+
+func safeCall(fn func() error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Errorf("Panic recovered in metrics: %v", r)
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
+	return fn()
 }
 
 func TriggerWithConfig(ctx context.Context, fn func() error, config TriggerConfig) {

@@ -332,7 +332,7 @@ func runServer(ctx context.Context, cmd *cli.Command) error {
 				heartbeatjob.TriggerWithConfig(ctx, fn, heartbeatjob.TriggerConfig{Interval: appconf.HeartbeatInterval()})
 			},
 		})
-		heartbeatJob.Register(jobCtx, heartbeatSvc)
+		heartbeatJob.Register(jobCtx, heartbeatSvc, taskJob)
 
 		// Self-update job (gated by config)
 		if appconf.SelfUpdateEnabled() {

@@ -2,6 +2,7 @@ package selfupdatejob
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -26,11 +27,21 @@ func TriggerWithConfig(ctx context.Context, fn func() error, config TriggerConfi
 		case <-ctx.Done():
 			return
 		case <-time.After(config.Interval):
-			if err := fn(); err != nil {
+			if err := safeCall(fn); err != nil {
 				log.Errorf("self-update check failed: %s", err)
 			}
 		}
 	}
+}
+
+func safeCall(fn func() error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Errorf("Panic recovered in self-update: %v", r)
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
+	return fn()
 }
 
 // Trigger runs fn with the default configuration.

@@ -10,15 +10,19 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"hostlink/domain/task"
 )
 
 type MockHeartbeatService struct {
 	mock.Mock
 }
 
-func (m *MockHeartbeatService) Send() error {
+func (m *MockHeartbeatService) Send() ([]task.Task, error) {
 	args := m.Called()
-	return args.Error(0)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]task.Task), args.Error(1)
 }
 
 func immediateTrigger(callCount int, done chan struct{}) TriggerFunc {
@@ -71,7 +75,7 @@ func TestNewWithConfig_DefaultsNilTrigger(t *testing.T) {
 // TestRegister_CallsServiceSend - trigger calls heartbeat.Service.Send()
 func TestRegister_CallsServiceSend(t *testing.T) {
 	svc := new(MockHeartbeatService)
-	svc.On("Send").Return(nil).Times(3)
+	svc.On("Send").Return(nil, nil).Times(3)
 
 	done := make(chan struct{})
 	job := NewWithConfig(HeartbeatJobConfig{
@@ -90,7 +94,7 @@ func TestRegister_CallsServiceSend(t *testing.T) {
 // TestRegister_ContinuesOnError - job continues running after Send() error
 func TestRegister_ContinuesOnError(t *testing.T) {
 	svc := new(MockHeartbeatService)
-	svc.On("Send").Return(errors.New("connection refused")).Times(3)
+	svc.On("Send").Return(nil, errors.New("connection refused")).Times(3)
 
 	done := make(chan struct{})
 	job := NewWithConfig(HeartbeatJobConfig{
@@ -128,7 +132,7 @@ func TestRegister_ReturnsCancel(t *testing.T) {
 func TestShutdown_StopsJob(t *testing.T) {
 	var callCount atomic.Int32
 	svc := new(MockHeartbeatService)
-	svc.On("Send").Return(nil).Run(func(args mock.Arguments) {
+	svc.On("Send").Return(nil, nil).Run(func(args mock.Arguments) {
 		callCount.Add(1)
 	})
 
