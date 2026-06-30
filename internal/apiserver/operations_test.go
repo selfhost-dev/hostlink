@@ -43,14 +43,16 @@ func setupTestClient(t *testing.T, serverURL string) *client {
 // TestHeartbeat_Success - sends POST to /api/v1/agents/{agentID}/heartbeat with empty body
 func TestHeartbeat_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"message":"ok"}`))
 	}))
 	defer server.Close()
 
 	c := setupTestClient(t, server.URL)
-	err := c.Heartbeat(context.Background(), "test-agent-123")
+	resp, err := c.Heartbeat(context.Background(), "test-agent-123")
 
 	assert.NoError(t, err)
+	assert.NotNil(t, resp)
 }
 
 // TestHeartbeat_SendsToCorrectEndpoint - verifies correct URL path
@@ -60,14 +62,16 @@ func TestHeartbeat_SendsToCorrectEndpoint(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedPath = r.URL.Path
 		capturedMethod = r.Method
-		w.WriteHeader(http.StatusOK)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"message":"ok"}`))
 	}))
 	defer server.Close()
 
 	c := setupTestClient(t, server.URL)
-	err := c.Heartbeat(context.Background(), "agent-xyz")
+	resp, err := c.Heartbeat(context.Background(), "agent-xyz")
 
 	require.NoError(t, err)
+	assert.NotNil(t, resp)
 	assert.Equal(t, "/api/v1/agents/agent-xyz/heartbeat", capturedPath)
 	assert.Equal(t, "POST", capturedMethod)
 }
@@ -77,14 +81,16 @@ func TestHeartbeat_SendsEmptyBody(t *testing.T) {
 	var bodySize int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		bodySize = r.ContentLength
-		w.WriteHeader(http.StatusOK)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"message":"ok"}`))
 	}))
 	defer server.Close()
 
 	c := setupTestClient(t, server.URL)
-	err := c.Heartbeat(context.Background(), "test-agent-123")
+	resp, err := c.Heartbeat(context.Background(), "test-agent-123")
 
 	require.NoError(t, err)
+	assert.NotNil(t, resp)
 	assert.Equal(t, int64(0), bodySize)
 }
 
@@ -93,14 +99,16 @@ func TestHeartbeat_AuthenticationHeadersIncluded(t *testing.T) {
 	var headers http.Header
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		headers = r.Header
-		w.WriteHeader(http.StatusOK)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"message":"ok"}`))
 	}))
 	defer server.Close()
 
 	c := setupTestClient(t, server.URL)
-	err := c.Heartbeat(context.Background(), "test-agent-123")
+	resp, err := c.Heartbeat(context.Background(), "test-agent-123")
 
 	require.NoError(t, err)
+	assert.NotNil(t, resp)
 	assert.NotEmpty(t, headers.Get("X-Agent-ID"))
 	assert.NotEmpty(t, headers.Get("X-Timestamp"))
 	assert.NotEmpty(t, headers.Get("X-Nonce"))
@@ -116,9 +124,10 @@ func TestHeartbeat_ServerError(t *testing.T) {
 	defer server.Close()
 
 	c := setupTestClient(t, server.URL)
-	err := c.Heartbeat(context.Background(), "test-agent-123")
+	resp, err := c.Heartbeat(context.Background(), "test-agent-123")
 
 	assert.Error(t, err)
+	assert.Nil(t, resp)
 }
 
 // TestHeartbeat_Unauthorized - returns error on 401 response
@@ -130,7 +139,26 @@ func TestHeartbeat_Unauthorized(t *testing.T) {
 	defer server.Close()
 
 	c := setupTestClient(t, server.URL)
-	err := c.Heartbeat(context.Background(), "test-agent-123")
+	resp, err := c.Heartbeat(context.Background(), "test-agent-123")
 
 	assert.Error(t, err)
+	assert.Nil(t, resp)
+}
+
+// TestHeartbeat_PendingTasks - decodes pending_tasks from response
+func TestHeartbeat_PendingTasks(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"message":"Heartbeat received","pending_tasks":[{"id":"tsk_test","command":"echo hello","status":"pending","priority":1}]}`))
+	}))
+	defer server.Close()
+
+	c := setupTestClient(t, server.URL)
+	resp, err := c.Heartbeat(context.Background(), "test-agent-123")
+
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Len(t, resp.PendingTasks, 1)
+	assert.Equal(t, "tsk_test", resp.PendingTasks[0].ID)
+	assert.Equal(t, "echo hello", resp.PendingTasks[0].Command)
 }

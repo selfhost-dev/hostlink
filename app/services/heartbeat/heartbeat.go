@@ -6,11 +6,12 @@ import (
 
 	"hostlink/app/services/agentstate"
 	"hostlink/config/appconf"
+	"hostlink/domain/task"
 	"hostlink/internal/apiserver"
 )
 
 type Service interface {
-	Send() error
+	Send() ([]task.Task, error)
 }
 
 type heartbeatService struct {
@@ -49,11 +50,15 @@ func NewWithDependencies(
 	}
 }
 
-func (s *heartbeatService) Send() error {
+func (s *heartbeatService) Send() ([]task.Task, error) {
 	agentID := s.agentstate.GetAgentID()
 	if agentID == "" {
-		return fmt.Errorf("agent not registered: missing agent ID")
+		return nil, fmt.Errorf("agent not registered: missing agent ID")
 	}
 
-	return s.apiserver.Heartbeat(context.Background(), agentID)
+	resp, err := s.apiserver.Heartbeat(context.Background(), agentID)
+	if err != nil {
+		return nil, err
+	}
+	return resp.PendingTasks, nil
 }

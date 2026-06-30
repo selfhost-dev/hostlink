@@ -7,15 +7,20 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"hostlink/domain/task"
+	"hostlink/internal/apiserver"
 )
 
 type MockAPIServer struct {
 	mock.Mock
 }
 
-func (m *MockAPIServer) Heartbeat(ctx context.Context, agentID string) error {
+func (m *MockAPIServer) Heartbeat(ctx context.Context, agentID string) (*apiserver.HeartbeatResponse, error) {
 	args := m.Called(ctx, agentID)
-	return args.Error(0)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*apiserver.HeartbeatResponse), args.Error(1)
 }
 
 type MockAgentState struct {
@@ -48,10 +53,10 @@ func (m *MockAgentState) Clear() error {
 }
 
 func setupTestService() (*heartbeatService, *MockAPIServer, *MockAgentState) {
-	apiserver := new(MockAPIServer)
+	mockSvr := new(MockAPIServer)
 	agentstate := new(MockAgentState)
-	service := NewWithDependencies(apiserver, agentstate)
-	return service, apiserver, agentstate
+	service := NewWithDependencies(mockSvr, agentstate)
+	return service, mockSvr, agentstate
 }
 
 // TestSend_NoAgentID - returns error when agent is not registered
@@ -60,7 +65,7 @@ func TestSend_NoAgentID(t *testing.T) {
 
 	agentstate.On("GetAgentID").Return("")
 
-	err := service.Send()
+	_, err := service.Send()
 
 	assert.EqualError(t, err, "agent not registered: missing agent ID")
 	agentstate.AssertExpectations(t)
@@ -68,45 +73,69 @@ func TestSend_NoAgentID(t *testing.T) {
 
 // TestSend_Success - sends heartbeat successfully
 func TestSend_Success(t *testing.T) {
-	service, apiserver, agentstate := setupTestService()
+	service, mockSvr, agentstate := setupTestService()
 
 	agentstate.On("GetAgentID").Return("agent-123")
-	apiserver.On("Heartbeat", mock.Anything, "agent-123").Return(nil)
+	mockSvr.On("Heartbeat", mock.Anything, "agent-123").Return(&apiserver.HeartbeatResponse{}, nil)
 
-	err := service.Send()
+	tasks, err := service.Send()
 
 	assert.NoError(t, err)
+	assert.Empty(t, tasks)
 	agentstate.AssertExpectations(t)
-	apiserver.AssertExpectations(t)
+	mockSvr.AssertExpectations(t)
 }
 
 // TestSend_APIError - returns error when API call fails
 func TestSend_APIError(t *testing.T) {
-	service, apiserver, agentstate := setupTestService()
+	service, mockSvr, agentstate := setupTestService()
 	expectedErr := errors.New("connection refused")
 
 	agentstate.On("GetAgentID").Return("agent-123")
-	apiserver.On("Heartbeat", mock.Anything, "agent-123").Return(expectedErr)
+	mockSvr.On("Heartbeat", mock.Anything, "agent-123").Return(nil, expectedErr)
 
-	err := service.Send()
+	tasks, err := service.Send()
 
+	assert.Nil(t, tasks)
 	assert.Equal(t, expectedErr, err)
 	agentstate.AssertExpectations(t)
-	apiserver.AssertExpectations(t)
+	mockSvr.AssertExpectations(t)
 }
 
 // TestSend_UsesBackgroundContext - verifies context.Background is used
 func TestSend_UsesBackgroundContext(t *testing.T) {
-	service, apiserver, agentstate := setupTestService()
+	service, mockSvr, agentstate := setupTestService()
 
 	agentstate.On("GetAgentID").Return("agent-123")
-	apiserver.On("Heartbeat", mock.MatchedBy(func(ctx context.Context) bool {
+	mockSvr.On("Heartbeat", mock.MatchedBy(func(ctx context.Context) bool {
 		_, hasDeadline := ctx.Deadline()
 		return !hasDeadline && ctx.Err() == nil
-	}), "agent-123").Return(nil)
+	}), "agent-123").Return(&apiserver.HeartbeatResponse{}, nil)
 
-	err := service.Send()
+	tasks, err := service.Send()
 
 	assert.NoError(t, err)
-	apiserver.AssertExpectations(t)
+	assert.Empty(t, tasks)
+	mockSvr.AssertExpectations(t)
+}
+
+// TestSend_WithPendingTasks - returns pending tasks from heartbeat response
+func TestSend_WithPendingTasks(t *testing.T) {
+	service, mockSvr, agentstate := setupTestService()
+
+	agentstate.On("GetAgentID").Return("agent-123")
+	resp := &apiserver.HeartbeatResponse{
+		Message: "ok",
+		PendingTasks: []task.Task{
+			{ID: "tsk_test", Command: "echo hello", Status: "pending"},
+		},
+	}
+	mockSvr.On("Heartbeat", mock.Anything, "agent-123").Return(resp, nil)
+
+	pendingTasks, err := service.Send()
+
+	assert.NoError(t, err)
+	assert.Len(t, pendingTasks, 1)
+	assert.Equal(t, "tsk_test", pendingTasks[0].ID)
+	assert.Equal(t, "echo hello", pendingTasks[0].Command)
 }

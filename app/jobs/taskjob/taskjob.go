@@ -85,7 +85,7 @@ func (tj *TaskJob) Register(ctx context.Context, tf taskfetcher.TaskFetcher, tr 
 		for {
 			select {
 			case queued := <-tj.enqueueCh:
-				tj.processTask(ctx, queued, tr, channel)
+				tj.processTaskSafe(ctx, queued, tr, channel)
 			case <-ctx.Done():
 				return
 			}
@@ -109,7 +109,7 @@ func (tj *TaskJob) Register(ctx context.Context, tf taskfetcher.TaskFetcher, tr 
 				}
 			}
 			for _, t := range incompleteTasks {
-				tj.processTask(ctx, t, tr, channel)
+				tj.processTaskSafe(ctx, t, tr, channel)
 			}
 			return nil
 		})
@@ -128,6 +128,18 @@ func (tj *TaskJob) Enqueue(ctx context.Context, t task.Task) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func (tj *TaskJob) processTaskSafe(ctx context.Context, t task.Task, tr taskreporter.TaskReporter, channel ResultChannel) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Errorf("Panic recovered in processTask: %v", r)
+			telemetry.Metric("hostlink.task_runner.panic", 1, map[string]any{
+				"task_id": t.ID,
+			})
+		}
+	}()
+	tj.processTask(ctx, t, tr, channel)
 }
 
 func (tj *TaskJob) processTask(ctx context.Context, t task.Task, tr taskreporter.TaskReporter, channel ResultChannel) {
