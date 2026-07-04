@@ -75,9 +75,11 @@ func NewJobWithConf(cfg TaskJobConfig) *TaskJob {
 	}
 }
 
-// acquireTask marks a task as being processed. It returns false if the task
-// is already in flight (dispatched via WebSocket enqueue and via the polling
-// trigger can otherwise race to run the same task's command concurrently).
+// acquireTask reserves a task ID for execution. It returns false if the
+// task is already queued or running. Reservation happens at Enqueue time
+// (not just when execution actually starts) so that repeated calls from any
+// source — WebSocket push, HTTP polling, or heartbeat responses — can't pile
+// up duplicate, not-yet-started copies of the same task in the queue.
 func (tj *TaskJob) acquireTask(taskID string) bool {
 	tj.inFlightMu.Lock()
 	defer tj.inFlightMu.Unlock()
@@ -131,7 +133,9 @@ func (tj *TaskJob) Register(ctx context.Context, tf taskfetcher.TaskFetcher, tr 
 				}
 			}
 			for _, t := range incompleteTasks {
-				tj.processTaskSafe(ctx, t, tr, channel)
+				if err := tj.Enqueue(ctx, t); err != nil {
+					log.Errorf("failed to enqueue polled task %s: %v", t.ID, err)
+				}
 			}
 			return nil
 		})
@@ -139,7 +143,18 @@ func (tj *TaskJob) Register(ctx context.Context, tf taskfetcher.TaskFetcher, tr 
 	return cancel
 }
 
+// Enqueue queues a task for execution. It is the single dedup choke point
+// for all three task sources (WebSocket push, HTTP polling, heartbeat
+// responses): a task ID already queued or currently running is skipped
+// silently rather than queued again. Without this, a task that hasn't yet
+// reported "started" back to the control plane (e.g. anything delivered
+// without an execution_attempt_id) keeps looking "pending" to every caller
+// that re-checks it — heartbeat ticks every 5s — and each one would queue
+// another duplicate run of the same (possibly destructive) command.
 func (tj *TaskJob) Enqueue(ctx context.Context, t task.Task) error {
+	if !tj.acquireTask(t.ID) {
+		return nil
+	}
 	select {
 	case tj.enqueueCh <- t:
 		telemetry.Metric("hostlink.task_runner.queue.depth", len(tj.enqueueCh), map[string]any{
@@ -148,6 +163,7 @@ func (tj *TaskJob) Enqueue(ctx context.Context, t task.Task) error {
 		})
 		return nil
 	case <-ctx.Done():
+		tj.releaseTask(t.ID)
 		return ctx.Err()
 	}
 }
@@ -164,11 +180,12 @@ func (tj *TaskJob) processTaskSafe(ctx context.Context, t task.Task, tr taskrepo
 	tj.processTask(ctx, t, tr, channel)
 }
 
+// processTask runs a task's command. Callers reaching this via Register()
+// (the enqueueCh consumer) have already had the task ID reserved by
+// Enqueue; this only owns releasing that reservation once execution
+// finishes. Direct callers (e.g. tests) that bypass Enqueue don't hold a
+// reservation, so the release below is a harmless no-op for them.
 func (tj *TaskJob) processTask(ctx context.Context, t task.Task, tr taskreporter.TaskReporter, channel ResultChannel) {
-	if !tj.acquireTask(t.ID) {
-		log.Infof("task %s already in flight, skipping duplicate dispatch (execution_attempt_id=%s)", t.ID, t.ExecutionAttemptID)
-		return
-	}
 	defer tj.releaseTask(t.ID)
 
 	tempFile, err := os.CreateTemp("", "*_script.sh")
