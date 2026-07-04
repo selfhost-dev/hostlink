@@ -43,10 +43,12 @@ type ResultChannel interface {
 }
 
 type TaskJob struct {
-	config    TaskJobConfig
-	enqueueCh chan task.Task
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
+	config     TaskJobConfig
+	enqueueCh  chan task.Task
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
+	inFlightMu sync.Mutex
+	inFlight   map[string]struct{}
 }
 
 func New() *TaskJob {
@@ -69,7 +71,27 @@ func NewJobWithConf(cfg TaskJobConfig) *TaskJob {
 	return &TaskJob{
 		config:    cfg,
 		enqueueCh: make(chan task.Task, 16),
+		inFlight:  make(map[string]struct{}),
 	}
+}
+
+// acquireTask marks a task as being processed. It returns false if the task
+// is already in flight (dispatched via WebSocket enqueue and via the polling
+// trigger can otherwise race to run the same task's command concurrently).
+func (tj *TaskJob) acquireTask(taskID string) bool {
+	tj.inFlightMu.Lock()
+	defer tj.inFlightMu.Unlock()
+	if _, running := tj.inFlight[taskID]; running {
+		return false
+	}
+	tj.inFlight[taskID] = struct{}{}
+	return true
+}
+
+func (tj *TaskJob) releaseTask(taskID string) {
+	tj.inFlightMu.Lock()
+	defer tj.inFlightMu.Unlock()
+	delete(tj.inFlight, taskID)
 }
 
 func (tj *TaskJob) Register(ctx context.Context, tf taskfetcher.TaskFetcher, tr taskreporter.TaskReporter, channels ...ResultChannel) context.CancelFunc {
@@ -143,6 +165,12 @@ func (tj *TaskJob) processTaskSafe(ctx context.Context, t task.Task, tr taskrepo
 }
 
 func (tj *TaskJob) processTask(ctx context.Context, t task.Task, tr taskreporter.TaskReporter, channel ResultChannel) {
+	if !tj.acquireTask(t.ID) {
+		log.Infof("task %s already in flight, skipping duplicate dispatch (execution_attempt_id=%s)", t.ID, t.ExecutionAttemptID)
+		return
+	}
+	defer tj.releaseTask(t.ID)
+
 	tempFile, err := os.CreateTemp("", "*_script.sh")
 	if err != nil {
 		t.Error = fmt.Sprintf("failed to create temp file: %v", err)
