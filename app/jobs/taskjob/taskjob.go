@@ -109,7 +109,7 @@ func (tj *TaskJob) Register(ctx context.Context, tf taskfetcher.TaskFetcher, tr 
 		for {
 			select {
 			case queued := <-tj.enqueueCh:
-				tj.processTaskSafe(ctx, queued, tr, channel)
+				tj.processQueuedTaskSafe(ctx, queued, tr, channel)
 			case <-ctx.Done():
 				return
 			}
@@ -133,9 +133,7 @@ func (tj *TaskJob) Register(ctx context.Context, tf taskfetcher.TaskFetcher, tr 
 				}
 			}
 			for _, t := range incompleteTasks {
-				if err := tj.Enqueue(ctx, t); err != nil {
-					log.Errorf("failed to enqueue polled task %s: %v", t.ID, err)
-				}
+				tj.processTaskSafe(ctx, t, tr, channel)
 			}
 			return nil
 		})
@@ -168,26 +166,51 @@ func (tj *TaskJob) Enqueue(ctx context.Context, t task.Task) error {
 	}
 }
 
-func (tj *TaskJob) processTaskSafe(ctx context.Context, t task.Task, tr taskreporter.TaskReporter, channel ResultChannel) {
+func panicSafe(taskID string, fn func()) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Errorf("Panic recovered in processTask: %v", r)
 			telemetry.Metric("hostlink.task_runner.panic", 1, map[string]any{
-				"task_id": t.ID,
+				"task_id": taskID,
 			})
 		}
 	}()
-	tj.processTask(ctx, t, tr, channel)
+	fn()
 }
 
-// processTask runs a task's command. Callers reaching this via Register()
-// (the enqueueCh consumer) have already had the task ID reserved by
-// Enqueue; this only owns releasing that reservation once execution
-// finishes. Direct callers (e.g. tests) that bypass Enqueue don't hold a
-// reservation, so the release below is a harmless no-op for them.
-func (tj *TaskJob) processTask(ctx context.Context, t task.Task, tr taskreporter.TaskReporter, channel ResultChannel) {
-	defer tj.releaseTask(t.ID)
+// processTaskSafe is for callers that have NOT already reserved the task ID
+// (direct polling-trigger dispatch, tests calling in without Enqueue): it
+// self-guards via processTask before running.
+func (tj *TaskJob) processTaskSafe(ctx context.Context, t task.Task, tr taskreporter.TaskReporter, channel ResultChannel) {
+	panicSafe(t.ID, func() { tj.processTask(ctx, t, tr, channel) })
+}
 
+// processQueuedTaskSafe is for tasks dequeued from enqueueCh — Enqueue
+// already reserved this task ID before queueing it, so this only owns
+// releasing that reservation once execution finishes, without trying to
+// (and incorrectly failing to) re-acquire it.
+func (tj *TaskJob) processQueuedTaskSafe(ctx context.Context, t task.Task, tr taskreporter.TaskReporter, channel ResultChannel) {
+	panicSafe(t.ID, func() {
+		defer tj.releaseTask(t.ID)
+		tj.runTask(ctx, t, tr, channel)
+	})
+}
+
+// processTask self-guards against a task ID that's already queued or
+// running elsewhere, then runs it. Used by direct callers that never went
+// through Enqueue (the polling trigger, and tests calling in directly).
+func (tj *TaskJob) processTask(ctx context.Context, t task.Task, tr taskreporter.TaskReporter, channel ResultChannel) {
+	if !tj.acquireTask(t.ID) {
+		log.Infof("task %s already in flight, skipping duplicate dispatch (execution_attempt_id=%s)", t.ID, t.ExecutionAttemptID)
+		return
+	}
+	defer tj.releaseTask(t.ID)
+	tj.runTask(ctx, t, tr, channel)
+}
+
+// runTask executes a task's command and reports the result. It assumes the
+// caller already owns the task ID's reservation (or doesn't need one).
+func (tj *TaskJob) runTask(ctx context.Context, t task.Task, tr taskreporter.TaskReporter, channel ResultChannel) {
 	tempFile, err := os.CreateTemp("", "*_script.sh")
 	if err != nil {
 		t.Error = fmt.Sprintf("failed to create temp file: %v", err)
