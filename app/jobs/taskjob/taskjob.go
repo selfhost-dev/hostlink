@@ -43,10 +43,12 @@ type ResultChannel interface {
 }
 
 type TaskJob struct {
-	config    TaskJobConfig
-	enqueueCh chan task.Task
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
+	config     TaskJobConfig
+	enqueueCh  chan task.Task
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
+	inFlightMu sync.Mutex
+	inFlight   map[string]struct{}
 }
 
 func New() *TaskJob {
@@ -69,7 +71,29 @@ func NewJobWithConf(cfg TaskJobConfig) *TaskJob {
 	return &TaskJob{
 		config:    cfg,
 		enqueueCh: make(chan task.Task, 16),
+		inFlight:  make(map[string]struct{}),
 	}
+}
+
+// acquireTask reserves a task ID for execution. It returns false if the
+// task is already queued or running. Reservation happens at Enqueue time
+// (not just when execution actually starts) so that repeated calls from any
+// source — WebSocket push, HTTP polling, or heartbeat responses — can't pile
+// up duplicate, not-yet-started copies of the same task in the queue.
+func (tj *TaskJob) acquireTask(taskID string) bool {
+	tj.inFlightMu.Lock()
+	defer tj.inFlightMu.Unlock()
+	if _, running := tj.inFlight[taskID]; running {
+		return false
+	}
+	tj.inFlight[taskID] = struct{}{}
+	return true
+}
+
+func (tj *TaskJob) releaseTask(taskID string) {
+	tj.inFlightMu.Lock()
+	defer tj.inFlightMu.Unlock()
+	delete(tj.inFlight, taskID)
 }
 
 func (tj *TaskJob) Register(ctx context.Context, tf taskfetcher.TaskFetcher, tr taskreporter.TaskReporter, channels ...ResultChannel) context.CancelFunc {
@@ -117,7 +141,18 @@ func (tj *TaskJob) Register(ctx context.Context, tf taskfetcher.TaskFetcher, tr 
 	return cancel
 }
 
+// Enqueue queues a task for execution. It is the single dedup choke point
+// for all three task sources (WebSocket push, HTTP polling, heartbeat
+// responses): a task ID already queued or currently running is skipped
+// silently rather than queued again. Without this, a task that hasn't yet
+// reported "started" back to the control plane (e.g. anything delivered
+// without an execution_attempt_id) keeps looking "pending" to every caller
+// that re-checks it — heartbeat ticks every 5s — and each one would queue
+// another duplicate run of the same (possibly destructive) command.
 func (tj *TaskJob) Enqueue(ctx context.Context, t task.Task) error {
+	if !tj.acquireTask(t.ID) {
+		return nil
+	}
 	select {
 	case tj.enqueueCh <- t:
 		telemetry.Metric("hostlink.task_runner.queue.depth", len(tj.enqueueCh), map[string]any{
@@ -126,6 +161,7 @@ func (tj *TaskJob) Enqueue(ctx context.Context, t task.Task) error {
 		})
 		return nil
 	case <-ctx.Done():
+		tj.releaseTask(t.ID)
 		return ctx.Err()
 	}
 }
@@ -143,6 +179,17 @@ func (tj *TaskJob) processTaskSafe(ctx context.Context, t task.Task, tr taskrepo
 }
 
 func (tj *TaskJob) processTask(ctx context.Context, t task.Task, tr taskreporter.TaskReporter, channel ResultChannel) {
+	if !tj.acquireTask(t.ID) {
+		log.Infof("task %s already in flight, skipping duplicate dispatch (execution_attempt_id=%s)", t.ID, t.ExecutionAttemptID)
+		return
+	}
+	defer tj.releaseTask(t.ID)
+	tj.runTask(ctx, t, tr, channel)
+}
+
+// runTask executes a task's command and reports the result. It assumes the
+// caller already owns the task ID's reservation (or doesn't need one).
+func (tj *TaskJob) runTask(ctx context.Context, t task.Task, tr taskreporter.TaskReporter, channel ResultChannel) {
 	tempFile, err := os.CreateTemp("", "*_script.sh")
 	if err != nil {
 		t.Error = fmt.Sprintf("failed to create temp file: %v", err)
