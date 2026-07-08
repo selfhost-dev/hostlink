@@ -23,3 +23,6 @@ jobs:
 
       - name: Run integration tests
         run: make test-it
+        env:
+          DOCKER_HOST: unix:///var/run/docker.sock
+          TESTCONTAINERS_RYUK_DISABLED: "true"

@@ -214,9 +214,21 @@ func New(cfg Config) (*Store, error) {
 		return nil, fmt.Errorf("create local task store directory: %w", err)
 	}
 
-	db, err := gorm.Open(sqlite.Open(cfg.Path), &gorm.Config{})
+	// WAL mode: allows concurrent reads while a write is in progress, reducing
+	// SQLITE_BUSY errors when the outbox flusher and task start race.
+	// busy_timeout: retry for up to 5s on a locked database instead of returning
+	// SQLITE_BUSY immediately — handles the brief window after a long task
+	// completes before the next task begins writing.
+	dsn := cfg.Path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		return nil, fmt.Errorf("open local task store: %w", err)
+	}
+
+	// Single connection: SQLite WAL still serializes writers; multiple pool
+	// connections don't help and can each hold their own lock.
+	if sqlDB, err := db.DB(); err == nil {
+		sqlDB.SetMaxOpenConns(1)
 	}
 
 	store := &Store{
