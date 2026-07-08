@@ -13,6 +13,7 @@ const (
 	MetricTypeContainer          = "container"
 	MetricTypeTraefikService     = "traefik.proxy"
 	MetricTypeTraefikRouter      = "traefik.router"
+	MetricTypeClickHouseDatabase = "clickhouse.database"
 )
 
 type MetricPayload struct {
@@ -210,6 +211,21 @@ type TraefikRouterAttributes struct {
 	RouterName     string `json:"router_name"`
 	EntrypointName string `json:"entrypoint_name"`
 	Service        string `json:"service,omitempty"`
+}
+
+// ClickHouseDatabaseMetrics holds the key operational metrics scraped from a
+// ClickHouse instance via its HTTP interface. Rate fields are per-second deltas;
+// the first collection cycle stores a baseline and returns zero for all rates.
+type ClickHouseDatabaseMetrics struct {
+	Up                     bool    `json:"up"`
+	ConnectionsTotal       int     `json:"connections_total"`
+	QueriesPerSecond       float64 `json:"queries_per_second"`
+	SelectQueriesPerSecond float64 `json:"select_queries_per_second"`
+	InsertQueriesPerSecond float64 `json:"insert_queries_per_second"`
+	FailedQueriesPerSecond float64 `json:"failed_queries_per_second"`
+	InsertedRowsPerSecond  float64 `json:"inserted_rows_per_second"`
+	MarkCacheHitRatio      float64 `json:"mark_cache_hit_ratio"`
+	PartsActive            int     `json:"parts_active"`
 }
 
 type ContainerAttributes struct {

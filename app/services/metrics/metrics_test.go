@@ -219,6 +219,15 @@ func (m *MockRedisCollector) Collect(cred credential.Credential) (domainmetrics.
 	return args.Get(0).(domainmetrics.RedisMetrics), args.Error(1)
 }
 
+type MockClickHouseCollector struct {
+	mock.Mock
+}
+
+func (m *MockClickHouseCollector) Collect(cred credential.Credential) (domainmetrics.ClickHouseDatabaseMetrics, error) {
+	args := m.Called(cred)
+	return args.Get(0).(domainmetrics.ClickHouseDatabaseMetrics), args.Error(1)
+}
+
 type MockContainerCollector struct {
 	mock.Mock
 }
@@ -262,38 +271,40 @@ func (m *MockDockerDiscoverer) DiscoverDatabases(ctx context.Context) ([]dockerd
 
 // Test helpers
 type testMocks struct {
-	apiserver          *MockAPIServer
-	agentstate         *MockAgentState
-	collector          *MockCollector
-	syscollector       *MockSysCollector
-	netcollector       *MockNetCollector
-	storagecollector   *MockStorageCollector
-	pgbouncercollector *MockPgBouncerCollector
-	mysqlcollector     *MockMySQLCollector
-	mongodbcollector   *MockMongoDBCollector
-	rediscollector     *MockRedisCollector
-	containercollector *MockContainerCollector
-	traefikcollector   *MockTraefikCollector
-	dockerDiscoverer   *MockDockerDiscoverer
-	crypto             *MockCrypto
+	apiserver            *MockAPIServer
+	agentstate           *MockAgentState
+	collector            *MockCollector
+	syscollector         *MockSysCollector
+	netcollector         *MockNetCollector
+	storagecollector     *MockStorageCollector
+	pgbouncercollector   *MockPgBouncerCollector
+	mysqlcollector       *MockMySQLCollector
+	mongodbcollector     *MockMongoDBCollector
+	rediscollector       *MockRedisCollector
+	clickhousecollector  *MockClickHouseCollector
+	containercollector   *MockContainerCollector
+	traefikcollector     *MockTraefikCollector
+	dockerDiscoverer     *MockDockerDiscoverer
+	crypto               *MockCrypto
 }
 
 func setupTestMetricsPusher() (*metricspusher, *testMocks) {
 	mocks := &testMocks{
-		apiserver:          new(MockAPIServer),
-		agentstate:         new(MockAgentState),
-		collector:          new(MockCollector),
-		syscollector:       new(MockSysCollector),
-		netcollector:       new(MockNetCollector),
-		storagecollector:   new(MockStorageCollector),
-		pgbouncercollector: new(MockPgBouncerCollector),
-		mysqlcollector:     new(MockMySQLCollector),
-		mongodbcollector:   new(MockMongoDBCollector),
-		rediscollector:     new(MockRedisCollector),
-		containercollector: new(MockContainerCollector),
-		traefikcollector:   new(MockTraefikCollector),
-		dockerDiscoverer:   new(MockDockerDiscoverer),
-		crypto:             new(MockCrypto),
+		apiserver:           new(MockAPIServer),
+		agentstate:          new(MockAgentState),
+		collector:           new(MockCollector),
+		syscollector:        new(MockSysCollector),
+		netcollector:        new(MockNetCollector),
+		storagecollector:    new(MockStorageCollector),
+		pgbouncercollector:  new(MockPgBouncerCollector),
+		mysqlcollector:      new(MockMySQLCollector),
+		mongodbcollector:    new(MockMongoDBCollector),
+		rediscollector:      new(MockRedisCollector),
+		clickhousecollector: new(MockClickHouseCollector),
+		containercollector:  new(MockContainerCollector),
+		traefikcollector:    new(MockTraefikCollector),
+		dockerDiscoverer:    new(MockDockerDiscoverer),
+		crypto:              new(MockCrypto),
 	}
 
 	mp := NewWithDependencies(
@@ -307,6 +318,7 @@ func setupTestMetricsPusher() (*metricspusher, *testMocks) {
 		mocks.mysqlcollector,
 		mocks.mongodbcollector,
 		mocks.rediscollector,
+		mocks.clickhousecollector,
 		mocks.containercollector,
 		mocks.traefikcollector,
 		mocks.dockerDiscoverer,
