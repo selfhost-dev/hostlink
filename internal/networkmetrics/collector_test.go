@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -40,6 +41,8 @@ func TestCollect_SecondCollection_ReturnsDelta(t *testing.T) {
 	// First collection - baseline
 	mock.stats = NetworkStats{RecvBytes: 1000, SentBytes: 500}
 	c.Collect(context.Background())
+
+	time.Sleep(time.Millisecond) // ensure clock advances so elapsed > 0
 
 	// Second collection - delta
 	mock.stats = NetworkStats{RecvBytes: 2000, SentBytes: 1500}
