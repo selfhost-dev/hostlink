@@ -133,6 +133,10 @@ func (tj *TaskJob) Register(ctx context.Context, tf taskfetcher.TaskFetcher, tr 
 				}
 			}
 			for _, t := range incompleteTasks {
+				if !tj.acquireTask(t.ID) {
+					log.Infof("task %s already in flight, skipping duplicate poll dispatch (execution_attempt_id=%s)", t.ID, t.ExecutionAttemptID)
+					continue
+				}
 				tj.processTaskSafe(ctx, t, tr, channel)
 			}
 			return nil
@@ -179,10 +183,7 @@ func (tj *TaskJob) processTaskSafe(ctx context.Context, t task.Task, tr taskrepo
 }
 
 func (tj *TaskJob) processTask(ctx context.Context, t task.Task, tr taskreporter.TaskReporter, channel ResultChannel) {
-	if !tj.acquireTask(t.ID) {
-		log.Infof("task %s already in flight, skipping duplicate dispatch (execution_attempt_id=%s)", t.ID, t.ExecutionAttemptID)
-		return
-	}
+	// Caller (Enqueue or polling loop) already holds the reservation.
 	defer tj.releaseTask(t.ID)
 	tj.runTask(ctx, t, tr, channel)
 }
