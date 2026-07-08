@@ -13,6 +13,7 @@ import (
 	"hostlink/domain/credential"
 	domainmetrics "hostlink/domain/metrics"
 	"hostlink/internal/apiserver"
+	"hostlink/internal/clickhousemetrics"
 	"hostlink/internal/containermetrics"
 	"hostlink/internal/crypto"
 	"hostlink/internal/dockerdiscovery"
@@ -36,21 +37,22 @@ type Pusher interface {
 }
 
 type metricspusher struct {
-	apiserver          apiserver.MetricsOperations
-	agentstate         agentstate.Operations
-	metricscollector   pgmetrics.Collector
-	syscollector       sysmetrics.Collector
-	netcollector       networkmetrics.Collector
-	storagecollector   storagemetrics.Collector
-	pgbouncercollector pgbouncermetrics.Collector
-	mysqlcollector     mysqlmetrics.Collector
-	mongodbcollector   mongodbmetrics.Collector
-	rediscollector     redismetrics.Collector
-	containercollector containermetrics.Collector
-	traefikcollector   traefikmetrics.Collector
-	dockerDiscoverer   dockerdiscovery.Discoverer
-	crypto             crypto.Service
-	privateKeyPath     string
+	apiserver              apiserver.MetricsOperations
+	agentstate             agentstate.Operations
+	metricscollector       pgmetrics.Collector
+	syscollector           sysmetrics.Collector
+	netcollector           networkmetrics.Collector
+	storagecollector       storagemetrics.Collector
+	pgbouncercollector     pgbouncermetrics.Collector
+	mysqlcollector         mysqlmetrics.Collector
+	mongodbcollector       mongodbmetrics.Collector
+	rediscollector         redismetrics.Collector
+	clickhousecollector    clickhousemetrics.Collector
+	containercollector     containermetrics.Collector
+	traefikcollector       traefikmetrics.Collector
+	dockerDiscoverer       dockerdiscovery.Discoverer
+	crypto                 crypto.Service
+	privateKeyPath         string
 }
 
 func NewWithConf() (*metricspusher, error) {
@@ -64,21 +66,22 @@ func NewWithConf() (*metricspusher, error) {
 	}
 
 	return &metricspusher{
-		apiserver:          svr,
-		agentstate:         agentstate,
-		metricscollector:   pgmetrics.New(),
-		syscollector:       sysmetrics.New(),
-		netcollector:       networkmetrics.New(),
-		storagecollector:   storagemetrics.New(),
-		pgbouncercollector: pgbouncermetrics.New(),
-		mysqlcollector:     mysqlmetrics.New(),
-		mongodbcollector:   mongodbmetrics.New(),
-		rediscollector:     redismetrics.New(),
-		containercollector: containermetrics.New(),
-		traefikcollector:   traefikmetrics.New(),
-		dockerDiscoverer:   dockerdiscovery.New(),
-		crypto:             crypto.NewService(),
-		privateKeyPath:     appconf.AgentPrivateKeyPath(),
+		apiserver:           svr,
+		agentstate:          agentstate,
+		metricscollector:    pgmetrics.New(),
+		syscollector:        sysmetrics.New(),
+		netcollector:        networkmetrics.New(),
+		storagecollector:    storagemetrics.New(),
+		pgbouncercollector:  pgbouncermetrics.New(),
+		mysqlcollector:      mysqlmetrics.New(),
+		mongodbcollector:    mongodbmetrics.New(),
+		rediscollector:      redismetrics.New(),
+		clickhousecollector: clickhousemetrics.New(),
+		containercollector:  containermetrics.New(),
+		traefikcollector:    traefikmetrics.New(),
+		dockerDiscoverer:    dockerdiscovery.New(),
+		crypto:              crypto.NewService(),
+		privateKeyPath:      appconf.AgentPrivateKeyPath(),
 	}, nil
 }
 
@@ -98,6 +101,7 @@ func NewWithDependencies(
 	mysqlcollector mysqlmetrics.Collector,
 	mongodbcollector mongodbmetrics.Collector,
 	rediscollector redismetrics.Collector,
+	clickhousecollector clickhousemetrics.Collector,
 	containercollector containermetrics.Collector,
 	traefikcollector traefikmetrics.Collector,
 	dockerDiscoverer dockerdiscovery.Discoverer,
@@ -105,21 +109,22 @@ func NewWithDependencies(
 	privateKeyPath string,
 ) *metricspusher {
 	return &metricspusher{
-		apiserver:          apiserver,
-		agentstate:         agentstate,
-		metricscollector:   pgcollector,
-		syscollector:       syscollector,
-		netcollector:       netcollector,
-		storagecollector:   storagecollector,
-		pgbouncercollector: pgbouncermetrics.New(),
-		mysqlcollector:     mysqlcollector,
-		mongodbcollector:   mongodbcollector,
-		rediscollector:     rediscollector,
-		containercollector: containercollector,
-		traefikcollector:   traefikcollector,
-		dockerDiscoverer:   dockerDiscoverer,
-		crypto:             crypto,
-		privateKeyPath:     privateKeyPath,
+		apiserver:           apiserver,
+		agentstate:          agentstate,
+		metricscollector:    pgcollector,
+		syscollector:        syscollector,
+		netcollector:        netcollector,
+		storagecollector:    storagecollector,
+		pgbouncercollector:  pgbouncercollector,
+		mysqlcollector:      mysqlcollector,
+		mongodbcollector:    mongodbcollector,
+		rediscollector:      rediscollector,
+		clickhousecollector: clickhousecollector,
+		containercollector:  containercollector,
+		traefikcollector:    traefikcollector,
+		dockerDiscoverer:    dockerDiscoverer,
+		crypto:              crypto,
+		privateKeyPath:      privateKeyPath,
 	}
 }
 
@@ -234,6 +239,21 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 			}
 			metricSets = append(metricSets, domainmetrics.MetricSet{
 				Type:    domainmetrics.MetricTypeRedis,
+				Metrics: m,
+			})
+		}
+
+	case "clickhouse":
+		if cred.Host != "" || cred.Port != 0 {
+			m, err := mp.clickhousecollector.Collect(cred)
+			if err != nil {
+				log.Warnf("clickhouse metrics collection failed: %v", err)
+				m = domainmetrics.ClickHouseDatabaseMetrics{Up: false}
+			} else {
+				m.Up = true
+			}
+			metricSets = append(metricSets, domainmetrics.MetricSet{
+				Type:    domainmetrics.MetricTypeClickHouseDatabase,
 				Metrics: m,
 			})
 		}
