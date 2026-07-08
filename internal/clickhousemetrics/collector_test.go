@@ -135,6 +135,7 @@ func TestCollect_SecondCollection_ReturnsDeltaRates(t *testing.T) {
 	assert.Greater(t, m2.SelectQueriesPerSecond, 0.0)
 	assert.Greater(t, m2.InsertQueriesPerSecond, 0.0)
 	assert.Greater(t, m2.InsertedRowsPerSecond, 0.0)
+	assert.Greater(t, m2.FailedQueriesPerSecond, 0.0)
 	assert.Equal(t, 45, m2.PartsActive)
 }
 
@@ -162,6 +163,59 @@ func TestCollect_HTTPPortDerivation(t *testing.T) {
 		fallback = 8123
 	}
 	assert.Equal(t, 8123, fallback)
+}
+
+func TestCollect_ServerUnreachable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	cred := credForServer(srv)
+	srv.Close() // shut down before Collect
+
+	c := New()
+	_, err := c.Collect(cred)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ping")
+}
+
+func TestCollect_ZeroElapsedTime(t *testing.T) {
+	srv := mockClickHouseServer(t, standardHandlers(1000, 800, 100, 5, 5000))
+	defer srv.Close()
+
+	cred := credForServer(srv)
+	c := New()
+	_, _ = c.Collect(cred) // baseline
+
+	// Immediately collect again — elapsed may be 0 on a fast machine
+	m, err := c.Collect(cred)
+	require.NoError(t, err)
+	// Rates must never be NaN or negative even at zero elapsed
+	assert.GreaterOrEqual(t, m.QueriesPerSecond, 0.0)
+	assert.GreaterOrEqual(t, m.SelectQueriesPerSecond, 0.0)
+	assert.GreaterOrEqual(t, m.InsertQueriesPerSecond, 0.0)
+	assert.GreaterOrEqual(t, m.FailedQueriesPerSecond, 0.0)
+	assert.GreaterOrEqual(t, m.InsertedRowsPerSecond, 0.0)
+}
+
+func TestCollect_MarkCacheHitRatio_ZeroTotal(t *testing.T) {
+	handlers := map[string]string{
+		"SELECT 1":       "1\n",
+		"system.metrics": `{"metric":"TCPConnection","value":1}`,
+		"system.events": strings.Join([]string{
+			`{"event":"Query","value":100}`,
+			`{"event":"SelectQuery","value":80}`,
+			`{"event":"InsertQuery","value":10}`,
+			`{"event":"FailedQuery","value":1}`,
+			`{"event":"InsertedRows","value":500}`,
+			// MarkCacheHits and MarkCacheMisses intentionally absent → total = 0
+		}, "\n"),
+		"system.parts": `{"value":10}`,
+	}
+	srv := mockClickHouseServer(t, handlers)
+	defer srv.Close()
+
+	c := New()
+	m, err := c.Collect(credForServer(srv))
+	require.NoError(t, err)
+	assert.Equal(t, 0.0, m.MarkCacheHitRatio, "zero cache lookups → ratio must be 0, not NaN")
 }
 
 func TestToInt64(t *testing.T) {
