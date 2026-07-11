@@ -9,7 +9,7 @@ const (
 	MetricTypePgBouncer          = "pgbouncer.stats"
 	MetricTypeMySQLDatabase      = "mysql.database"
 	MetricTypeMongoDBDatabase    = "mongodb.database"
-	MetricTypeRedis              = "redis"
+	MetricTypeRedis              = "redis.database"
 	MetricTypeContainer          = "container"
 	MetricTypeTraefikService     = "traefik.proxy"
 	MetricTypeTraefikRouter      = "traefik.router"
