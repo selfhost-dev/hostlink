@@ -88,6 +88,9 @@ func (pgm *pgmetrics) Collect(cred credential.Credential) (metrics.PostgreSQLDat
 		// Non-fatal: replication may not be configured
 	}
 
+	// Collect TimescaleDB metrics (best-effort)
+	pgm.collectTimescaledbMetrics(ctx, db, &m)
+
 	return m, nil
 }
 
@@ -209,6 +212,58 @@ func (pgm *pgmetrics) collectPrimaryReplicationMetrics(ctx context.Context, db *
 	}
 
 	return nil
+}
+
+func (pgm *pgmetrics) collectTimescaledbMetrics(ctx context.Context, db *sql.DB, m *metrics.PostgreSQLDatabaseMetrics) {
+	// All TimescaleDB queries are best-effort — if the extension is not installed
+	// or a view does not exist, the metric stays nil and is omitted from JSON.
+
+	// Hypertable count
+	var hypertableCount sql.NullInt64
+	err := db.QueryRowContext(ctx, `SELECT count(*)::int FROM timescaledb_information.hypertables`).Scan(&hypertableCount)
+	if err == nil && hypertableCount.Valid {
+		m.TimescaledbHypertableCount = &hypertableCount.Int64
+	}
+
+	// Chunk counts (total + compressed)
+	chunkQuery := `
+		SELECT
+			count(*)::int AS total_chunks,
+			COALESCE(count(*) FILTER (WHERE compression_status = 'Compressed'), 0)::int AS compressed_chunks
+		FROM timescaledb_information.chunks`
+	var totalChunks, compressedChunks sql.NullInt64
+	err = db.QueryRowContext(ctx, chunkQuery).Scan(&totalChunks, &compressedChunks)
+	if err == nil {
+		if totalChunks.Valid {
+			m.TimescaledbChunkCount = &totalChunks.Int64
+		}
+		if compressedChunks.Valid {
+			m.TimescaledbCompressedChunkCount = &compressedChunks.Int64
+		}
+	}
+
+	// Total size of all hypertables in bytes
+	var totalSize sql.NullInt64
+	err = db.QueryRowContext(ctx, `
+		SELECT COALESCE(sum(hypertable_size(format('%I.%I', hypertable_schema, hypertable_name))), 0)::bigint
+		FROM timescaledb_information.hypertables`).Scan(&totalSize)
+	if err == nil && totalSize.Valid {
+		m.TimescaledbTotalSizeBytes = &totalSize.Int64
+	}
+
+	// Compression ratio (before / after bytes across all compressed chunks)
+	var ratio sql.NullFloat64
+	err = db.QueryRowContext(ctx, `
+		SELECT
+			CASE
+				WHEN SUM(after_compression_total_bytes) > 0
+				THEN ROUND(SUM(before_compression_total_bytes)::numeric / SUM(after_compression_total_bytes)::numeric, 2)
+				ELSE NULL
+			END
+		FROM timescaledb_information.compressed_chunk_stats`).Scan(&ratio)
+	if err == nil && ratio.Valid {
+		m.TimescaledbCompressionRatio = &ratio.Float64
+	}
 }
 
 type defaultStatsCollector struct{}
