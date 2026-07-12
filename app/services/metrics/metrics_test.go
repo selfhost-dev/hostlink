@@ -228,6 +228,15 @@ func (m *MockClickHouseCollector) Collect(cred credential.Credential) (domainmet
 	return args.Get(0).(domainmetrics.ClickHouseDatabaseMetrics), args.Error(1)
 }
 
+type MockOpenSearchCollector struct {
+	mock.Mock
+}
+
+func (m *MockOpenSearchCollector) Collect(cred credential.Credential) (domainmetrics.OpenSearchDatabaseMetrics, error) {
+	args := m.Called(cred)
+	return args.Get(0).(domainmetrics.OpenSearchDatabaseMetrics), args.Error(1)
+}
+
 type MockContainerCollector struct {
 	mock.Mock
 }
@@ -282,6 +291,7 @@ type testMocks struct {
 	mongodbcollector     *MockMongoDBCollector
 	rediscollector       *MockRedisCollector
 	clickhousecollector  *MockClickHouseCollector
+	opensearchcollector  *MockOpenSearchCollector
 	containercollector   *MockContainerCollector
 	traefikcollector     *MockTraefikCollector
 	dockerDiscoverer     *MockDockerDiscoverer
@@ -301,6 +311,7 @@ func setupTestMetricsPusher() (*metricspusher, *testMocks) {
 		mongodbcollector:    new(MockMongoDBCollector),
 		rediscollector:      new(MockRedisCollector),
 		clickhousecollector: new(MockClickHouseCollector),
+		opensearchcollector: new(MockOpenSearchCollector),
 		containercollector:  new(MockContainerCollector),
 		traefikcollector:    new(MockTraefikCollector),
 		dockerDiscoverer:    new(MockDockerDiscoverer),
@@ -319,6 +330,7 @@ func setupTestMetricsPusher() (*metricspusher, *testMocks) {
 		mocks.mongodbcollector,
 		mocks.rediscollector,
 		mocks.clickhousecollector,
+		mocks.opensearchcollector,
 		mocks.containercollector,
 		mocks.traefikcollector,
 		mocks.dockerDiscoverer,

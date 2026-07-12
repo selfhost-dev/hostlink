@@ -15,6 +15,7 @@ import (
 	"hostlink/internal/apiserver"
 	"hostlink/internal/clickhousemetrics"
 	"hostlink/internal/containermetrics"
+	"hostlink/internal/opensearchmetrics"
 	"hostlink/internal/crypto"
 	"hostlink/internal/dockerdiscovery"
 	"hostlink/internal/mongodbmetrics"
@@ -48,6 +49,7 @@ type metricspusher struct {
 	mongodbcollector       mongodbmetrics.Collector
 	rediscollector         redismetrics.Collector
 	clickhousecollector    clickhousemetrics.Collector
+	opensearchcollector    opensearchmetrics.Collector
 	containercollector     containermetrics.Collector
 	traefikcollector       traefikmetrics.Collector
 	dockerDiscoverer       dockerdiscovery.Discoverer
@@ -77,6 +79,7 @@ func NewWithConf() (*metricspusher, error) {
 		mongodbcollector:    mongodbmetrics.New(),
 		rediscollector:      redismetrics.New(),
 		clickhousecollector: clickhousemetrics.New(),
+		opensearchcollector: opensearchmetrics.New(),
 		containercollector:  containermetrics.New(),
 		traefikcollector:    traefikmetrics.New(),
 		dockerDiscoverer:    dockerdiscovery.New(),
@@ -102,6 +105,7 @@ func NewWithDependencies(
 	mongodbcollector mongodbmetrics.Collector,
 	rediscollector redismetrics.Collector,
 	clickhousecollector clickhousemetrics.Collector,
+	opensearchcollector opensearchmetrics.Collector,
 	containercollector containermetrics.Collector,
 	traefikcollector traefikmetrics.Collector,
 	dockerDiscoverer dockerdiscovery.Discoverer,
@@ -120,6 +124,7 @@ func NewWithDependencies(
 		mongodbcollector:    mongodbcollector,
 		rediscollector:      rediscollector,
 		clickhousecollector: clickhousecollector,
+		opensearchcollector: opensearchcollector,
 		containercollector:  containercollector,
 		traefikcollector:    traefikcollector,
 		dockerDiscoverer:    dockerDiscoverer,
@@ -254,6 +259,21 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 			}
 			metricSets = append(metricSets, domainmetrics.MetricSet{
 				Type:    domainmetrics.MetricTypeClickHouseDatabase,
+				Metrics: m,
+			})
+		}
+
+	case "opensearch":
+		if cred.Host != "" || cred.Port != 0 {
+			m, err := mp.opensearchcollector.Collect(cred)
+			if err != nil {
+				log.Warnf("opensearch metrics collection failed: %v", err)
+				m = domainmetrics.OpenSearchDatabaseMetrics{Up: false, ClusterStatus: 2}
+			} else {
+				m.Up = true
+			}
+			metricSets = append(metricSets, domainmetrics.MetricSet{
+				Type:    domainmetrics.MetricTypeOpenSearchDatabase,
 				Metrics: m,
 			})
 		}
