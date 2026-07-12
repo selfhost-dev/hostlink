@@ -3,7 +3,9 @@ package pgmetrics
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"hostlink/domain/metrics"
 	"testing"
 	"time"
 
@@ -125,4 +127,48 @@ func TestStatsCollector_QueryError(t *testing.T) {
 	_, err := mock.QueryStats(context.Background(), nil)
 	assert.Error(t, err)
 	assert.Equal(t, expectedErr, err)
+}
+
+func TestTimescaledbMetrics_ExcludedWhenNotInstalled(t *testing.T) {
+	m := metrics.PostgreSQLDatabaseMetrics{}
+	assert.Nil(t, m.TimescaledbHypertableCount, "should be nil when not set")
+	assert.Nil(t, m.TimescaledbChunkCount, "should be nil when not set")
+	assert.Nil(t, m.TimescaledbCompressedChunkCount, "should be nil when not set")
+	assert.Nil(t, m.TimescaledbCompressionRatio, "should be nil when not set")
+	assert.Nil(t, m.TimescaledbTotalSizeBytes, "should be nil when not set")
+}
+
+func TestTimescaledbMetrics_JSONOmitEmpty(t *testing.T) {
+	m := metrics.PostgreSQLDatabaseMetrics{
+		Up: true,
+	}
+	data, err := json.Marshal(m)
+	assert.NoError(t, err)
+	assert.NotContains(t, string(data), "timescaledb", "nil TimescaleDB fields should be omitted from JSON")
+}
+
+func TestTimescaledbMetrics_JSONIncludeWhenSet(t *testing.T) {
+	hypertableCount := int64(5)
+	chunkCount := int64(120)
+	compressedChunkCount := int64(80)
+	ratio := 3.5
+	totalSize := int64(1073741824)
+
+	m := metrics.PostgreSQLDatabaseMetrics{
+		Up:                              true,
+		TimescaledbHypertableCount:      &hypertableCount,
+		TimescaledbChunkCount:           &chunkCount,
+		TimescaledbCompressedChunkCount: &compressedChunkCount,
+		TimescaledbCompressionRatio:     &ratio,
+		TimescaledbTotalSizeBytes:       &totalSize,
+	}
+	data, err := json.Marshal(m)
+	assert.NoError(t, err)
+
+	jsonStr := string(data)
+	assert.Contains(t, jsonStr, `"timescaledb_hypertable_count":5`)
+	assert.Contains(t, jsonStr, `"timescaledb_chunk_count":120`)
+	assert.Contains(t, jsonStr, `"timescaledb_compressed_chunk_count":80`)
+	assert.Contains(t, jsonStr, `"timescaledb_compression_ratio":3.5`)
+	assert.Contains(t, jsonStr, `"timescaledb_total_size_bytes":1073741824`)
 }

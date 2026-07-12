@@ -59,7 +59,13 @@ type PostgreSQLDatabaseMetrics struct {
 	CommittedTxPerSecond  float64 `json:"committed_tx_per_second"`
 	BlocksReadPerSecond   float64 `json:"blocks_read_per_second"`
 	ReplicationLagSeconds int     `json:"replication_lag_seconds"`
-	ReplicationConnected  *bool  `json:"replication_connected,omitempty"`
+	ReplicationConnected  *bool   `json:"replication_connected,omitempty"`
+	// TimescaleDB metrics — only populated when the extension is installed.
+	TimescaledbHypertableCount      *int64   `json:"timescaledb_hypertable_count,omitempty"`
+	TimescaledbChunkCount           *int64   `json:"timescaledb_chunk_count,omitempty"`
+	TimescaledbCompressedChunkCount *int64   `json:"timescaledb_compressed_chunk_count,omitempty"`
+	TimescaledbCompressionRatio     *float64 `json:"timescaledb_compression_ratio,omitempty"`
+	TimescaledbTotalSizeBytes       *int64   `json:"timescaledb_total_size_bytes,omitempty"`
 }
 
 // PgBouncerMetrics holds aggregated connection pool statistics collected
