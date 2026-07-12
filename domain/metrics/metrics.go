@@ -13,7 +13,8 @@ const (
 	MetricTypeContainer          = "container"
 	MetricTypeTraefikService     = "traefik.proxy"
 	MetricTypeTraefikRouter      = "traefik.router"
-	MetricTypeClickHouseDatabase = "clickhouse.database"
+	MetricTypeClickHouseDatabase  = "clickhouse.database"
+	MetricTypeOpenSearchDatabase  = "opensearch.database"
 )
 
 type MetricPayload struct {
@@ -217,6 +218,29 @@ type TraefikRouterAttributes struct {
 	RouterName     string `json:"router_name"`
 	EntrypointName string `json:"entrypoint_name"`
 	Service        string `json:"service,omitempty"`
+}
+
+// OpenSearchDatabaseMetrics holds key operational metrics scraped from an
+// OpenSearch cluster via its REST API. ClusterStatus is encoded as an integer
+// (0=green, 1=yellow, 2=red) so that numeric alert rules can be evaluated
+// against it (e.g. cluster_status > 0 means not green). Rate fields
+// (IndexingRate, SearchRate) are per-second deltas; the first collection cycle
+// stores a baseline and returns zero for all rates.
+type OpenSearchDatabaseMetrics struct {
+	Up                    bool    `json:"up"`
+	ClusterStatus         int     `json:"cluster_status"`
+	ActiveShards          int     `json:"active_shards"`
+	RelocatingShards      int     `json:"relocating_shards"`
+	InitializingShards    int     `json:"initializing_shards"`
+	UnassignedShards      int     `json:"unassigned_shards"`
+	ActivePrimaryShards   int     `json:"active_primary_shards"`
+	NumberOfNodes         int     `json:"number_of_nodes"`
+	JvmHeapUsedPercent    float64 `json:"jvm_heap_used_percent"`
+	CPUPercent            float64 `json:"cpu_percent"`
+	DiskUsedPercent       float64 `json:"disk_used_percent"`
+	IndexingRate          float64 `json:"indexing_rate"`
+	SearchRate            float64 `json:"search_rate"`
+	ReplicationLagSeconds int     `json:"replication_lag_seconds"`
 }
 
 // ClickHouseDatabaseMetrics holds the key operational metrics scraped from a
