@@ -69,7 +69,7 @@ func (mj *MetricsJob) Register(ctx context.Context, mp metrics.Pusher, mcred met
 					}
 					if lastDbCred.Dialect == "" {
 						switch cred.Dialect {
-						case "mysql", "mariadb", "mongodb", "redis":
+						case "mysql", "mariadb", "mongodb", "redis", "clickhouse", "opensearch":
 							lastDbCred = cred
 						}
 					}
