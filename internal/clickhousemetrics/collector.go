@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -173,6 +174,9 @@ func toInt64(v any) int64 {
 		return x
 	case int:
 		return int64(x)
+	case string:
+		n, _ := strconv.ParseInt(x, 10, 64)
+		return n
 	}
 	return 0
 }
