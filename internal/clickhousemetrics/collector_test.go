@@ -83,6 +83,8 @@ func TestCollect_FirstCollection_ReturnsZeroRates(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, 4, m.ConnectionsTotal) // 3 TCP + 1 HTTP
+	assert.Equal(t, 4, m.ConnectionsCount)
+	assert.Equal(t, int64(1000), m.QueryCount)
 	assert.Equal(t, 0.0, m.QueriesPerSecond, "first call must return 0 QPS (baseline only)")
 	assert.Equal(t, 0.0, m.SelectQueriesPerSecond)
 	assert.Equal(t, 0.0, m.InsertQueriesPerSecond)

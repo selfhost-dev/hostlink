@@ -27,6 +27,7 @@ type collector struct {
 	lastInserts    *int64
 	lastFailed     *int64
 	lastInsertRows *int64
+	lastSelectRows *int64
 	lastTime       time.Time
 }
 
@@ -55,19 +56,29 @@ func (c *collector) Collect(cred credential.Credential) (metrics.ClickHouseDatab
 
 	var m metrics.ClickHouseDatabaseMetrics
 
-	// Point-in-time: active TCP + HTTP connections
-	connRows, err := c.query(baseURL, cred.Username, password,
-		"SELECT metric, value FROM system.metrics WHERE metric IN ('TCPConnection','HTTPConnection') FORMAT JSONEachRow")
+	// Point-in-time metrics from system.metrics
+	sysRows, err := c.query(baseURL, cred.Username, password,
+		"SELECT metric, value FROM system.metrics WHERE metric IN ('TCPConnection','HTTPConnection','MemoryTracking','BackgroundMergesAndMutationsPoolTask','BackgroundPoolTask') FORMAT JSONEachRow")
 	if err != nil {
 		return m, fmt.Errorf("system.metrics: %w", err)
 	}
-	for _, row := range connRows {
-		m.ConnectionsTotal += int(toInt64(row["value"]))
+	for _, row := range sysRows {
+		metricName, _ := row["metric"].(string)
+		val := toInt64(row["value"])
+		switch metricName {
+		case "TCPConnection", "HTTPConnection":
+			m.ConnectionsTotal += int(val)
+		case "MemoryTracking":
+			m.MemoryUsage = val
+		case "BackgroundMergesAndMutationsPoolTask", "BackgroundPoolTask":
+			m.BackgroundMergesCount += int(val)
+		}
 	}
+	m.ConnectionsCount = m.ConnectionsTotal
 
 	// Cumulative event counters used for delta rate calculation
 	eventRows, err := c.query(baseURL, cred.Username, password,
-		"SELECT event, value FROM system.events WHERE event IN ('Query','SelectQuery','InsertQuery','FailedQuery','InsertedRows','MarkCacheHits','MarkCacheMisses') FORMAT JSONEachRow")
+		"SELECT event, value FROM system.events WHERE event IN ('Query','SelectQuery','InsertQuery','FailedQuery','InsertedRows','SelectedRows','MarkCacheHits','MarkCacheMisses') FORMAT JSONEachRow")
 	if err != nil {
 		return m, fmt.Errorf("system.events: %w", err)
 	}
@@ -78,11 +89,36 @@ func (c *collector) Collect(cred credential.Credential) (metrics.ClickHouseDatab
 		}
 	}
 
+	m.QueryCount = events["Query"]
+
 	// Active MergeTree parts — a proxy for table fragmentation health
 	partsRows, err := c.query(baseURL, cred.Username, password,
 		"SELECT count() AS value FROM system.parts WHERE active = 1 FORMAT JSONEachRow")
 	if err == nil && len(partsRows) > 0 {
 		m.PartsActive = int(toInt64(partsRows[0]["value"]))
+	}
+
+	// Total disk space used by parts
+	diskRows, err := c.query(baseURL, cred.Username, password,
+		"SELECT sum(bytes_on_disk) AS value FROM system.parts FORMAT JSONEachRow")
+	if err == nil && len(diskRows) > 0 {
+		m.DiskUsedBytes = toInt64(diskRows[0]["value"])
+	}
+
+	// Detached/broken parts count
+	detachedRows, err := c.query(baseURL, cred.Username, password,
+		"SELECT count() AS value FROM system.detached_parts FORMAT JSONEachRow")
+	if err == nil && len(detachedRows) > 0 {
+		m.BrokenPartsCount = int(toInt64(detachedRows[0]["value"]))
+	}
+
+	// Replication delay from system.replicas (0 if standalone or no delay)
+	replicaRows, err := c.query(baseURL, cred.Username, password,
+		"SELECT max(absolute_delay) AS value FROM system.replicas FORMAT JSONEachRow")
+	if err == nil && len(replicaRows) > 0 {
+		delay := int(toInt64(replicaRows[0]["value"]))
+		m.ReplicationDelay = delay
+		m.ReplicationLagSeconds = delay
 	}
 
 	// Mark cache: ratio of hits to total lookups
@@ -100,6 +136,7 @@ func (c *collector) Collect(cred credential.Credential) (metrics.ClickHouseDatab
 	curInserts := events["InsertQuery"]
 	curFailed := events["FailedQuery"]
 	curInsertRows := events["InsertedRows"]
+	curSelectRows := events["SelectedRows"]
 
 	if c.lastQueries != nil {
 		elapsed := now.Sub(c.lastTime).Seconds()
@@ -109,6 +146,9 @@ func (c *collector) Collect(cred credential.Credential) (metrics.ClickHouseDatab
 			m.InsertQueriesPerSecond = float64(curInserts-*c.lastInserts) / elapsed
 			m.FailedQueriesPerSecond = float64(curFailed-*c.lastFailed) / elapsed
 			m.InsertedRowsPerSecond = float64(curInsertRows-*c.lastInsertRows) / elapsed
+			if c.lastSelectRows != nil {
+				m.SelectedRowsPerSecond = float64(curSelectRows-*c.lastSelectRows) / elapsed
+			}
 		}
 	}
 
@@ -117,6 +157,7 @@ func (c *collector) Collect(cred credential.Credential) (metrics.ClickHouseDatab
 	c.lastInserts = &curInserts
 	c.lastFailed = &curFailed
 	c.lastInsertRows = &curInsertRows
+	c.lastSelectRows = &curSelectRows
 	c.lastTime = now
 
 	return m, nil
