@@ -249,11 +249,20 @@ type OpenSearchDatabaseMetrics struct {
 type ClickHouseDatabaseMetrics struct {
 	Up                     bool    `json:"up"`
 	ConnectionsTotal       int     `json:"connections_total"`
+	ConnectionsCount       int     `json:"connections_count"`
+	QueryCount             int64   `json:"query_count"`
 	QueriesPerSecond       float64 `json:"queries_per_second"`
 	SelectQueriesPerSecond float64 `json:"select_queries_per_second"`
+	SelectedRowsPerSecond  float64 `json:"selected_rows_per_second"`
 	InsertQueriesPerSecond float64 `json:"insert_queries_per_second"`
 	FailedQueriesPerSecond float64 `json:"failed_queries_per_second"`
 	InsertedRowsPerSecond  float64 `json:"inserted_rows_per_second"`
+	MemoryUsage            int64   `json:"memory_usage"`
+	BackgroundMergesCount  int     `json:"background_merges_count"`
+	ReplicationDelay       int     `json:"replication_delay"`
+	ReplicationLagSeconds  int     `json:"replication_lag_seconds"`
+	DiskUsedBytes          int64   `json:"disk_used_bytes"`
+	BrokenPartsCount       int     `json:"broken_parts_count"`
 	MarkCacheHitRatio      float64 `json:"mark_cache_hit_ratio"`
 	PartsActive            int     `json:"parts_active"`
 }
