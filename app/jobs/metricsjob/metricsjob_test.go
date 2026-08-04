@@ -307,6 +307,153 @@ func TestRegister_SkipsUnsupportedDialects(t *testing.T) {
 	}
 }
 
+func TestRegister_KeepsLastGoodCredsWhenFetchReturnsEmpty(t *testing.T) {
+	beatCount := 0
+	pusher := &mockPusher{}
+	authGetter := &mockAuthGetter{
+		creds: []credential.Credential{
+			{Dialect: "postgresql", Host: "cached-host"},
+		},
+	}
+
+	mockTrigger := func(ctx context.Context, fn func() error) {
+		// Beat 1: fetches postgresql creds, pushes
+		_ = fn()
+		beatCount++
+
+		// Simulate platform creds gate closing: GetCreds returns empty
+		authGetter.creds = []credential.Credential{}
+
+		// Beat 2: fetch empty, should still push with last good creds
+		_ = fn()
+		beatCount++
+
+		// Beat 3: fetch empty again, still push
+		_ = fn()
+		beatCount++
+	}
+
+	job := NewJobWithConf(MetricsJobConfig{
+		Trigger:           mockTrigger,
+		CredFetchInterval: 1, // fetch every beat
+	})
+
+	ctx := context.Background()
+	cancel := job.Register(ctx, pusher, authGetter)
+	defer cancel()
+
+	job.Shutdown()
+
+	if len(pusher.pushCalls) != 3 {
+		t.Fatalf("expected 3 Push calls, got %d", len(pusher.pushCalls))
+	}
+
+	// All pushes should use the last good creds, not empty
+	for i, call := range pusher.pushCalls {
+		if call.Dialect != "postgresql" {
+			t.Errorf("beat %d: expected postgresql dialect (cached), got %q", i+1, call.Dialect)
+		}
+		if call.Host != "cached-host" {
+			t.Errorf("beat %d: expected host 'cached-host', got %q", i+1, call.Host)
+		}
+	}
+}
+
+func TestRegister_KeepsLastGoodCredsWhenFetchReturnsUnsupportedDialects(t *testing.T) {
+	pusher := &mockPusher{}
+	authGetter := &mockAuthGetter{
+		creds: []credential.Credential{
+			{Dialect: "postgresql", Host: "cached-host"},
+		},
+	}
+
+	mockTrigger := func(ctx context.Context, fn func() error) {
+		// Beat 1: fetches postgresql creds, pushes
+		_ = fn()
+
+		// Platform rotates to unsupported dialect only (e.g. sqlite)
+		authGetter.creds = []credential.Credential{
+			{Dialect: "sqlite", Host: "unsupported-host"},
+		}
+
+		// Beats 2-3: unsupported-only fetch, should still push cached creds
+		_ = fn()
+		_ = fn()
+	}
+
+	job := NewJobWithConf(MetricsJobConfig{
+		Trigger:           mockTrigger,
+		CredFetchInterval: 1, // fetch every beat
+	})
+
+	ctx := context.Background()
+	cancel := job.Register(ctx, pusher, authGetter)
+	defer cancel()
+
+	job.Shutdown()
+
+	if len(pusher.pushCalls) != 3 {
+		t.Fatalf("expected 3 Push calls, got %d", len(pusher.pushCalls))
+	}
+
+	// All pushes should use the last good creds, not empty
+	for i, call := range pusher.pushCalls {
+		if call.Dialect != "postgresql" {
+			t.Errorf("beat %d: expected postgresql dialect (cached), got %q", i+1, call.Dialect)
+		}
+		if call.Host != "cached-host" {
+			t.Errorf("beat %d: expected host 'cached-host', got %q", i+1, call.Host)
+		}
+	}
+}
+
+func TestRegister_RefreshesCredsWhenFetchReturnsNewValues(t *testing.T) {
+	pusher := &mockPusher{}
+	authGetter := &mockAuthGetter{
+		creds: []credential.Credential{
+			{Dialect: "postgresql", Host: "old-host"},
+		},
+	}
+
+	mockTrigger := func(ctx context.Context, fn func() error) {
+		// Beat 1: fetches old-host creds, pushes
+		_ = fn()
+
+		// Platform rotates to a new endpoint
+		authGetter.creds = []credential.Credential{
+			{Dialect: "postgresql", Host: "new-host"},
+		}
+
+		// Beats 2-3: should push with new-host, not stale old-host
+		_ = fn()
+		_ = fn()
+	}
+
+	job := NewJobWithConf(MetricsJobConfig{
+		Trigger:           mockTrigger,
+		CredFetchInterval: 1, // fetch every beat
+	})
+
+	ctx := context.Background()
+	cancel := job.Register(ctx, pusher, authGetter)
+	defer cancel()
+
+	job.Shutdown()
+
+	if len(pusher.pushCalls) != 3 {
+		t.Fatalf("expected 3 Push calls, got %d", len(pusher.pushCalls))
+	}
+
+	if pusher.pushCalls[0].Host != "old-host" {
+		t.Errorf("beat 1: expected host 'old-host', got %q", pusher.pushCalls[0].Host)
+	}
+	for i := 1; i < 3; i++ {
+		if pusher.pushCalls[i].Host != "new-host" {
+			t.Errorf("beat %d: expected host 'new-host' after rotation, got %q", i+1, pusher.pushCalls[i].Host)
+		}
+	}
+}
+
 func TestRegister_ContextCancellation(t *testing.T) {
 	pusher := &mockPusher{}
 	authGetter := &mockAuthGetter{
