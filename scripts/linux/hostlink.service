@@ -10,6 +10,12 @@ EnvironmentFile=/etc/hostlink/hostlink.env
 ExecStart=/usr/bin/hostlink
 Restart=always
 RestartSec=90
+# Watchdog: agent sends WATCHDOG=1 keepalives via sd_notify (half-interval).
+# Kills the agent if it stops responding (total hang); Restart=always recovers.
+WatchdogSec=30
+# cgroup OOM limit: kills only hostlink on memory leaks (baseline ~18 MiB).
+MemoryAccounting=true
+MemoryMax=128M
 
 [Install]
 WantedBy=multi-user.target

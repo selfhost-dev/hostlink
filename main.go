@@ -26,6 +26,7 @@ import (
 	"hostlink/config/appconf"
 	"hostlink/internal/dbconn"
 	"hostlink/internal/httpclient"
+	"hostlink/internal/sdnotify"
 	"hostlink/internal/update"
 	"hostlink/internal/validator"
 	"hostlink/version"
@@ -227,6 +228,14 @@ func runUpgrade(ctx context.Context, cmd *cli.Command) error {
 }
 
 func runServer(ctx context.Context, cmd *cli.Command) error {
+	// SIGUSR1 diagnostics: dump all goroutine stacks to stderr (journald) on demand.
+	stopDump := upgrade.WatchSIGUSR1(os.Stderr)
+	defer stopDump()
+
+	// sd_notify: keep the systemd watchdog alive (no-op outside systemd).
+	stopWatchdog := sdnotify.StartWatchdog()
+	defer stopWatchdog()
+
 	db, err := dbconn.GetConn(
 		dbconn.WithURL(appconf.DBURL()),
 	)
@@ -342,6 +351,7 @@ func runServer(ctx context.Context, cmd *cli.Command) error {
 		<-jobCtx.Done()
 	}()
 
+	sdnotify.NotifyReady()
 	return e.Start(fmt.Sprintf(":%s", appconf.Port()))
 }
 
@@ -397,11 +407,29 @@ func recoverLocalTaskStore() (*localtaskstore.Store, error) {
 		return nil, err
 	}
 
+	if snap, err := store.Snapshot(); err != nil {
+		log.Printf("failed to load task store snapshot: %v", err)
+	} else {
+		logStaleLoopState(snap, log.Printf)
+	}
+
 	if err := store.MarkInterruptedRunningTasks(); err != nil {
 		_ = store.Close()
 		return nil, err
 	}
 	return store, nil
+}
+
+// logStaleLoopState reports persisted loop state recovered at startup
+// (in-flight task, received-not-started attempts, unacked outbox messages).
+// The last metric push time is not persisted anywhere, so it cannot be reported.
+func logStaleLoopState(snap localtaskstore.Snapshot, logf func(format string, args ...any)) {
+	inFlight := 0
+	if snap.RunningTask != nil {
+		inFlight = 1
+	}
+	logf("startup: recovered stale loop state: %d in-flight task(s), %d received-not-started, %d unacked final(s), %d unacked output range(s)",
+		inFlight, len(snap.ReceivedNotStarted), len(snap.UnackedFinals), len(snap.UnackedOutput))
 }
 
 func startSelfUpdateJob(ctx context.Context) {
