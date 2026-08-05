@@ -8,17 +8,24 @@ import (
 
 // TriggerConfig holds configuration for the Trigger function
 type TriggerConfig struct {
-	MaxRetries     int
-	InitialDelay   time.Duration
-	BackoffFactor  int
+	// MaxRetries bounds the number of attempts. Zero or negative means
+	// retry forever — an unregistered agent is useless, so giving up
+	// permanently bricks the host until a manual restart.
+	MaxRetries    int
+	InitialDelay  time.Duration
+	BackoffFactor int
+	// MaxDelay caps the exponential backoff between attempts.
+	MaxDelay time.Duration
 }
 
-// DefaultTriggerConfig returns the default configuration
+// DefaultTriggerConfig returns the default configuration: retry forever
+// with exponential backoff capped at 5 minutes.
 func DefaultTriggerConfig() TriggerConfig {
 	return TriggerConfig{
-		MaxRetries:     5,
-		InitialDelay:   10 * time.Second,
-		BackoffFactor:  2,
+		MaxRetries:    0,
+		InitialDelay:  10 * time.Second,
+		BackoffFactor: 2,
+		MaxDelay:      5 * time.Minute,
 	}
 }
 
@@ -26,18 +33,27 @@ func DefaultTriggerConfig() TriggerConfig {
 func triggerWithConfig(fn func() error, config TriggerConfig) {
 	retryDelay := config.InitialDelay
 
-	for attempt := 1; attempt <= config.MaxRetries; attempt++ {
+	for attempt := 1; config.MaxRetries <= 0 || attempt <= config.MaxRetries; attempt++ {
 		err := fn()
 		if err == nil {
 			return
 		}
 
-		log.Errorf("Registration attempt %d/%d failed: %v", attempt, config.MaxRetries, err)
+		if config.MaxRetries > 0 {
+			log.Errorf("Registration attempt %d/%d failed: %v", attempt, config.MaxRetries, err)
+			if attempt >= config.MaxRetries {
+				break
+			}
+		} else {
+			log.Errorf("Registration attempt %d failed: %v", attempt, err)
+		}
 
-		if attempt < config.MaxRetries {
-			log.Infof("Retrying in %v...", retryDelay)
-			time.Sleep(retryDelay)
-			retryDelay *= time.Duration(config.BackoffFactor)
+		log.Infof("Retrying in %v...", retryDelay)
+		time.Sleep(retryDelay)
+
+		retryDelay *= time.Duration(config.BackoffFactor)
+		if config.MaxDelay > 0 && retryDelay > config.MaxDelay {
+			retryDelay = config.MaxDelay
 		}
 	}
 
