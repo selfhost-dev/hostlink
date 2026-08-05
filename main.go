@@ -276,10 +276,14 @@ func runServer(ctx context.Context, cmd *cli.Command) error {
 			FingerprintPath: appconf.AgentFingerprintPath(),
 			AgentState:      agentstate.New(appconf.AgentStatePath()),
 			Trigger: func(fn func() error) {
+				// MaxRetries 0 = retry forever: the agent is useless until it
+				// registers, and giving up would leave the process blocked on
+				// registeredChan below with no heartbeat, tasks, or metrics.
 				registrationjob.TriggerWithConfig(fn, registrationjob.TriggerConfig{
-					MaxRetries:    5,
+					MaxRetries:    0,
 					InitialDelay:  appconf.RegistrationRetryInitialDelay(),
 					BackoffFactor: 2,
+					MaxDelay:      5 * time.Minute,
 				})
 			},
 		})
