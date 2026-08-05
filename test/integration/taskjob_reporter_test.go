@@ -273,7 +273,7 @@ func TestTaskJobReporter_IncludesAuthHeaders(t *testing.T) {
 	assert.True(t, hasSignature, "X-Signature header should be present")
 }
 
-func TestTaskJobReporter_FailedUpdateIsLogged(t *testing.T) {
+func TestTaskJobReporter_RetriesUpdateUntilDelivered(t *testing.T) {
 	env := setupTaskJobTestEnv(t)
 	defer env.cleanup()
 
@@ -285,16 +285,22 @@ func TestTaskJobReporter_FailedUpdateIsLogged(t *testing.T) {
 	err := env.container.TaskRepository.Create(context.Background(), testTask)
 	require.NoError(t, err)
 
-	var updateAttempted bool
+	// Transient 5xx must not drop the result: the reporter retries until the
+	// control plane accepts it (first attempt fails, second succeeds).
+	var updateAttempts int
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	wg.Add(1)
 
 	env.echo.PUT("/api/v1/tasks/:id", func(c echo.Context) error {
 		mu.Lock()
-		updateAttempted = true
+		updateAttempts++
+		attempt := updateAttempts
 		mu.Unlock()
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "server error"})
+		if attempt == 1 {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "server error"})
+		}
+		return c.NoContent(http.StatusOK)
 	})
 
 	job := taskjob.NewJobWithConf(taskjob.TaskJobConfig{
@@ -312,7 +318,7 @@ func TestTaskJobReporter_FailedUpdateIsLogged(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	assert.True(t, updateAttempted, "Update should be attempted even if it fails")
+	assert.GreaterOrEqual(t, updateAttempts, 2, "Update should be retried after a transient failure until delivered")
 }
 
 type taskJobTestEnv struct {
