@@ -22,12 +22,8 @@ import (
 // service-level half runs on UAT with the agent as a systemd service.
 func requireSystemd(t *testing.T) {
 	t.Helper()
-	if systemdRunPath == "" {
-		t.Skip("systemd-run not available")
-	}
-	probe := exec.Command(systemdRunPath, "--scope", "--quiet", "/bin/true")
-	if err := probe.Run(); err != nil {
-		t.Skipf("systemd bus not reachable: %v", err)
+	if probeSystemdRun() == "" {
+		t.Skip("systemd-run not available or no running systemd")
 	}
 }
 
@@ -73,6 +69,27 @@ func procCgroup(t *testing.T, pid int) string {
 
 func procAlive(pid int) bool {
 	return syscall.Kill(pid, 0) == nil
+}
+
+// TestBuildTaskCmd_ScopeIsolation - integration: with a working systemd the
+// task must land in its own scope cgroup and the exit code must propagate
+// through systemd-run. Skipped when systemd is absent/unusable.
+func TestBuildTaskCmd_ScopeIsolation(t *testing.T) {
+	requireSystemd(t)
+
+	cmd := buildTaskCmd("/bin/sh -c 'cat /proc/self/cgroup'")
+	out, err := cmd.Output()
+	require.NoError(t, err)
+
+	cgroup := strings.TrimSpace(string(out))
+	assert.Contains(t, cgroup, "hostlink-task-", "task must run in its own scope cgroup, got: %s", cgroup)
+
+	// Exit code propagation through the scope.
+	fail := buildTaskCmd("/bin/sh -c 'exit 42'")
+	runErr := fail.Run()
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, runErr, &exitErr)
+	assert.Equal(t, 42, exitErr.ExitCode())
 }
 
 // TestScope_SurvivesParentDeath - the scope is owned by systemd, so killing

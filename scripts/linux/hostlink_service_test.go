@@ -77,11 +77,16 @@ func TestUnitFile_TaskScopeCompatibility(t *testing.T) {
 }
 
 // TestUnitFile_SystemdAnalyzeVerify - validate syntax with systemd's own
-// verifier when available (Linux with systemd). Skipped elsewhere.
+// verifier when available (Linux with systemd and the ExecStart binary
+// installed, e.g. an agent host or the Vagrant test guest). Skipped
+// elsewhere — in CI there is no /usr/bin/hostlink to verify against.
 func TestUnitFile_SystemdAnalyzeVerify(t *testing.T) {
 	path, err := exec.LookPath("systemd-analyze")
 	if err != nil {
 		t.Skip("systemd-analyze not available")
+	}
+	if _, err := os.Stat("/usr/bin/hostlink"); err != nil {
+		t.Skip("/usr/bin/hostlink not installed; unit verify needs the real binary")
 	}
 	out, err := exec.Command(path, "verify", "hostlink.service").CombinedOutput()
 	assert.NoError(t, err, "systemd-analyze verify output: %s", string(out))
