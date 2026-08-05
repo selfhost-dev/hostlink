@@ -26,6 +26,7 @@ import (
 	"hostlink/config/appconf"
 	"hostlink/internal/dbconn"
 	"hostlink/internal/httpclient"
+	"hostlink/internal/sdnotify"
 	"hostlink/internal/update"
 	"hostlink/internal/validator"
 	"hostlink/version"
@@ -231,6 +232,10 @@ func runServer(ctx context.Context, cmd *cli.Command) error {
 	stopDump := upgrade.WatchSIGUSR1(os.Stderr)
 	defer stopDump()
 
+	// sd_notify: keep the systemd watchdog alive (no-op outside systemd).
+	stopWatchdog := sdnotify.StartWatchdog()
+	defer stopWatchdog()
+
 	db, err := dbconn.GetConn(
 		dbconn.WithURL(appconf.DBURL()),
 	)
@@ -346,6 +351,7 @@ func runServer(ctx context.Context, cmd *cli.Command) error {
 		<-jobCtx.Done()
 	}()
 
+	sdnotify.NotifyReady()
 	return e.Start(fmt.Sprintf(":%s", appconf.Port()))
 }
 
