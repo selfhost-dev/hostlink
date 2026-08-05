@@ -227,6 +227,10 @@ func runUpgrade(ctx context.Context, cmd *cli.Command) error {
 }
 
 func runServer(ctx context.Context, cmd *cli.Command) error {
+	// SIGUSR1 diagnostics: dump all goroutine stacks to stderr (journald) on demand.
+	stopDump := upgrade.WatchSIGUSR1(os.Stderr)
+	defer stopDump()
+
 	db, err := dbconn.GetConn(
 		dbconn.WithURL(appconf.DBURL()),
 	)

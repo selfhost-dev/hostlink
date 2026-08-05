@@ -1,8 +1,10 @@
 package upgrade
 
 import (
+	"bytes"
 	"context"
 	"os"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -44,6 +46,30 @@ func TestWatchSignals_StopPreventsCancel(t *testing.T) {
 
 	// Context should not be cancelled
 	assert.NoError(t, ctx.Err())
+}
+
+func TestWatchSIGUSR1_DumpsGoroutineStacksOnSignal(t *testing.T) {
+	var buf bytes.Buffer
+
+	stop := WatchSIGUSR1(&buf)
+	defer stop()
+
+	// Send SIGUSR1 to ourselves
+	proc, err := os.FindProcess(os.Getpid())
+	require.NoError(t, err)
+	require.NoError(t, proc.Signal(syscall.SIGUSR1))
+
+	// Wait for the goroutine dump to be written
+	require.Eventually(t, func() bool {
+		return strings.Contains(buf.String(), "goroutine")
+	}, 2*time.Second, 10*time.Millisecond)
+}
+
+func TestWatchSIGUSR1_StopIsSafe(t *testing.T) {
+	var buf bytes.Buffer
+
+	stop := WatchSIGUSR1(&buf)
+	stop() // Must not panic or block; signal watcher removed
 }
 
 func TestWatchSignals_MultipleCallsAreIndependent(t *testing.T) {
