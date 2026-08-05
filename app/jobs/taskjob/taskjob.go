@@ -236,7 +236,7 @@ func (tj *TaskJob) runTask(ctx context.Context, t task.Task, tr taskreporter.Tas
 		}
 		return
 	}
-	execCmd := exec.Command("/bin/sh", "-c", tempFile.Name())
+	execCmd := buildTaskCmd(tempFile.Name())
 	if channel != nil && t.ExecutionAttemptID != "" {
 		tj.processTaskWithResultChannel(ctx, t, execCmd, tr, channel)
 		return
