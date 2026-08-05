@@ -10,6 +10,8 @@ import (
 	"hostlink/config/appconf"
 	"net/http"
 	"time"
+
+	"github.com/labstack/gommon/log"
 )
 
 type TaskReporter interface {
@@ -56,9 +58,12 @@ func New(cfg *Config) (*taskreporter, error) {
 
 	retryConfig := cfg.RetryConfig
 	if retryConfig == nil {
+		// MaxRetries 0 = retry forever. A task result is the only record the
+		// control plane gets of the work — dropping it leaves the task stuck
+		// in_progress upstream (lease renewals continue) with no recovery path.
 		retryConfig = &RetryConfig{
-			MaxRetries:        5,
-			MaxWaitTime:       30 * time.Minute,
+			MaxRetries:        0,
+			MaxWaitTime:       5 * time.Minute,
 			InitialBackoff:    1000 * time.Millisecond,
 			BackoffMultiplier: 2,
 		}
@@ -104,17 +109,21 @@ func NewDefault() (*taskreporter, error) {
 }
 
 func (tr *taskreporter) Report(taskID string, result *TaskResult) error {
+	jsonData, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("failed to marshal task result: %w", err)
+	}
+
+	url := tr.controlPlaneURL + "/api/v1/tasks/" + taskID
+
 	var lastErr error
 	backoff := tr.retryConfig.InitialBackoff
 
-	for attempt := range tr.retryConfig.MaxRetries + 1 {
-		jsonData, err := json.Marshal(result)
-		if err != nil {
-			return fmt.Errorf("failed to marshal task result: %w", err)
-		}
-
-		url := tr.controlPlaneURL + "/api/v1/tasks/" + taskID
-
+	// MaxRetries <= 0 retries forever: transient outages (tunnel blips, control
+	// plane restarts, rate limiting) must never drop a final result. Semantic
+	// rejections (non-retryable 4xx) still fail fast — retrying an identical
+	// payload the server rejected cannot succeed.
+	for attempt := 1; ; attempt++ {
 		req, err := http.NewRequest("PUT", url, bytes.NewBuffer(jsonData))
 		if err != nil {
 			return fmt.Errorf("failed to create request: %w", err)
@@ -129,28 +138,31 @@ func (tr *taskreporter) Report(taskID string, result *TaskResult) error {
 		resp, err := tr.client.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("request failed: %w", err)
-			if attempt < tr.retryConfig.MaxRetries {
-				tr.sleepFunc(backoff)
-				backoff = min(backoff*time.Duration(tr.retryConfig.BackoffMultiplier), tr.retryConfig.MaxWaitTime)
-			}
-			continue
-		}
-		defer resp.Body.Close()
+		} else {
+			statusCode := resp.StatusCode
+			resp.Body.Close()
 
-		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-			if resp.StatusCode >= 500 && attempt < tr.retryConfig.MaxRetries {
-				tr.sleepFunc(backoff)
-				backoff = min(backoff*time.Duration(tr.retryConfig.BackoffMultiplier), tr.retryConfig.MaxWaitTime)
-				continue
+			if statusCode == http.StatusOK {
+				return nil
 			}
+
+			lastErr = fmt.Errorf("unexpected status code: %d", statusCode)
+			retryable := statusCode >= 500 ||
+				statusCode == http.StatusTooManyRequests ||
+				statusCode == http.StatusRequestTimeout
+			if !retryable {
+				return lastErr
+			}
+		}
+
+		if tr.retryConfig.MaxRetries > 0 && attempt > tr.retryConfig.MaxRetries {
 			return lastErr
 		}
 
-		return nil
+		log.Warnf("failed to report task %s (attempt %d): %v — retrying in %v", taskID, attempt, lastErr, backoff)
+		tr.sleepFunc(backoff)
+		backoff = min(backoff*time.Duration(tr.retryConfig.BackoffMultiplier), tr.retryConfig.MaxWaitTime)
 	}
-
-	return lastErr
 }
 
 func min(a, b time.Duration) time.Duration {

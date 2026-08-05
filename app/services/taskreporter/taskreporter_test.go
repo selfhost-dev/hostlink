@@ -296,12 +296,21 @@ func TestTaskReporter_Report(t *testing.T) {
 		}
 	})
 
-	t.Run("should handle 500 response", func(t *testing.T) {
+	// 500s and network errors retry forever under the default config (a final
+	// result must never be dropped), so error propagation for them is covered
+	// with bounded configs in TestTaskReporter_RetryLogic.
+
+	t.Run("should handle 500 response with bounded retries", func(t *testing.T) {
 		keys := setupTestKeys(t)
 		server := createServerWithStatusCode(t, http.StatusInternalServerError)
 		defer server.Close()
 
-		reporter := setupTestReporter(t, server.URL, keys)
+		reporter := setupTestReporterWithRetry(t, server.URL, keys, &RetryConfig{
+			MaxRetries:        2,
+			MaxWaitTime:       100 * time.Millisecond,
+			InitialBackoff:    time.Millisecond,
+			BackoffMultiplier: 2,
+		})
 		result := &TaskResult{Status: "completed", Output: "test", Error: "", ExitCode: 0}
 
 		err := reporter.Report("task-123", result)
@@ -314,8 +323,13 @@ func TestTaskReporter_Report(t *testing.T) {
 		}
 	})
 
-	t.Run("should handle network errors", func(t *testing.T) {
-		reporter := setupTestReporter(t, "http://invalid-host-does-not-exist:9999", setupTestKeys(t))
+	t.Run("should handle network errors with bounded retries", func(t *testing.T) {
+		reporter := setupTestReporterWithRetry(t, "http://invalid-host-does-not-exist:9999", setupTestKeys(t), &RetryConfig{
+			MaxRetries:        2,
+			MaxWaitTime:       100 * time.Millisecond,
+			InitialBackoff:    time.Millisecond,
+			BackoffMultiplier: 2,
+		})
 		result := &TaskResult{Status: "completed", Output: "test", Error: "", ExitCode: 0}
 
 		err := reporter.Report("task-123", result)
