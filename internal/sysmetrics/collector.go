@@ -60,12 +60,16 @@ type Collector interface {
 
 type Config struct {
 	Collector SystemCollector
+	// CgroupRoot overrides the cgroup v2 mount root (default /sys/fs/cgroup).
+	CgroupRoot string
 }
 
 type collector struct {
-	sys         SystemCollector
-	lastCPU     *CPUStats
-	lastCPUTime time.Time
+	sys           SystemCollector
+	lastCPU       *CPUStats
+	lastCPUTime   time.Time
+	cgroupRoot    string
+	ownCgroupPath string
 }
 
 func New() Collector {
@@ -79,8 +83,14 @@ func NewWithConfig(cfg *Config) Collector {
 	} else {
 		sys = &gopsutilCollector{}
 	}
+	cgroupRoot := "/sys/fs/cgroup"
+	if cfg != nil && cfg.CgroupRoot != "" {
+		cgroupRoot = cfg.CgroupRoot
+	}
 	return &collector{
-		sys: sys,
+		sys:           sys,
+		cgroupRoot:    cgroupRoot,
+		ownCgroupPath: ownCgroupPath(),
 	}
 }
 
@@ -114,6 +124,10 @@ func (c *collector) Collect(ctx context.Context) (metrics.SystemMetrics, error) 
 	if err == nil {
 		m.DiskUsagePercent = diskPercent
 	}
+
+	hostlinkEvents, postgresEvents := c.collectMemoryEvents(c.cgroupRoot)
+	m.HostlinkMemoryEvents = hostlinkEvents
+	m.PostgresMemoryEvents = postgresEvents
 
 	return m, nil
 }

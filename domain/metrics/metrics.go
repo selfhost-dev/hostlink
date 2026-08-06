@@ -44,6 +44,21 @@ type SystemMetrics struct {
 	LoadAvg5         float64 `json:"load_avg_5"`
 	LoadAvg15        float64 `json:"load_avg_15"`
 	SwapUsagePercent float64 `json:"swap_usage_percent"`
+
+	// Cgroup v2 memory pressure counters (monotonic, reset on unit restart).
+	// Zero when the unit is absent or the host uses cgroup v1 — never an error.
+	HostlinkMemoryEvents CgroupMemoryEvents `json:"hostlink_memory_events"`
+	PostgresMemoryEvents CgroupMemoryEvents `json:"postgres_memory_events"`
+}
+
+// CgroupMemoryEvents mirrors the counters of /sys/fs/cgroup/.../memory.events.
+type CgroupMemoryEvents struct {
+	Low          uint64 `json:"low"`
+	High         uint64 `json:"high"`
+	Max          uint64 `json:"max"`
+	OOM          uint64 `json:"oom"`
+	OOMKill      uint64 `json:"oom_kill"`
+	OOMGroupKill uint64 `json:"oom_group_kill"`
 }
 
 type NetworkMetrics struct {
