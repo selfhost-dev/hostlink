@@ -119,7 +119,7 @@ func TestCollect_MalformedMemoryEvents_ReturnsZerosNoError(t *testing.T) {
 
 func TestCollect_OtherFailuresStillCollected(t *testing.T) {
 	mock := &mockSystemCollector{
-		cpuErr:  errors.New("cpu error"),
+		cpuErr:   errors.New("cpu error"),
 		memStats: MemoryStats{UsedPercent: 45.0},
 	}
 	root := t.TempDir()
