@@ -61,17 +61,22 @@ func (mj *MetricsJob) Register(ctx context.Context, mp metrics.Pusher, mcred met
 					return err
 				}
 
-				lastDbCred = credential.Credential{}
-				for _, cred := range creds {
-					if cred.Dialect == "postgresql" {
-						lastDbCred = cred
-						break
-					}
-					if lastDbCred.Dialect == "" {
-						switch cred.Dialect {
-						case "mysql", "mariadb", "mongodb", "redis":
-							lastDbCred = cred
+				if len(creds) > 0 {
+					var next credential.Credential
+					for _, cred := range creds {
+						if cred.Dialect == "postgresql" {
+							next = cred
+							break
 						}
+						if next.Dialect == "" {
+							switch cred.Dialect {
+							case "mysql", "mariadb", "mongodb", "redis", "clickhouse", "opensearch":
+								next = cred
+							}
+						}
+					}
+					if next.Dialect != "" {
+						lastDbCred = next
 					}
 				}
 			}

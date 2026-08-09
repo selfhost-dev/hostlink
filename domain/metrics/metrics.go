@@ -13,7 +13,8 @@ const (
 	MetricTypeContainer          = "container"
 	MetricTypeTraefikService     = "traefik.proxy"
 	MetricTypeTraefikRouter      = "traefik.router"
-	MetricTypeClickHouseDatabase = "clickhouse.database"
+	MetricTypeClickHouseDatabase  = "clickhouse.database"
+	MetricTypeOpenSearchDatabase  = "opensearch.database"
 )
 
 type MetricPayload struct {
@@ -43,6 +44,21 @@ type SystemMetrics struct {
 	LoadAvg5         float64 `json:"load_avg_5"`
 	LoadAvg15        float64 `json:"load_avg_15"`
 	SwapUsagePercent float64 `json:"swap_usage_percent"`
+
+	// Cgroup v2 memory pressure counters (monotonic, reset on unit restart).
+	// Zero when the unit is absent or the host uses cgroup v1 — never an error.
+	HostlinkMemoryEvents CgroupMemoryEvents `json:"hostlink_memory_events"`
+	PostgresMemoryEvents CgroupMemoryEvents `json:"postgres_memory_events"`
+}
+
+// CgroupMemoryEvents mirrors the counters of /sys/fs/cgroup/.../memory.events.
+type CgroupMemoryEvents struct {
+	Low          uint64 `json:"low"`
+	High         uint64 `json:"high"`
+	Max          uint64 `json:"max"`
+	OOM          uint64 `json:"oom"`
+	OOMKill      uint64 `json:"oom_kill"`
+	OOMGroupKill uint64 `json:"oom_group_kill"`
 }
 
 type NetworkMetrics struct {
@@ -230,6 +246,29 @@ type TraefikRouterAttributes struct {
 	Service        string `json:"service,omitempty"`
 }
 
+// OpenSearchDatabaseMetrics holds key operational metrics scraped from an
+// OpenSearch cluster via its REST API. ClusterStatus is encoded as an integer
+// (0=green, 1=yellow, 2=red) so that numeric alert rules can be evaluated
+// against it (e.g. cluster_status > 0 means not green). Rate fields
+// (IndexingRate, SearchRate) are per-second deltas; the first collection cycle
+// stores a baseline and returns zero for all rates.
+type OpenSearchDatabaseMetrics struct {
+	Up                    bool    `json:"up"`
+	ClusterStatus         int     `json:"cluster_status"`
+	ActiveShards          int     `json:"active_shards"`
+	RelocatingShards      int     `json:"relocating_shards"`
+	InitializingShards    int     `json:"initializing_shards"`
+	UnassignedShards      int     `json:"unassigned_shards"`
+	ActivePrimaryShards   int     `json:"active_primary_shards"`
+	NumberOfNodes         int     `json:"number_of_nodes"`
+	JvmHeapUsedPercent    float64 `json:"jvm_heap_used_percent"`
+	CPUPercent            float64 `json:"cpu_percent"`
+	DiskUsedPercent       float64 `json:"disk_used_percent"`
+	IndexingRate          float64 `json:"indexing_rate"`
+	SearchRate            float64 `json:"search_rate"`
+	ReplicationLagSeconds int     `json:"replication_lag_seconds"`
+}
+
 // ClickHouseDatabaseMetrics holds the key operational metrics scraped from a
 // ClickHouse instance via its HTTP interface. Rate fields are per-second deltas;
 // the first collection cycle stores a baseline and returns zero for all rates.
@@ -248,9 +287,6 @@ type ClickHouseDatabaseMetrics struct {
 	BackgroundMergesCount  int     `json:"background_merges_count"`
 	ReplicationDelay       int     `json:"replication_delay"`
 	ReplicationLagSeconds  int     `json:"replication_lag_seconds"`
-	// ActiveReplicaCount is the number of distinct replica hosts participating
-	// in replication (system.replicas, not read-only). Omitted for standalone
-	// nodes where system.replicas is empty.
 	ActiveReplicaCount *int `json:"active_replica_count,omitempty"`
 	DiskUsedBytes          int64   `json:"disk_used_bytes"`
 	BrokenPartsCount       int     `json:"broken_parts_count"`

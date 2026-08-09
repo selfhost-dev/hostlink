@@ -10,6 +10,17 @@ EnvironmentFile=/etc/hostlink/hostlink.env
 ExecStart=/usr/bin/hostlink
 Restart=always
 RestartSec=90
+# Watchdog: agent sends WATCHDOG=1 keepalives via sd_notify (half-interval).
+# Kills the agent if it stops responding (total hang); Restart=always recovers.
+WatchdogSec=30
+# Memory protection for the agent process only: tasks run in their own
+# transient systemd scopes (see app/jobs/taskjob) and are NOT charged here.
+# MemoryHigh is a soft limit (throttle + reclaim, incl. page cache) while
+# MemoryMax is the hard OOM backstop. Baseline ~25 MiB (incl. ~77 MiB page
+# cache under load); 256M/512M leaves headroom without losing leak protection.
+MemoryAccounting=true
+MemoryHigh=256M
+MemoryMax=512M
 
 [Install]
 WantedBy=multi-user.target
