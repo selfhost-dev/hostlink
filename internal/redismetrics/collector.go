@@ -69,6 +69,7 @@ func (rc *redisCollector) Collect(cred credential.Credential) (metrics.RedisMetr
 		EvictedKeys:            parseInt64(fields["evicted_keys"]),
 		ExpiredKeys:            parseInt64(fields["expired_keys"]),
 		Role:                   fields["role"],
+		ConnectedSlaves:        parseInt(fields["connected_slaves"]),
 	}
 
 	// Keyspace hit ratio

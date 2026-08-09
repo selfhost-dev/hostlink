@@ -134,6 +134,10 @@ func TestCollector_Collect(t *testing.T) {
 
 	// Standalone primary has no replication_connected
 	assert.Nil(t, metrics.ReplicationConnected, "standalone primary has no replication_connected")
+
+	// Standalone primary reports an active replica count of 0
+	require.NotNil(t, metrics.ActiveReplicaCount, "primary should always report active_replica_count")
+	assert.Equal(t, 0, *metrics.ActiveReplicaCount, "standalone primary has no streaming replicas")
 }
 
 func TestCollector_Collect_InvalidCredentials(t *testing.T) {
@@ -321,6 +325,13 @@ func TestCollector_Collect_Replica(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, primaryMetrics.ReplicationConnected, "primary should not report replication_connected")
 	assert.GreaterOrEqual(t, primaryMetrics.ReplicationLagSeconds, 0, "primary lag should be >= 0")
+
+	// Primary sees the streaming replica: active_replica_count == 1
+	require.NotNil(t, primaryMetrics.ActiveReplicaCount, "primary should always report active_replica_count")
+	assert.Equal(t, 1, *primaryMetrics.ActiveReplicaCount, "primary should see the connected streaming replica")
+
+	// Replica has no downstream replicas: active_replica_count omitted
+	assert.Nil(t, replicaMetrics.ActiveReplicaCount, "replica should not report active_replica_count")
 }
 
 func BenchmarkCollector_Collect(b *testing.B) {

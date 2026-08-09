@@ -60,6 +60,10 @@ type PostgreSQLDatabaseMetrics struct {
 	BlocksReadPerSecond   float64 `json:"blocks_read_per_second"`
 	ReplicationLagSeconds int     `json:"replication_lag_seconds"`
 	ReplicationConnected  *bool   `json:"replication_connected,omitempty"`
+	// ActiveReplicaCount is the number of replicas currently streaming from
+	// this primary (pg_stat_replication). Only meaningful on the primary node;
+	// nil (omitted from JSON) on replicas.
+	ActiveReplicaCount *int `json:"active_replica_count,omitempty"`
 	// TimescaleDB metrics — only populated when the extension is installed.
 	TimescaledbHypertableCount      *int64   `json:"timescaledb_hypertable_count,omitempty"`
 	TimescaledbChunkCount           *int64   `json:"timescaledb_chunk_count,omitempty"`
@@ -124,6 +128,10 @@ type MySQLDatabaseMetrics struct {
 	SelectFullScansPerSecond      float64 `json:"select_full_scans_per_second"`
 	ReplicationLagSeconds         *int    `json:"replication_lag_seconds,omitempty"`
 	ReplicationConnected          *bool   `json:"replication_connected,omitempty"`
+	// ActiveReplicaCount is the number of downstream replicas streaming from
+	// this primary (binlog dump threads). Only meaningful on the primary node;
+	// nil (omitted from JSON) on replicas.
+	ActiveReplicaCount *int `json:"active_replica_count,omitempty"`
 }
 
 type MongoDBMetrics struct {
@@ -151,6 +159,9 @@ type RedisMetrics struct {
 	Role                   string  `json:"role"`
 	ReplicationLagSeconds  *int    `json:"replication_lag_seconds,omitempty"`
 	ReplicationConnected   *bool   `json:"replication_connected,omitempty"`
+	// ConnectedSlaves is the number of replicas connected to this node, from
+	// the INFO replication section.
+	ConnectedSlaves int `json:"connected_slaves"`
 }
 
 // ContainerMetrics holds resource and health data for a single Docker container.
@@ -237,6 +248,10 @@ type ClickHouseDatabaseMetrics struct {
 	BackgroundMergesCount  int     `json:"background_merges_count"`
 	ReplicationDelay       int     `json:"replication_delay"`
 	ReplicationLagSeconds  int     `json:"replication_lag_seconds"`
+	// ActiveReplicaCount is the number of distinct replica hosts participating
+	// in replication (system.replicas, not read-only). Omitted for standalone
+	// nodes where system.replicas is empty.
+	ActiveReplicaCount *int `json:"active_replica_count,omitempty"`
 	DiskUsedBytes          int64   `json:"disk_used_bytes"`
 	BrokenPartsCount       int     `json:"broken_parts_count"`
 	MarkCacheHitRatio      float64 `json:"mark_cache_hit_ratio"`

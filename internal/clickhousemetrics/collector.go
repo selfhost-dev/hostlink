@@ -121,6 +121,15 @@ func (c *collector) Collect(cred credential.Credential) (metrics.ClickHouseDatab
 		m.ReplicationLagSeconds = delay
 	}
 
+	// Active replica count: distinct replica hosts participating in
+	// replication. Omitted for standalone nodes (system.replicas is empty).
+	replicaCountRows, err := c.query(baseURL, cred.Username, password,
+		"SELECT uniqExact(hostname) AS value FROM system.replicas WHERE is_readonly = 0 FORMAT JSONEachRow")
+	if err == nil && len(replicaCountRows) > 0 {
+		count := int(toInt64(replicaCountRows[0]["value"]))
+		m.ActiveReplicaCount = &count
+	}
+
 	// Mark cache: ratio of hits to total lookups
 	hits := events["MarkCacheHits"]
 	misses := events["MarkCacheMisses"]
