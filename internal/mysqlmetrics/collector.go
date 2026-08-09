@@ -71,6 +71,9 @@ func (mc *mysqlCollector) Collect(cred credential.Credential) (metrics.MySQLData
 	// Non-fatal: replication is optional
 	_ = mc.collectReplication(ctx, db, &m)
 
+	// Non-fatal: downstream replica count is only meaningful on a primary
+	_ = mc.collectPrimaryReplicaCount(ctx, db, &m)
+
 	return m, nil
 }
 
@@ -194,6 +197,30 @@ func (mc *mysqlCollector) collectReplication(ctx context.Context, db *sql.DB, m 
 	m.ReplicationConnected = &connected
 
 	return rows.Err()
+}
+
+// collectPrimaryReplicaCount reports how many replicas are streaming from this
+// node. On a primary, every downstream replica appears as a binlog-dump thread
+// in the process list. A node that is itself a replica (SHOW REPLICA STATUS had
+// rows, so ReplicationConnected is set) has no downstream replicas and the
+// metric is left nil (omitted from JSON).
+func (mc *mysqlCollector) collectPrimaryReplicaCount(ctx context.Context, db *sql.DB, m *metrics.MySQLDatabaseMetrics) error {
+	if m.ReplicationConnected != nil {
+		return nil
+	}
+
+	var count int
+	err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM information_schema.PROCESSLIST
+		WHERE COMMAND IN ('Binlog Dump', 'Binlog Dump GTID')
+	`).Scan(&count)
+	if err != nil {
+		return err
+	}
+	m.ActiveReplicaCount = &count
+
+	return nil
 }
 
 func parseInt(s string) int {

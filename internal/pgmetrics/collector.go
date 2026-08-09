@@ -211,6 +211,17 @@ func (pgm *pgmetrics) collectPrimaryReplicationMetrics(ctx context.Context, db *
 		m.ReplicationLagSeconds = int(lag.Int64)
 	}
 
+	// Count of replicas actively streaming from this primary. SUM over
+	// pg_stat_replication with a state filter: every wal-sender is one
+	// downstream replica, so COUNT(*) of streaming senders is the active set.
+	var replicaCount int
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pg_stat_replication WHERE state = 'streaming'`,
+	).Scan(&replicaCount); err != nil {
+		return fmt.Errorf("primary replica count: %w", err)
+	}
+	m.ActiveReplicaCount = &replicaCount
+
 	return nil
 }
 

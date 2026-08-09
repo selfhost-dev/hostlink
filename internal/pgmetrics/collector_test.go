@@ -172,3 +172,23 @@ func TestTimescaledbMetrics_JSONIncludeWhenSet(t *testing.T) {
 	assert.Contains(t, jsonStr, `"timescaledb_compression_ratio":3.5`)
 	assert.Contains(t, jsonStr, `"timescaledb_total_size_bytes":1073741824`)
 }
+
+func TestActiveReplicaCount_JSONOmitEmpty(t *testing.T) {
+	m := metrics.PostgreSQLDatabaseMetrics{
+		Up: true,
+	}
+	data, err := json.Marshal(m)
+	assert.NoError(t, err)
+	assert.NotContains(t, string(data), "active_replica_count", "nil ActiveReplicaCount should be omitted from JSON")
+}
+
+func TestActiveReplicaCount_JSONIncludeWhenSet(t *testing.T) {
+	count := 3
+	m := metrics.PostgreSQLDatabaseMetrics{
+		Up:                true,
+		ActiveReplicaCount: &count,
+	}
+	data, err := json.Marshal(m)
+	assert.NoError(t, err)
+	assert.Contains(t, string(data), `"active_replica_count":3`)
+}
