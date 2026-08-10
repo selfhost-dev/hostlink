@@ -217,7 +217,7 @@ func TestCollect_MarkCacheHitRatio_ZeroTotal(t *testing.T) {
 	c := New()
 	m, err := c.Collect(credForServer(srv))
 	require.NoError(t, err)
-	assert.Equal(t, 0.0, m.MarkCacheHitRatio, "zero cache lookups → ratio must be 0, not NaN")
+	assert.Equal(t, 100.0, m.MarkCacheHitRatio, "zero cache lookups → nothing missed: 100, matching the PostgreSQL collector's idle case (and never NaN)")
 }
 
 func TestToInt64(t *testing.T) {
