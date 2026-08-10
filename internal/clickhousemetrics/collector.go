@@ -130,11 +130,18 @@ func (c *collector) Collect(cred credential.Credential) (metrics.ClickHouseDatab
 		m.ActiveReplicaCount = &count
 	}
 
-	// Mark cache: ratio of hits to total lookups
+	// Mark cache: ratio of hits to total lookups.
+	// Zero lookups (idle or insert-only node — inserts and system.* queries never
+	// read MergeTree marks) means nothing was missed: report 100, mirroring the
+	// PostgreSQL collector (blks_hit+blks_read = 0 → 100.0). Reporting 0 made
+	// every quiet ClickHouse node look critical on a below-90% alert band while
+	// an equally idle Postgres showed perfect.
 	hits := events["MarkCacheHits"]
 	misses := events["MarkCacheMisses"]
 	if total := hits + misses; total > 0 {
 		m.MarkCacheHitRatio = float64(hits) / float64(total) * 100
+	} else {
+		m.MarkCacheHitRatio = 100
 	}
 
 	// Delta-based rate metrics. First call stores the baseline and returns zero
