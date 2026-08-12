@@ -262,7 +262,7 @@ func (f *fakeResultChannel) SendFinal(ctx context.Context, result localtaskstore
 
 func waitForOutputs(t *testing.T, channel *fakeResultChannel, count int) {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(waitForReportsDeadline)
 	for time.Now().Before(deadline) {
 		channel.mu.Lock()
 		current := len(channel.outputs)

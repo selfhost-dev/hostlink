@@ -8,6 +8,12 @@ import (
 	"time"
 )
 
+// waitForReportsDeadline bounds how long tests poll for async runner output.
+// The cap must be generous: the runner consumes tasks on a separate goroutine
+// and CI machines under parallel load can exceed a tight deadline. Tests that
+// succeed do so in milliseconds and return early.
+const waitForReportsDeadline = 10 * time.Second
+
 func TestTaskJobSkipsPollingFetchWhenPollingGateDisabled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -67,7 +73,7 @@ func (f *fakeTaskReporter) resultsSnapshot() []*taskreporter.TaskResult {
 
 func waitForReports(t *testing.T, reporter *fakeTaskReporter, count int) {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(waitForReportsDeadline)
 	for time.Now().Before(deadline) {
 		if len(reporter.resultsSnapshot()) >= count {
 			return

@@ -71,6 +71,7 @@ func standardHandlers(queryCount, selectCount, insertCount, failedCount, insertR
 			`{"event":"MarkCacheMisses","value":100}`,
 		}, "\n"),
 		"system.parts": `{"value":42}`,
+		"system.zookeeper": `{"value":1}`,
 	}
 }
 
@@ -92,6 +93,7 @@ func TestCollect_FirstCollection_ReturnsZeroRates(t *testing.T) {
 	assert.Equal(t, 0.0, m.InsertedRowsPerSecond)
 	assert.Equal(t, 90.0, m.MarkCacheHitRatio, "900/(900+100)*100 = 90%")
 	assert.Equal(t, 42, m.PartsActive)
+	assert.True(t, m.KeeperConnected, "standard handler serves a non-empty system.zookeeper root")
 }
 
 func TestCollect_SecondCollection_ReturnsDeltaRates(t *testing.T) {
@@ -218,6 +220,60 @@ func TestCollect_MarkCacheHitRatio_ZeroTotal(t *testing.T) {
 	m, err := c.Collect(credForServer(srv))
 	require.NoError(t, err)
 	assert.Equal(t, 100.0, m.MarkCacheHitRatio, "zero cache lookups → nothing missed: 100, matching the PostgreSQL collector's idle case (and never NaN)")
+}
+
+func TestCollect_KeeperConnected_QuorumPresent(t *testing.T) {
+	handlers := standardHandlers(1000, 800, 100, 5, 5000)
+	handlers["system.zookeeper"] = `{"value":4}`
+
+	srv := mockClickHouseServer(t, handlers)
+	defer srv.Close()
+
+	c := New()
+	m, err := c.Collect(credForServer(srv))
+	require.NoError(t, err)
+	assert.True(t, m.KeeperConnected, "system.zookeeper root readable with entries → quorum present")
+}
+
+func TestCollect_KeeperDisconnected_QuorumLost(t *testing.T) {
+	handlers := standardHandlers(1000, 800, 100, 5, 5000)
+	handlers["system.zookeeper"] = `{"value":0}`
+
+	srv := mockClickHouseServer(t, handlers)
+	defer srv.Close()
+
+	c := New()
+	m, err := c.Collect(credForServer(srv))
+	require.NoError(t, err)
+	assert.False(t, m.KeeperConnected, "empty system.zookeeper root → no quorum")
+}
+
+func TestCollect_KeeperDisconnected_ZKQueryErrors(t *testing.T) {
+	// The mock returns HTTP 500 for the system.zookeeper query (unreadable
+	// root — the quorum-loss signature, before keeper_config on a fresh
+	// node). The rest of the collection continues; only the keeper signal
+	// reads "disconnected".
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		q := string(body)
+		switch {
+		case strings.Contains(q, "system.zookeeper"):
+			http.Error(w, "zookeeper query failed", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		for key, resp := range standardHandlers(1000, 800, 100, 5, 5000) {
+			if strings.Contains(q, key) {
+				fmt.Fprint(w, resp)
+				return
+			}
+		}
+	}))
+
+	c := New()
+	m, err := c.Collect(credForServer(srv))
+	require.NoError(t, err)
+	assert.False(t, m.KeeperConnected, "unreadable system.zookeeper → no quorum (zk_count=ERR)")
 }
 
 func TestToInt64(t *testing.T) {

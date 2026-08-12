@@ -292,6 +292,16 @@ type ClickHouseDatabaseMetrics struct {
 	BrokenPartsCount       int     `json:"broken_parts_count"`
 	MarkCacheHitRatio      float64 `json:"mark_cache_hit_ratio"`
 	PartsActive            int     `json:"parts_active"`
+
+	// KeeperConnected reports whether this node's embedded ClickHouse Keeper
+	// has a live raft quorum: `system.zookeeper` is only readable once the
+	// keeper connects to a quorum of its peers, so an unreadable root (error
+	// or empty count) means quorum loss — the same primary signal the
+	// server's clickhouse_keeper_readiness_check probe tests.
+	// False also when keeper is not configured (single-node / keeper-only
+	// arbiters use a standalone process, so this metric is only meaningful on
+	// multi-AZ data nodes).
+	KeeperConnected bool `json:"keeper_connected"`
 }
 
 type ContainerAttributes struct {

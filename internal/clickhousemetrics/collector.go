@@ -56,6 +56,18 @@ func (c *collector) Collect(cred credential.Credential) (metrics.ClickHouseDatab
 
 	var m metrics.ClickHouseDatabaseMetrics
 
+	// Keeper raf t quorum: system.zookeeper root is readable only after this
+	// node's embedded Keeper connects to a quorum of its peers (same check #1
+	// as the server's clickhouse_keeper_readiness_check probe). An error or
+	// an empty root = no quorum. Keeper-permissioned errors (e.g. before
+	// keeper_config runs) also read as "not connected" — the server-side
+	// monitor applies its own cluster-setup gate on top of this metric.
+	keeperRows, zkErr := c.query(baseURL, cred.Username, password,
+		"SELECT count() AS value FROM system.zookeeper WHERE path='/' FORMAT JSONEachRow")
+	if zkErr == nil && len(keeperRows) > 0 {
+		m.KeeperConnected = toInt64(keeperRows[0]["value"]) > 0
+	}
+
 	// Point-in-time metrics from system.metrics
 	sysRows, err := c.query(baseURL, cred.Username, password,
 		"SELECT metric, value FROM system.metrics WHERE metric IN ('TCPConnection','HTTPConnection','MemoryTracking','BackgroundMergesAndMutationsPoolTask','BackgroundPoolTask') FORMAT JSONEachRow")
