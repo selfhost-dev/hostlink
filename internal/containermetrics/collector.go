@@ -257,7 +257,23 @@ func (cc *containerCollector) collectOne(
 		CoolifyEnvironmentID: labels["coolify.environmentId"],
 		CoolifyType:          labels["coolify.type"],
 		CoolifyName:          labels["coolify.name"],
+		CoolifyServiceID:     coolifyServiceID(labels),
 	}
 
 	return ContainerMetricSet{Attributes: attrs, Metrics: m}, nil
+}
+
+// coolifyServiceID returns the Coolify SERVICE resource uuid for a container so
+// the control plane can tie its metrics to the CoolifyService. Coolify tags a
+// service's containers with coolify.serviceId; for its docker-compose-based
+// services (Twenty, n8n) that same uuid is also the compose project name. The
+// control plane's per-project resource map is keyed by this uuid, whereas
+// container_name/coolify_name are per-component human names ("twenty", "worker")
+// that don't contain it. Empty for standalone apps/databases, which the control
+// plane attributes by other means (coolify_app_id / container name).
+func coolifyServiceID(labels map[string]string) string {
+	if v := labels["coolify.serviceId"]; v != "" {
+		return v
+	}
+	return labels["com.docker.compose.project"]
 }
