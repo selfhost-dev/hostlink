@@ -66,3 +66,35 @@ func TestResolveContainerName(t *testing.T) {
 		})
 	}
 }
+
+func TestCoolifyServiceID(t *testing.T) {
+	tests := []struct {
+		name     string
+		labels   map[string]string
+		expected string
+	}{
+		{
+			name:     "prefers coolify.serviceId label",
+			labels:   map[string]string{"coolify.serviceId": "svcuuid123", "com.docker.compose.project": "projxyz"},
+			expected: "svcuuid123",
+		},
+		{
+			name:     "falls back to compose project (Coolify uses the service uuid as the project)",
+			labels:   map[string]string{"com.docker.compose.project": "twentyuuid456"},
+			expected: "twentyuuid456",
+		},
+		{
+			name:     "empty when neither present (non-service container)",
+			labels:   map[string]string{"coolify.name": "twenty", "com.docker.compose.service": "twenty"},
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := coolifyServiceID(tt.labels); got != tt.expected {
+				t.Errorf("coolifyServiceID() = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}

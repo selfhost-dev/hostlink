@@ -313,4 +313,12 @@ type ContainerAttributes struct {
 	CoolifyEnvironmentID string `json:"coolify_environment_id,omitempty"`
 	CoolifyType          string `json:"coolify_type,omitempty"`
 	CoolifyName          string `json:"coolify_name,omitempty"`
+	// CoolifyServiceID is the Coolify SERVICE resource uuid — the coolify.serviceId
+	// label, or the docker-compose project name Coolify derives from that uuid.
+	// The control plane keys its per-project resource map by this uuid, so it is
+	// what ties a multi-container service's per-container metrics (Twenty/n8n:
+	// web, worker, db, cache) back to the CoolifyService. container_name and
+	// coolify_name are per-component human names that do NOT contain the uuid, so
+	// without this attribute service container metrics can't be attributed.
+	CoolifyServiceID     string `json:"coolify_service_id,omitempty"`
 }
