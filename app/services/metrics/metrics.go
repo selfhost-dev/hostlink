@@ -372,6 +372,9 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 			if cm.Attributes.CoolifyName != "" {
 				attrs["coolify_name"] = cm.Attributes.CoolifyName
 			}
+			if cm.Attributes.CoolifyServiceID != "" {
+				attrs["coolify_service_id"] = cm.Attributes.CoolifyServiceID
+			}
 
 			metricSets = append(metricSets, domainmetrics.MetricSet{
 				Type:       domainmetrics.MetricTypeContainer,
