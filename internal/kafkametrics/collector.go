@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"hostlink/domain/credential"
@@ -32,9 +33,22 @@ type Collector interface {
 	Collect(credential.Credential) (metrics.KafkaDatabaseMetrics, error)
 }
 
+// counterSample is one observation of a cumulative counter, kept so the next
+// scrape can derive a per-second rate.
+type counterSample struct {
+	value float64
+	at    time.Time
+}
+
 type collector struct {
 	endpoint string
 	client   *http.Client
+	now      func() time.Time
+
+	// The collector is long-lived (one per agent, reused across heartbeats), so
+	// it holds the previous scrape of each cumulative counter to compute rates.
+	mu   sync.Mutex
+	prev map[string]counterSample
 }
 
 func New() Collector { return NewWithEndpoint(defaultEndpoint) }
@@ -43,6 +57,8 @@ func NewWithEndpoint(endpoint string) Collector {
 	return &collector{
 		endpoint: endpoint,
 		client:   &http.Client{Timeout: 10 * time.Second},
+		now:      time.Now,
+		prev:     map[string]counterSample{},
 	}
 }
 
@@ -69,18 +85,20 @@ func (c *collector) Collect(_ credential.Credential) (metrics.KafkaDatabaseMetri
 		return metrics.KafkaDatabaseMetrics{Up: false}, nil
 	}
 
+	now := c.now()
 	s := parse(string(body))
 	m := metrics.KafkaDatabaseMetrics{Up: true}
 
 	// Metric names below are AutoMQ's actual OTel/Prometheus names, verified live against
 	// a running broker's /metrics (2026-09-18); JMX-style names kept as fallbacks. bytes/
-	// request series are cumulative *_total counters (AutoMQ exposes no pre-computed rate),
-	// so these fields currently hold totals — the control plane derives per-sec by diffing
-	// consecutive heartbeats (rate calc in-collector is a follow-up).
-	m.BytesInPerSec = s.sum("kafka_network_io_bytes_total", "kafka_broker_network_io_bytes_total")
+	// message/request series are cumulative *_total counters (AutoMQ exposes no pre-computed
+	// rate), so we diff them against the previous scrape to emit a true per-second rate —
+	// otherwise a *_per_sec alert rule on a monotonic total would fire once and never resolve.
+	// Only genuinely-cumulative candidate names feed rate(); pre-rated JMX aliases are dropped.
+	m.BytesInPerSec = c.rate("bytes_in", s.sum("kafka_network_io_bytes_total", "kafka_broker_network_io_bytes_total"), now)
 	m.BytesOutPerSec = 0 // in/out share kafka_network_io_bytes_total (direction label); split is a follow-up
-	m.MessagesInPerSec = s.sum("kafka_message_count_total", "kafka_server_brokertopicmetrics_messagesinpersec_oneminuterate")
-	m.TotalProduceRequestsPerSec = s.sum("kafka_request_count_total")
+	m.MessagesInPerSec = c.rate("messages_in", s.sum("kafka_message_count_total"), now)
+	m.TotalProduceRequestsPerSec = c.rate("produce_requests", s.sum("kafka_request_count_total"), now)
 	m.TotalFetchRequestsPerSec = 0 // produce/fetch share kafka_request_count_total (type label); split is a follow-up
 
 	m.ActiveControllerCount = s.firstInt("kafka_controller_active_count", "kafka_active_controllers")
@@ -104,6 +122,28 @@ func (c *collector) Collect(_ credential.Credential) (metrics.KafkaDatabaseMetri
 	m.S3DownloadSizeBytesPerSec = s.first("automq_network_outbound_usage", "automq_s3_download_size_rate")
 
 	return m, nil
+}
+
+// rate returns the per-second rate of a cumulative counter between the previous
+// scrape and now, keyed by a stable field name. The first observation returns 0
+// (no baseline yet). A counter reset (current < previous — e.g. a broker
+// restart) returns 0 rather than a negative or spuriously huge value. A
+// non-positive elapsed interval returns 0. The current sample always becomes the
+// new baseline.
+func (c *collector) rate(key string, current float64, now time.Time) float64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	prev, ok := c.prev[key]
+	c.prev[key] = counterSample{value: current, at: now}
+	if !ok {
+		return 0
+	}
+	elapsed := now.Sub(prev.at).Seconds()
+	if elapsed <= 0 || current < prev.value {
+		return 0
+	}
+	return (current - prev.value) / elapsed
 }
 
 // ── minimal Prometheus text parser (no external dep, mirrors traefikmetrics) ──
