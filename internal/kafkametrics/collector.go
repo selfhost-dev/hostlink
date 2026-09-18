@@ -72,42 +72,35 @@ func (c *collector) Collect(_ credential.Credential) (metrics.KafkaDatabaseMetri
 	s := parse(string(body))
 	m := metrics.KafkaDatabaseMetrics{Up: true}
 
-	m.BytesInPerSec = s.first("kafka_server_brokertopicmetrics_bytesinpersec_oneminuterate",
-		"kafka_network_io_bytes_total_in", "kafka_broker_bytes_in_per_sec", "kafka_message_bytes_in")
-	m.BytesOutPerSec = s.first("kafka_server_brokertopicmetrics_bytesoutpersec_oneminuterate",
-		"kafka_network_io_bytes_total_out", "kafka_broker_bytes_out_per_sec")
-	m.MessagesInPerSec = s.first("kafka_server_brokertopicmetrics_messagesinpersec_oneminuterate",
-		"kafka_message_count_total", "kafka_broker_messages_in_per_sec")
-	m.TotalProduceRequestsPerSec = s.first("kafka_network_requestmetrics_requestspersec_produce",
-		"kafka_request_count_produce")
-	m.TotalFetchRequestsPerSec = s.first("kafka_network_requestmetrics_requestspersec_fetch",
-		"kafka_request_count_fetch")
+	// Metric names below are AutoMQ's actual OTel/Prometheus names, verified live against
+	// a running broker's /metrics (2026-09-18); JMX-style names kept as fallbacks. bytes/
+	// request series are cumulative *_total counters (AutoMQ exposes no pre-computed rate),
+	// so these fields currently hold totals — the control plane derives per-sec by diffing
+	// consecutive heartbeats (rate calc in-collector is a follow-up).
+	m.BytesInPerSec = s.sum("kafka_network_io_bytes_total", "kafka_broker_network_io_bytes_total")
+	m.BytesOutPerSec = 0 // in/out share kafka_network_io_bytes_total (direction label); split is a follow-up
+	m.MessagesInPerSec = s.sum("kafka_message_count_total", "kafka_server_brokertopicmetrics_messagesinpersec_oneminuterate")
+	m.TotalProduceRequestsPerSec = s.sum("kafka_request_count_total")
+	m.TotalFetchRequestsPerSec = 0 // produce/fetch share kafka_request_count_total (type label); split is a follow-up
 
-	m.ActiveControllerCount = s.firstInt("kafka_controller_kafkacontroller_activecontrollercount",
-		"kafka_active_controllers", "kafka_controller_active_count")
-	m.OfflinePartitionsCount = s.firstInt("kafka_controller_kafkacontroller_offlinepartitionscount",
-		"kafka_partition_offline", "kafka_controller_offline_partitions_count")
-	m.UnderReplicatedPartitions = s.firstInt("kafka_server_replicamanager_underreplicatedpartitions",
-		"kafka_partition_under_replicated", "kafka_under_replicated_partitions")
-	m.GlobalPartitionCount = s.firstInt("kafka_controller_kafkacontroller_globalpartitioncount",
-		"kafka_partition_count", "kafka_controller_global_partition_count")
-	m.GlobalTopicCount = s.firstInt("kafka_controller_kafkacontroller_globaltopiccount",
-		"kafka_topic_count", "kafka_controller_global_topic_count")
-	m.LeaderCount = s.firstInt("kafka_server_replicamanager_leadercount", "kafka_leader_count")
-	m.PartitionCount = s.firstInt("kafka_server_replicamanager_partitioncount", "kafka_partition_count")
+	m.ActiveControllerCount = s.firstInt("kafka_controller_active_count", "kafka_active_controllers")
+	m.OfflinePartitionsCount = s.firstInt("kafka_partition_offline_count", "kafka_partition_offline")
+	m.UnderReplicatedPartitions = s.firstInt("kafka_partition_under_replicated") // usually 0 (S3-native, RF=1)
+	m.GlobalPartitionCount = s.firstInt("kafka_partition_total_count", "kafka_partition_count")
+	m.GlobalTopicCount = s.firstInt("kafka_topic_count", "kafka_controller_global_topic_count")
+	m.LeaderCount = s.firstInt("kafka_partition_count", "kafka_leader_count")
+	m.PartitionCount = s.firstInt("kafka_partition_count")
 
-	m.RequestHandlerAvgIdlePercent = s.first("kafka_server_kafkarequesthandlerpool_requesthandleravgidlepercent_oneminuterate",
-		"kafka_request_handler_avg_idle_percent")
-	m.NetworkProcessorAvgIdlePercent = s.first("kafka_network_socketserver_networkprocessoravgidlepercent",
-		"kafka_network_processor_avg_idle_percent")
+	m.RequestHandlerAvgIdlePercent = s.first("kafka_io_threads_idle_rate_1m", "kafka_request_handler_avg_idle_percent")
+	m.NetworkProcessorAvgIdlePercent = s.first("kafka_network_threads_idle_rate", "kafka_network_processor_avg_idle_percent")
 
-	m.ConsumerGroupCount = s.firstInt("kafka_coordinator_group_groupmetadatamanager_numgroups",
-		"kafka_consumer_group_count", "kafka_group_count")
-	m.MaxConsumerGroupLag = s.firstInt64("kafka_consumer_group_max_lag", "kafka_lag_max", "kafka_consumergroup_lag_max")
-	m.LogSizeBytes = s.sumInt64("kafka_log_log_size", "kafka_partition_log_size", "kafka_log_size")
+	m.ConsumerGroupCount = s.firstInt("kafka_group_count", "kafka_group_stable_count")
+	m.MaxConsumerGroupLag = s.firstInt64("kafka_consumer_group_max_lag", "kafka_lag_max")
+	m.LogSizeBytes = s.sumInt64("kafka_log_size", "kafka_partition_log_size")
 
-	// AutoMQ S3 traffic (names very likely differ — verify live).
-	m.S3UploadSizeBytesPerSec = s.first("automq_network_inbound_usage", "automq_s3_upload_size_rate", "automq_stream_set_object_upload_size")
+	// AutoMQ S3 traffic — not present in the base broker /metrics dump verified so far;
+	// left best-effort (stays 0 until the exact AutoMQ S3 series names are confirmed).
+	m.S3UploadSizeBytesPerSec = s.first("automq_network_inbound_usage", "automq_s3_upload_size_rate")
 	m.S3DownloadSizeBytesPerSec = s.first("automq_network_outbound_usage", "automq_s3_download_size_rate")
 
 	return m, nil

@@ -237,6 +237,15 @@ func (m *MockOpenSearchCollector) Collect(cred credential.Credential) (domainmet
 	return args.Get(0).(domainmetrics.OpenSearchDatabaseMetrics), args.Error(1)
 }
 
+type MockKafkaCollector struct {
+	mock.Mock
+}
+
+func (m *MockKafkaCollector) Collect(cred credential.Credential) (domainmetrics.KafkaDatabaseMetrics, error) {
+	args := m.Called(cred)
+	return args.Get(0).(domainmetrics.KafkaDatabaseMetrics), args.Error(1)
+}
+
 type MockContainerCollector struct {
 	mock.Mock
 }
@@ -280,22 +289,23 @@ func (m *MockDockerDiscoverer) DiscoverDatabases(ctx context.Context) ([]dockerd
 
 // Test helpers
 type testMocks struct {
-	apiserver            *MockAPIServer
-	agentstate           *MockAgentState
-	collector            *MockCollector
-	syscollector         *MockSysCollector
-	netcollector         *MockNetCollector
-	storagecollector     *MockStorageCollector
-	pgbouncercollector   *MockPgBouncerCollector
-	mysqlcollector       *MockMySQLCollector
-	mongodbcollector     *MockMongoDBCollector
-	rediscollector       *MockRedisCollector
-	clickhousecollector  *MockClickHouseCollector
-	opensearchcollector  *MockOpenSearchCollector
-	containercollector   *MockContainerCollector
-	traefikcollector     *MockTraefikCollector
-	dockerDiscoverer     *MockDockerDiscoverer
-	crypto               *MockCrypto
+	apiserver           *MockAPIServer
+	agentstate          *MockAgentState
+	collector           *MockCollector
+	syscollector        *MockSysCollector
+	netcollector        *MockNetCollector
+	storagecollector    *MockStorageCollector
+	pgbouncercollector  *MockPgBouncerCollector
+	mysqlcollector      *MockMySQLCollector
+	mongodbcollector    *MockMongoDBCollector
+	rediscollector      *MockRedisCollector
+	clickhousecollector *MockClickHouseCollector
+	opensearchcollector *MockOpenSearchCollector
+	kafkacollector      *MockKafkaCollector
+	containercollector  *MockContainerCollector
+	traefikcollector    *MockTraefikCollector
+	dockerDiscoverer    *MockDockerDiscoverer
+	crypto              *MockCrypto
 }
 
 func setupTestMetricsPusher() (*metricspusher, *testMocks) {
@@ -312,6 +322,7 @@ func setupTestMetricsPusher() (*metricspusher, *testMocks) {
 		rediscollector:      new(MockRedisCollector),
 		clickhousecollector: new(MockClickHouseCollector),
 		opensearchcollector: new(MockOpenSearchCollector),
+		kafkacollector:      new(MockKafkaCollector),
 		containercollector:  new(MockContainerCollector),
 		traefikcollector:    new(MockTraefikCollector),
 		dockerDiscoverer:    new(MockDockerDiscoverer),
@@ -331,6 +342,7 @@ func setupTestMetricsPusher() (*metricspusher, *testMocks) {
 		mocks.rediscollector,
 		mocks.clickhousecollector,
 		mocks.opensearchcollector,
+		mocks.kafkacollector,
 		mocks.containercollector,
 		mocks.traefikcollector,
 		mocks.dockerDiscoverer,
