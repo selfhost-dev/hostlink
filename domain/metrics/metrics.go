@@ -13,8 +13,9 @@ const (
 	MetricTypeContainer          = "container"
 	MetricTypeTraefikService     = "traefik.proxy"
 	MetricTypeTraefikRouter      = "traefik.router"
-	MetricTypeClickHouseDatabase  = "clickhouse.database"
-	MetricTypeOpenSearchDatabase  = "opensearch.database"
+	MetricTypeClickHouseDatabase = "clickhouse.database"
+	MetricTypeOpenSearchDatabase = "opensearch.database"
+	MetricTypeKafkaDatabase      = "kafka.database"
 )
 
 type MetricPayload struct {
@@ -92,16 +93,16 @@ type PostgreSQLDatabaseMetrics struct {
 // via the PgBouncer admin console (SHOW POOLS + SHOW STATS).
 // Up is false when PgBouncer is not running or unreachable.
 type PgBouncerMetrics struct {
-	Up               bool    `json:"up"`
-	ClientsActive    int     `json:"clients_active"`
-	ClientsWaiting   int     `json:"clients_waiting"`
-	ServersActive    int     `json:"servers_active"`
-	ServersIdle      int     `json:"servers_idle"`
-	MaxWaitMs        float64 `json:"max_wait_ms"`
-	AvgQueryTimeMs   float64 `json:"avg_query_time_ms"`
-	AvgWaitTimeMs    float64 `json:"avg_wait_time_ms"`
+	Up                 bool    `json:"up"`
+	ClientsActive      int     `json:"clients_active"`
+	ClientsWaiting     int     `json:"clients_waiting"`
+	ServersActive      int     `json:"servers_active"`
+	ServersIdle        int     `json:"servers_idle"`
+	MaxWaitMs          float64 `json:"max_wait_ms"`
+	AvgQueryTimeMs     float64 `json:"avg_query_time_ms"`
+	AvgWaitTimeMs      float64 `json:"avg_wait_time_ms"`
 	TotalQueriesPerSec float64 `json:"total_queries_per_sec"`
-	PoolCount        int     `json:"pool_count"`
+	PoolCount          int     `json:"pool_count"`
 }
 
 type StorageMetrics struct {
@@ -131,19 +132,19 @@ type StorageAttributes struct {
 }
 
 type MySQLDatabaseMetrics struct {
-	Up                            bool    `json:"up"`
-	ConnectionsTotal              int     `json:"connections_total"`
-	ConnectionsAborted            int64   `json:"connections_aborted"`
-	MaxConnections                int     `json:"max_connections"`
-	ThreadsRunning                int     `json:"threads_running"`
-	QueriesPerSecond              float64 `json:"queries_per_second"`
-	SlowQueriesPerSecond          float64 `json:"slow_queries_per_second"`
-	InnoDBBufferPoolHitRatio      float64 `json:"innodb_buffer_pool_hit_ratio"`
-	InnoDBRowLockWaitsPerSecond   float64 `json:"innodb_row_lock_waits_per_second"`
-	TmpDiskTablesPerSecond        float64 `json:"tmp_disk_tables_per_second"`
-	SelectFullScansPerSecond      float64 `json:"select_full_scans_per_second"`
-	ReplicationLagSeconds         *int    `json:"replication_lag_seconds,omitempty"`
-	ReplicationConnected          *bool   `json:"replication_connected,omitempty"`
+	Up                          bool    `json:"up"`
+	ConnectionsTotal            int     `json:"connections_total"`
+	ConnectionsAborted          int64   `json:"connections_aborted"`
+	MaxConnections              int     `json:"max_connections"`
+	ThreadsRunning              int     `json:"threads_running"`
+	QueriesPerSecond            float64 `json:"queries_per_second"`
+	SlowQueriesPerSecond        float64 `json:"slow_queries_per_second"`
+	InnoDBBufferPoolHitRatio    float64 `json:"innodb_buffer_pool_hit_ratio"`
+	InnoDBRowLockWaitsPerSecond float64 `json:"innodb_row_lock_waits_per_second"`
+	TmpDiskTablesPerSecond      float64 `json:"tmp_disk_tables_per_second"`
+	SelectFullScansPerSecond    float64 `json:"select_full_scans_per_second"`
+	ReplicationLagSeconds       *int    `json:"replication_lag_seconds,omitempty"`
+	ReplicationConnected        *bool   `json:"replication_connected,omitempty"`
 	// ActiveReplicaCount is the number of downstream replicas streaming from
 	// this primary (binlog dump threads). Only meaningful on the primary node;
 	// nil (omitted from JSON) on replicas.
@@ -151,16 +152,16 @@ type MySQLDatabaseMetrics struct {
 }
 
 type MongoDBMetrics struct {
-	Up                   bool    `json:"up"`
-	ConnectionsCurrent   int     `json:"connections_current"`
-	ConnectionsAvailable int     `json:"connections_available"`
-	OpsPerSecond         float64 `json:"ops_per_second"`
-	QueriesPerSecond     float64 `json:"queries_per_second"`
-	InsertsPerSecond     float64 `json:"inserts_per_second"`
-	UpdatesPerSecond     float64 `json:"updates_per_second"`
-	DeletesPerSecond     float64 `json:"deletes_per_second"`
-	ResidentMemoryMB     int     `json:"resident_memory_mb"`
-	ReplicationLagSeconds *int   `json:"replication_lag_seconds,omitempty"`
+	Up                    bool    `json:"up"`
+	ConnectionsCurrent    int     `json:"connections_current"`
+	ConnectionsAvailable  int     `json:"connections_available"`
+	OpsPerSecond          float64 `json:"ops_per_second"`
+	QueriesPerSecond      float64 `json:"queries_per_second"`
+	InsertsPerSecond      float64 `json:"inserts_per_second"`
+	UpdatesPerSecond      float64 `json:"updates_per_second"`
+	DeletesPerSecond      float64 `json:"deletes_per_second"`
+	ResidentMemoryMB      int     `json:"resident_memory_mb"`
+	ReplicationLagSeconds *int    `json:"replication_lag_seconds,omitempty"`
 }
 
 type RedisMetrics struct {
@@ -211,7 +212,7 @@ type TraefikEntrypointMetrics struct {
 	ConnectionsCurrent int64   `json:"connections_current"`
 	RequestsTotal      int64   `json:"requests_total"`
 	RequestsPerSecond  float64 `json:"requests_per_second"`
-	ErrorRate          float64 `json:"error_rate"`          // % of 4xx + 5xx
+	ErrorRate          float64 `json:"error_rate"` // % of 4xx + 5xx
 	Requests2xx        int64   `json:"requests_2xx"`
 	Requests4xx        int64   `json:"requests_4xx"`
 	Requests5xx        int64   `json:"requests_5xx"`
@@ -287,7 +288,7 @@ type ClickHouseDatabaseMetrics struct {
 	BackgroundMergesCount  int     `json:"background_merges_count"`
 	ReplicationDelay       int     `json:"replication_delay"`
 	ReplicationLagSeconds  int     `json:"replication_lag_seconds"`
-	ActiveReplicaCount *int `json:"active_replica_count,omitempty"`
+	ActiveReplicaCount     *int    `json:"active_replica_count,omitempty"`
 	DiskUsedBytes          int64   `json:"disk_used_bytes"`
 	BrokenPartsCount       int     `json:"broken_parts_count"`
 	MarkCacheHitRatio      float64 `json:"mark_cache_hit_ratio"`
@@ -320,5 +321,31 @@ type ContainerAttributes struct {
 	// web, worker, db, cache) back to the CoolifyService. container_name and
 	// coolify_name are per-component human names that do NOT contain the uuid, so
 	// without this attribute service container metrics can't be attributed.
-	CoolifyServiceID     string `json:"coolify_service_id,omitempty"`
+	CoolifyServiceID string `json:"coolify_service_id,omitempty"`
+}
+
+// KafkaDatabaseMetrics is one broker's snapshot, scraped from AutoMQ's Prometheus
+// endpoint (kafkametrics collector). JSON keys must match KafkaAdapter.valid_metrics
+// on the control plane. Absent series serialize as zero.
+type KafkaDatabaseMetrics struct {
+	Up                             bool    `json:"up"`
+	BytesInPerSec                  float64 `json:"bytes_in_per_sec"`
+	BytesOutPerSec                 float64 `json:"bytes_out_per_sec"`
+	MessagesInPerSec               float64 `json:"messages_in_per_sec"`
+	TotalProduceRequestsPerSec     float64 `json:"total_produce_requests_per_sec"`
+	TotalFetchRequestsPerSec       float64 `json:"total_fetch_requests_per_sec"`
+	ActiveControllerCount          int     `json:"active_controller_count"`
+	OfflinePartitionsCount         int     `json:"offline_partitions_count"`
+	UnderReplicatedPartitions      int     `json:"under_replicated_partitions"`
+	GlobalPartitionCount           int     `json:"global_partition_count"`
+	GlobalTopicCount               int     `json:"global_topic_count"`
+	LeaderCount                    int     `json:"leader_count"`
+	PartitionCount                 int     `json:"partition_count"`
+	RequestHandlerAvgIdlePercent   float64 `json:"request_handler_avg_idle_percent"`
+	NetworkProcessorAvgIdlePercent float64 `json:"network_processor_avg_idle_percent"`
+	ConsumerGroupCount             int     `json:"consumer_group_count"`
+	MaxConsumerGroupLag            int64   `json:"max_consumer_group_lag"`
+	LogSizeBytes                   int64   `json:"log_size_bytes"`
+	S3UploadSizeBytesPerSec        float64 `json:"s3_upload_size_bytes_per_sec"`
+	S3DownloadSizeBytesPerSec      float64 `json:"s3_download_size_bytes_per_sec"`
 }

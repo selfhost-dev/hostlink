@@ -70,7 +70,7 @@ func (mj *MetricsJob) Register(ctx context.Context, mp metrics.Pusher, mcred met
 						}
 						if next.Dialect == "" {
 							switch cred.Dialect {
-							case "mysql", "mariadb", "mongodb", "redis", "clickhouse", "opensearch":
+							case "mysql", "mariadb", "mongodb", "redis", "clickhouse", "opensearch", "kafka":
 								next = cred
 							}
 						}
