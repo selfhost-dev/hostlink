@@ -15,12 +15,13 @@ import (
 	"hostlink/internal/apiserver"
 	"hostlink/internal/clickhousemetrics"
 	"hostlink/internal/containermetrics"
-	"hostlink/internal/opensearchmetrics"
 	"hostlink/internal/crypto"
 	"hostlink/internal/dockerdiscovery"
+	"hostlink/internal/kafkametrics"
 	"hostlink/internal/mongodbmetrics"
 	"hostlink/internal/mysqlmetrics"
 	"hostlink/internal/networkmetrics"
+	"hostlink/internal/opensearchmetrics"
 	"hostlink/internal/pgbouncermetrics"
 	"hostlink/internal/pgmetrics"
 	"hostlink/internal/redismetrics"
@@ -38,23 +39,24 @@ type Pusher interface {
 }
 
 type metricspusher struct {
-	apiserver              apiserver.MetricsOperations
-	agentstate             agentstate.Operations
-	metricscollector       pgmetrics.Collector
-	syscollector           sysmetrics.Collector
-	netcollector           networkmetrics.Collector
-	storagecollector       storagemetrics.Collector
-	pgbouncercollector     pgbouncermetrics.Collector
-	mysqlcollector         mysqlmetrics.Collector
-	mongodbcollector       mongodbmetrics.Collector
-	rediscollector         redismetrics.Collector
-	clickhousecollector    clickhousemetrics.Collector
-	opensearchcollector    opensearchmetrics.Collector
-	containercollector     containermetrics.Collector
-	traefikcollector       traefikmetrics.Collector
-	dockerDiscoverer       dockerdiscovery.Discoverer
-	crypto                 crypto.Service
-	privateKeyPath         string
+	apiserver           apiserver.MetricsOperations
+	agentstate          agentstate.Operations
+	metricscollector    pgmetrics.Collector
+	syscollector        sysmetrics.Collector
+	netcollector        networkmetrics.Collector
+	storagecollector    storagemetrics.Collector
+	pgbouncercollector  pgbouncermetrics.Collector
+	mysqlcollector      mysqlmetrics.Collector
+	mongodbcollector    mongodbmetrics.Collector
+	rediscollector      redismetrics.Collector
+	clickhousecollector clickhousemetrics.Collector
+	opensearchcollector opensearchmetrics.Collector
+	kafkacollector      kafkametrics.Collector
+	containercollector  containermetrics.Collector
+	traefikcollector    traefikmetrics.Collector
+	dockerDiscoverer    dockerdiscovery.Discoverer
+	crypto              crypto.Service
+	privateKeyPath      string
 }
 
 func NewWithConf() (*metricspusher, error) {
@@ -80,6 +82,7 @@ func NewWithConf() (*metricspusher, error) {
 		rediscollector:      redismetrics.New(),
 		clickhousecollector: clickhousemetrics.New(),
 		opensearchcollector: opensearchmetrics.New(),
+		kafkacollector:      kafkametrics.New(),
 		containercollector:  containermetrics.New(),
 		traefikcollector:    traefikmetrics.New(),
 		dockerDiscoverer:    dockerdiscovery.New(),
@@ -106,6 +109,7 @@ func NewWithDependencies(
 	rediscollector redismetrics.Collector,
 	clickhousecollector clickhousemetrics.Collector,
 	opensearchcollector opensearchmetrics.Collector,
+	kafkacollector kafkametrics.Collector,
 	containercollector containermetrics.Collector,
 	traefikcollector traefikmetrics.Collector,
 	dockerDiscoverer dockerdiscovery.Discoverer,
@@ -125,6 +129,7 @@ func NewWithDependencies(
 		rediscollector:      rediscollector,
 		clickhousecollector: clickhousecollector,
 		opensearchcollector: opensearchcollector,
+		kafkacollector:      kafkacollector,
 		containercollector:  containercollector,
 		traefikcollector:    traefikcollector,
 		dockerDiscoverer:    dockerDiscoverer,
@@ -278,6 +283,17 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 			})
 		}
 
+	case "kafka":
+		// AutoMQ exposes Prometheus on the box; the collector scrapes localhost:9090
+		// (cred is unused). Collect never errors — a down broker returns Up=false.
+		if cred.Host != "" || cred.Port != 0 {
+			m, _ := mp.kafkacollector.Collect(cred)
+			metricSets = append(metricSets, domainmetrics.MetricSet{
+				Type:    domainmetrics.MetricTypeKafkaDatabase,
+				Metrics: m,
+			})
+		}
+
 	default: // "postgresql", "supabase", or empty — existing behaviour
 		hasPrimaryCred := cred.Host != "" || cred.Port != 0
 		if hasPrimaryCred {
@@ -409,8 +425,8 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 	} else {
 		for _, rs := range routerSets {
 			attrs := map[string]any{
-				"router_name":      rs.Attributes.RouterName,
-				"entrypoint_name":  rs.Attributes.EntrypointName,
+				"router_name":     rs.Attributes.RouterName,
+				"entrypoint_name": rs.Attributes.EntrypointName,
 			}
 			if rs.Attributes.Service != "" {
 				attrs["service"] = rs.Attributes.Service
@@ -458,7 +474,7 @@ func (mp *metricspusher) collectDockerPGMetrics(ctx context.Context, d dockerdis
 		dbMetrics.Up = true
 	}
 	*metricSets = append(*metricSets, domainmetrics.MetricSet{
-		Type:    domainmetrics.MetricTypePostgreSQLDatabase,
+		Type: domainmetrics.MetricTypePostgreSQLDatabase,
 		Attributes: map[string]any{
 			"container_id":   d.ContainerID[:12],
 			"container_name": d.ContainerName,
@@ -490,7 +506,7 @@ func (mp *metricspusher) collectDockerMySQLMetrics(ctx context.Context, d docker
 		m.Up = true
 	}
 	*metricSets = append(*metricSets, domainmetrics.MetricSet{
-		Type:    domainmetrics.MetricTypeMySQLDatabase,
+		Type: domainmetrics.MetricTypeMySQLDatabase,
 		Attributes: map[string]any{
 			"container_id":   d.ContainerID[:12],
 			"container_name": d.ContainerName,
@@ -522,7 +538,7 @@ func (mp *metricspusher) collectDockerMongoDBMetrics(ctx context.Context, d dock
 		m.Up = true
 	}
 	*metricSets = append(*metricSets, domainmetrics.MetricSet{
-		Type:    domainmetrics.MetricTypeMongoDBDatabase,
+		Type: domainmetrics.MetricTypeMongoDBDatabase,
 		Attributes: map[string]any{
 			"container_id":   d.ContainerID[:12],
 			"container_name": d.ContainerName,
@@ -533,4 +549,3 @@ func (mp *metricspusher) collectDockerMongoDBMetrics(ctx context.Context, d dock
 		Metrics: m,
 	})
 }
-
