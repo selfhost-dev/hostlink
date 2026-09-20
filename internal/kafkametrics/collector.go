@@ -95,11 +95,20 @@ func (c *collector) Collect(_ credential.Credential) (metrics.KafkaDatabaseMetri
 	// rate), so we diff them against the previous scrape to emit a true per-second rate —
 	// otherwise a *_per_sec alert rule on a monotonic total would fire once and never resolve.
 	// Only genuinely-cumulative candidate names feed rate(); pre-rated JMX aliases are dropped.
-	m.BytesInPerSec = c.rate("bytes_in", s.sum("kafka_network_io_bytes_total", "kafka_broker_network_io_bytes_total"), now)
-	m.BytesOutPerSec = 0 // in/out share kafka_network_io_bytes_total (direction label); split is a follow-up
+	// Network throughput splits by AutoMQ's `direction` label on
+	// kafka_broker_network_io_bytes_total (confirmed against the engine's own
+	// Prometheus alert rules). Fall back to the unlabeled total for bytes_in on a
+	// build without the label. Both are cumulative counters → per-second rate.
+	netIn := s.sumWhere("kafka_broker_network_io_bytes_total", "direction", "in")
+	if netIn == 0 {
+		netIn = s.sum("kafka_network_io_bytes_total", "kafka_broker_network_io_bytes_total")
+	}
+	m.BytesInPerSec = c.rate("bytes_in", netIn, now)
+	m.BytesOutPerSec = c.rate("bytes_out", s.sumWhere("kafka_broker_network_io_bytes_total", "direction", "out"), now)
 	m.MessagesInPerSec = c.rate("messages_in", s.sum("kafka_message_count_total"), now)
-	m.TotalProduceRequestsPerSec = c.rate("produce_requests", s.sum("kafka_request_count_total"), now)
-	m.TotalFetchRequestsPerSec = 0 // produce/fetch share kafka_request_count_total (type label); split is a follow-up
+	// Produce/fetch split by the `type` label on kafka_request_count_total.
+	m.TotalProduceRequestsPerSec = c.rate("produce_requests", s.sumWhere("kafka_request_count_total", "type", "Produce"), now)
+	m.TotalFetchRequestsPerSec = c.rate("fetch_requests", s.sumWhere("kafka_request_count_total", "type", "Fetch"), now)
 
 	m.ActiveControllerCount = s.firstInt("kafka_controller_active_count", "kafka_active_controllers")
 	m.OfflinePartitionsCount = s.firstInt("kafka_partition_offline_count", "kafka_partition_offline")
@@ -113,13 +122,14 @@ func (c *collector) Collect(_ credential.Credential) (metrics.KafkaDatabaseMetri
 	m.NetworkProcessorAvgIdlePercent = s.first("kafka_network_threads_idle_rate", "kafka_network_processor_avg_idle_percent")
 
 	m.ConsumerGroupCount = s.firstInt("kafka_group_count", "kafka_group_stable_count")
-	m.MaxConsumerGroupLag = s.firstInt64("kafka_consumer_group_max_lag", "kafka_lag_max")
+	m.MaxConsumerGroupLag = s.maxConsumerLag()
 	m.LogSizeBytes = s.sumInt64("kafka_log_size", "kafka_partition_log_size")
 
-	// AutoMQ S3 traffic — not present in the base broker /metrics dump verified so far;
-	// left best-effort (stays 0 until the exact AutoMQ S3 series names are confirmed).
-	m.S3UploadSizeBytesPerSec = s.first("automq_network_inbound_usage", "automq_s3_upload_size_rate")
-	m.S3DownloadSizeBytesPerSec = s.first("automq_network_outbound_usage", "automq_s3_download_size_rate")
+	// AutoMQ S3 object traffic: per-stream cumulative byte counters (confirmed on a
+	// live 1.7.4 scrape), summed across streams → per-second rate. This is the
+	// engine's durability + cost centre, so these must be real, not zero.
+	m.S3UploadSizeBytesPerSec = c.rate("s3_upload", s.sum("kafka_stream_upload_size_bytes_total"), now)
+	m.S3DownloadSizeBytesPerSec = c.rate("s3_download", s.sum("kafka_stream_download_size_bytes_total"), now)
 
 	return m, nil
 }
@@ -239,6 +249,39 @@ func (p *parsed) sum(names ...string) float64 {
 	return 0
 }
 
-func (p *parsed) firstInt(names ...string) int     { return int(p.first(names...)) }
-func (p *parsed) firstInt64(names ...string) int64 { return int64(p.first(names...)) }
-func (p *parsed) sumInt64(names ...string) int64   { return int64(p.sum(names...)) }
+func (p *parsed) firstInt(names ...string) int   { return int(p.first(names...)) }
+func (p *parsed) sumInt64(names ...string) int64 { return int64(p.sum(names...)) }
+
+// sumWhere sums the series of `name` whose label[key] == val. AutoMQ splits some
+// counters by a label rather than by metric name — network throughput by
+// direction (in/out), requests by type (Produce/Fetch) — so a per-direction /
+// per-type figure is a label-filtered sum over the one counter.
+func (p *parsed) sumWhere(name, key, val string) float64 {
+	total := 0.0
+	for _, s := range p.byName[name] {
+		if s.labels[key] == val {
+			total += s.value
+		}
+	}
+	return total
+}
+
+// maxConsumerLag derives the largest consumer-group lag the way AutoMQ's own
+// alert rule does: for each (topic, partition) the log-end offset minus a
+// group's committed offset, maximised across every (group, topic, partition).
+// AutoMQ exposes no single lag series — only kafka_log_end_offset and
+// kafka_group_commit_offset — so the join happens here. The platform key is a
+// single scalar, hence the max.
+func (p *parsed) maxConsumerLag() int64 {
+	end := make(map[string]float64) // "topic|partition" -> log end offset
+	for _, s := range p.byName["kafka_log_end_offset"] {
+		end[s.labels["topic"]+"|"+s.labels["partition"]] = s.value
+	}
+	maxLag := 0.0
+	for _, s := range p.byName["kafka_group_commit_offset"] {
+		if lag := end[s.labels["topic"]+"|"+s.labels["partition"]] - s.value; lag > maxLag {
+			maxLag = lag
+		}
+	}
+	return int64(maxLag)
+}
