@@ -1,4 +1,5 @@
-// Package kafkametrics collects broker metrics from AutoMQ's Prometheus endpoint.
+// Package kafkametrics collects broker metrics from AutoMQ's Prometheus endpoint,
+// plus consumer-group lag from the Kafka admin API.
 //
 // kafka_install/kafka_broker_config enable AutoMQ's Prometheus exporter bound to
 // 127.0.0.1:9090 (s3.telemetry.metrics.exporter.type=prometheus). The agent runs on
@@ -9,12 +10,15 @@
 // NOTE: the SOURCE metric names below are AutoMQ's OpenTelemetry/Prometheus names and
 // are candidate-matched (several aliases tried per field) — they MUST be verified
 // against a real /metrics dump from a running broker; unmatched series simply stay
-// zero, so a name miss degrades gracefully rather than breaking the scrape.
+// zero, so a name miss degrades gracefully rather than breaking the scrape. The ONE
+// exception is consumer-group lag: the broker has no such series, so it is computed
+// through the admin API (lag.go) and OMITTED — never zeroed — when it cannot be.
 package kafkametrics
 
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -24,6 +28,8 @@ import (
 
 	"hostlink/domain/credential"
 	"hostlink/domain/metrics"
+
+	"github.com/labstack/gommon/log"
 )
 
 const defaultEndpoint = "http://127.0.0.1:9090/metrics"
@@ -44,20 +50,34 @@ type collector struct {
 	endpoint string
 	client   *http.Client
 	now      func() time.Time
+	// lag computes consumer-group lag via the admin API (selfhost#2854); nil in
+	// tests that exercise only the scrape. See lag.go.
+	lag LagSource
 
 	// The collector is long-lived (one per agent, reused across heartbeats), so
-	// it holds the previous scrape of each cumulative counter to compute rates.
-	mu   sync.Mutex
-	prev map[string]counterSample
+	// it holds the previous scrape of each cumulative counter to compute rates,
+	// and the last consumer-lag state so failures are logged on CHANGE, not on
+	// every 20 s tick (an operator debugging "why is lag missing here" needs the
+	// reason on-box; the control plane only ever sees the keys absent).
+	mu       sync.Mutex
+	prev     map[string]counterSample
+	lagState string
 }
 
-func New() Collector { return NewWithEndpoint(defaultEndpoint) }
+func New() Collector {
+	return NewWithSources(defaultEndpoint, newAdminLagSource(defaultServerProperties))
+}
 
-func NewWithEndpoint(endpoint string) Collector {
+// NewWithEndpoint scrapes `endpoint` with no lag source (the consumer-group keys
+// are then omitted from every heartbeat).
+func NewWithEndpoint(endpoint string) Collector { return NewWithSources(endpoint, nil) }
+
+func NewWithSources(endpoint string, lag LagSource) Collector {
 	return &collector{
 		endpoint: endpoint,
 		client:   &http.Client{Timeout: 10 * time.Second},
 		now:      time.Now,
+		lag:      lag,
 		prev:     map[string]counterSample{},
 	}
 }
@@ -121,9 +141,28 @@ func (c *collector) Collect(_ credential.Credential) (metrics.KafkaDatabaseMetri
 	m.RequestHandlerAvgIdlePercent = s.first("kafka_io_threads_idle_rate_1m", "kafka_request_handler_avg_idle_percent")
 	m.NetworkProcessorAvgIdlePercent = s.first("kafka_network_threads_idle_rate", "kafka_network_processor_avg_idle_percent")
 
-	m.ConsumerGroupCount = s.firstInt("kafka_group_count", "kafka_group_stable_count")
-	m.MaxConsumerGroupLag = s.maxConsumerLag()
 	m.LogSizeBytes = s.sumInt64("kafka_log_size", "kafka_partition_log_size")
+
+	// Consumer-group keys come from the admin API, never from the scrape (the
+	// broker exports no such series — selfhost#2854). Whatever could not be
+	// measured is left nil and therefore omitted from the JSON: a failed query
+	// omits both keys; a partial measurement (some group unmeasurable) reports
+	// the group count but omits the max lag, which would otherwise under-state
+	// the worst group. The control plane must see "not reported", never a 0 or
+	// a lower bound that reads as "caught up".
+	if c.lag != nil {
+		snap, err := c.lag.GroupLags(context.Background())
+		c.noteLagState(snap, err)
+		if err == nil {
+			groups := snap.Groups
+			m.ConsumerGroupCount = &groups
+			if snap.Complete {
+				maxLag := snap.MaxLag
+				m.MaxConsumerGroupLag = &maxLag
+			}
+			m.ConsumerLagSource = ConsumerLagSourceAdminAPI
+		}
+	}
 
 	// AutoMQ S3 object traffic: per-stream cumulative byte counters (confirmed on a
 	// live 1.7.4 scrape), summed across streams → per-second rate. This is the
@@ -132,6 +171,35 @@ func (c *collector) Collect(_ credential.Credential) (metrics.KafkaDatabaseMetri
 	m.S3DownloadSizeBytesPerSec = c.rate("s3_download", s.sum("kafka_stream_download_size_bytes_total"), now)
 
 	return m, nil
+}
+
+// noteLagState logs the consumer-lag availability when it CHANGES: the first
+// failure (with its reason), a change of reason, a partial measurement, and the
+// recovery — never once per tick.
+func (c *collector) noteLagState(snap GroupLagSnapshot, err error) {
+	state := "ok"
+	switch {
+	case err != nil:
+		state = "unavailable: " + err.Error()
+	case !snap.Complete:
+		state = fmt.Sprintf("partial: %d of %d consumer groups measured (skipped: %s) — max lag omitted",
+			snap.Groups-len(snap.Skipped), snap.Groups, strings.Join(snap.Skipped, ", "))
+	}
+
+	c.mu.Lock()
+	prev := c.lagState
+	c.lagState = state
+	c.mu.Unlock()
+	if state == prev {
+		return
+	}
+	if state == "ok" {
+		if prev != "" {
+			log.Infof("kafka consumer lag available again")
+		}
+		return
+	}
+	log.Warnf("kafka consumer lag %s", state)
 }
 
 // rate returns the per-second rate of a cumulative counter between the previous
@@ -264,24 +332,4 @@ func (p *parsed) sumWhere(name, key, val string) float64 {
 		}
 	}
 	return total
-}
-
-// maxConsumerLag derives the largest consumer-group lag the way AutoMQ's own
-// alert rule does: for each (topic, partition) the log-end offset minus a
-// group's committed offset, maximised across every (group, topic, partition).
-// AutoMQ exposes no single lag series — only kafka_log_end_offset and
-// kafka_group_commit_offset — so the join happens here. The platform key is a
-// single scalar, hence the max.
-func (p *parsed) maxConsumerLag() int64 {
-	end := make(map[string]float64) // "topic|partition" -> log end offset
-	for _, s := range p.byName["kafka_log_end_offset"] {
-		end[s.labels["topic"]+"|"+s.labels["partition"]] = s.value
-	}
-	maxLag := 0.0
-	for _, s := range p.byName["kafka_group_commit_offset"] {
-		if lag := end[s.labels["topic"]+"|"+s.labels["partition"]] - s.value; lag > maxLag {
-			maxLag = lag
-		}
-	}
-	return int64(maxLag)
 }

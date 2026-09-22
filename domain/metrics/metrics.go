@@ -326,7 +326,12 @@ type ContainerAttributes struct {
 
 // KafkaDatabaseMetrics is one broker's snapshot, scraped from AutoMQ's Prometheus
 // endpoint (kafkametrics collector). JSON keys must match KafkaAdapter.valid_metrics
-// on the control plane. Absent series serialize as zero.
+// on the control plane. Absent scraped series serialize as zero — EXCEPT the
+// consumer-group keys, which come from the Kafka admin API (selfhost#2854) and
+// are pointers: nil (query failed / no lag source) omits them from the JSON, so
+// "not reported" never reads as "0 lag". ConsumerLagSource tags a set whose
+// consumer-group keys were really computed; the control plane drops the two keys
+// from any set without it (a legacy agent's structural zeros).
 type KafkaDatabaseMetrics struct {
 	Up                             bool    `json:"up"`
 	BytesInPerSec                  float64 `json:"bytes_in_per_sec"`
@@ -343,8 +348,9 @@ type KafkaDatabaseMetrics struct {
 	PartitionCount                 int     `json:"partition_count"`
 	RequestHandlerAvgIdlePercent   float64 `json:"request_handler_avg_idle_percent"`
 	NetworkProcessorAvgIdlePercent float64 `json:"network_processor_avg_idle_percent"`
-	ConsumerGroupCount             int     `json:"consumer_group_count"`
-	MaxConsumerGroupLag            int64   `json:"max_consumer_group_lag"`
+	ConsumerGroupCount             *int    `json:"consumer_group_count,omitempty"`
+	MaxConsumerGroupLag            *int64  `json:"max_consumer_group_lag,omitempty"`
+	ConsumerLagSource              string  `json:"consumer_lag_source,omitempty"`
 	LogSizeBytes                   int64   `json:"log_size_bytes"`
 	S3UploadSizeBytesPerSec        float64 `json:"s3_upload_size_bytes_per_sec"`
 	S3DownloadSizeBytesPerSec      float64 `json:"s3_download_size_bytes_per_sec"`

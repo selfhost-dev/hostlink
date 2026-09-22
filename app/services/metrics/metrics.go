@@ -285,7 +285,9 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 
 	case "kafka":
 		// AutoMQ exposes Prometheus on the box; the collector scrapes localhost:9090
-		// (cred is unused). Collect never errors — a down broker returns Up=false.
+		// and reads consumer-group lag over the localhost INTERNAL listener via the
+		// admin API (cred is unused). Collect never errors — a down broker returns
+		// Up=false; an unreadable lag omits the consumer-group keys (selfhost#2854).
 		if cred.Host != "" || cred.Port != 0 {
 			m, _ := mp.kafkacollector.Collect(cred)
 			metricSets = append(metricSets, domainmetrics.MetricSet{
