@@ -37,8 +37,9 @@ func mutableMetricsServer(t *testing.T) (*httptest.Server, func(string)) {
 
 // dump renders a Prometheus body using AutoMQ's REAL series + labels (network
 // throughput split by `direction`, requests by `type`, the per-stream S3 byte
-// counters, and the log-end/commit offsets consumer lag is derived from), so the
-// collector's mapping is exercised against names that actually exist on 1.7.4.
+// counters), so the collector's mapping is exercised against names that actually
+// exist on 1.7.4. There is deliberately NO consumer-group series here: the broker
+// exports none (selfhost#2854) — lag comes from the admin API, see lag_test.go.
 func dump(netIn, netOut, msgTotal, produce, fetch, s3Up, s3Down float64) string {
 	return fmt.Sprintf(
 		"kafka_broker_network_io_bytes_total{direction=\"in\"} %f\n"+
@@ -50,10 +51,7 @@ func dump(netIn, netOut, msgTotal, produce, fetch, s3Up, s3Down float64) string 
 			"kafka_stream_download_size_bytes_total %f\n"+
 			"kafka_controller_active_count 1\n"+
 			"kafka_partition_offline_count 0\n"+
-			"kafka_partition_total_count 12\n"+
-			// lag = log end (20) - group commit (5) = 15 for topicA/partition 0
-			"kafka_log_end_offset{topic=\"topicA\",partition=\"0\"} 20\n"+
-			"kafka_group_commit_offset{consumer_group=\"g1\",topic=\"topicA\",partition=\"0\"} 5\n",
+			"kafka_partition_total_count 12\n",
 		netIn, netOut, msgTotal, produce, fetch, s3Up, s3Down)
 }
 
@@ -80,7 +78,9 @@ func TestCollect_RatesCumulativeCounters(t *testing.T) {
 	assert.Equal(t, 1, m.ActiveControllerCount, "gauges are reported as-is on the first scrape")
 	assert.Equal(t, 12, m.GlobalPartitionCount)
 	// Lag is a derived gauge (log-end − group-commit), reported as-is each scrape.
-	assert.Equal(t, int64(15), m.MaxConsumerGroupLag, "20 - 5")
+	assert.Nil(t, m.MaxConsumerGroupLag, "no lag source → consumer-group keys are omitted, never 0")
+	assert.Nil(t, m.ConsumerGroupCount)
+	assert.Empty(t, m.ConsumerLagSource)
 
 	// 10s later the counters grew → per-second rate = delta / 10, split by label.
 	clock = base.Add(10 * time.Second)
