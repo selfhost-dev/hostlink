@@ -354,4 +354,10 @@ type KafkaDatabaseMetrics struct {
 	LogSizeBytes                   int64   `json:"log_size_bytes"`
 	S3UploadSizeBytesPerSec        float64 `json:"s3_upload_size_bytes_per_sec"`
 	S3DownloadSizeBytesPerSec      float64 `json:"s3_download_size_bytes_per_sec"`
+	// AutoMQ back-pressure level (0=NORMAL, 1=HIGH). >=1 means the broker is actively
+	// throttling produce/fetch (S3 write path / WAL cache saturated) — silent to clients
+	// except as latency, so the control plane alerts on it.
+	BackPressureState int `json:"back_pressure_state"`
+	// Un-uploaded WAL bytes; sustained growth toward s3.wal.cache.size precedes back-pressure.
+	WalPendingUploadBytes int64 `json:"wal_pending_upload_bytes"`
 }

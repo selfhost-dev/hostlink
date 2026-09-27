@@ -116,3 +116,39 @@ func TestCollect_BrokerDownReportsUpFalse(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, m.Up)
 }
+
+// Back-pressure + WAL backlog (production monitoring slice). AutoMQ's
+// kafka_stream_back_pressure_state is a labeled gauge where the CURRENT level's
+// series carries its ordinal (NORMAL→0, HIGH→1) and every other series -1, so the
+// collector's max() across series is the current level; >=1 = throttling now.
+func TestCollect_BackPressureAndWalBacklog(t *testing.T) {
+	srv, setBody := mutableMetricsServer(t)
+	defer srv.Close()
+	c := NewWithEndpoint(srv.URL).(*collector)
+
+	// NORMAL: current series carries 0, the inactive level -1 → max = 0.
+	setBody("kafka_stream_back_pressure_state{state=\"NORMAL\"} 0\n" +
+		"kafka_stream_back_pressure_state{state=\"HIGH\"} -1\n" +
+		"kafka_stream_wal_pending_upload_bytes 12345\n")
+	m, err := c.Collect(credential.Credential{})
+	require.NoError(t, err)
+	assert.Equal(t, 0, m.BackPressureState, "NORMAL → 0")
+	assert.Equal(t, int64(12345), m.WalPendingUploadBytes)
+
+	// HIGH: the broker is actively throttling → max = 1 (the alert threshold).
+	setBody("kafka_stream_back_pressure_state{state=\"NORMAL\"} -1\n" +
+		"kafka_stream_back_pressure_state{state=\"HIGH\"} 1\n" +
+		"kafka_stream_wal_pending_upload_bytes 900000000\n")
+	m, err = c.Collect(credential.Credential{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, m.BackPressureState, "HIGH → 1")
+	assert.Equal(t, int64(900000000), m.WalPendingUploadBytes)
+
+	// Absent series (older broker build) degrades to 0/healthy, never an error —
+	// consistent with the collector's unmatched-series-stay-zero doctrine.
+	setBody("kafka_partition_total_count 3\n")
+	m, err = c.Collect(credential.Credential{})
+	require.NoError(t, err)
+	assert.Equal(t, 0, m.BackPressureState)
+	assert.Equal(t, int64(0), m.WalPendingUploadBytes)
+}

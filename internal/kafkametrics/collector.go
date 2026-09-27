@@ -170,6 +170,16 @@ func (c *collector) Collect(_ credential.Credential) (metrics.KafkaDatabaseMetri
 	m.S3UploadSizeBytesPerSec = c.rate("s3_upload", s.sum("kafka_stream_upload_size_bytes_total"), now)
 	m.S3DownloadSizeBytesPerSec = c.rate("s3_download", s.sum("kafka_stream_download_size_bytes_total"), now)
 
+	// AutoMQ back-pressure: kafka_stream_back_pressure_state{state=...} — the CURRENT
+	// level's series carries its ordinal (NORMAL→0, HIGH→1) and every other series -1
+	// (DefaultBackPressureManager, verified against the 1.7.4 source), so max() across
+	// the series IS the current level. >=1 means the broker is throttling produce/fetch
+	// right now — silent to clients except as latency, so the control plane alerts on it.
+	m.BackPressureState = int(s.max("kafka_stream_back_pressure_state"))
+	// Un-uploaded WAL backlog (bytes, gauge). Sustained growth toward s3.wal.cache.size
+	// precedes back-pressure; the control plane alerts at 80% of the tier's cache.
+	m.WalPendingUploadBytes = s.sumInt64("kafka_stream_wal_pending_upload_bytes")
+
 	return m, nil
 }
 
@@ -313,6 +323,26 @@ func (p *parsed) sum(names ...string) float64 {
 			}
 			return total
 		}
+	}
+	return 0
+}
+
+// max returns the maximum value across all series of the first candidate name that
+// exists (0 when absent). For labeled state gauges where the current state's series
+// carries a level and the others are negative sentinels, this yields the current level.
+func (p *parsed) max(names ...string) float64 {
+	for _, n := range names {
+		ss := p.byName[n]
+		if len(ss) == 0 {
+			continue
+		}
+		m := ss[0].value
+		for _, s := range ss[1:] {
+			if s.value > m {
+				m = s.value
+			}
+		}
+		return m
 	}
 	return 0
 }
