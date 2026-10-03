@@ -40,6 +40,8 @@ const (
 type HelloCapabilities struct {
 	ResultsEnabled  bool `json:"results_enabled"`
 	DeliveryEnabled bool `json:"delivery_enabled"`
+	// SealedEnv: the agent opens a task's sealed env (selfhost #3168).
+	SealedEnv bool `json:"sealed_env"`
 }
 
 type HelloPayload struct {
@@ -143,8 +145,9 @@ type FinalPayload struct {
 }
 
 type TaskDeliverPayload struct {
-	Command  string `json:"command"`
-	Priority int    `json:"priority"`
+	Command   string `json:"command"`
+	Priority  int    `json:"priority"`
+	SealedEnv string `json:"sealed_env,omitempty"`
 }
 
 func (e Envelope) Validate(authenticatedAgentID string) error {

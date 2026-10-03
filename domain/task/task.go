@@ -16,6 +16,9 @@ type Task struct {
 	Output             string     `json:"output"`
 	Error              string     `json:"error"`
 	ExitCode           int        `json:"exit_code"`
+	// SealedEnv carries the task's secrets (selfhost #3168), sealed to this agent's key; they
+	// reach the script as environment variables and never appear in Command.
+	SealedEnv string `json:"sealed_env,omitempty"`
 }
 
 type TaskFilters struct {

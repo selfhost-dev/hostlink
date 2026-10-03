@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"hostlink/app/services/agentstate"
 	"hostlink/domain/task"
+	"hostlink/internal/httpclient"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -112,6 +113,21 @@ func TestTaskFetcher_Fetch(t *testing.T) {
 			if capturedRequest.Header.Get(header) == "" {
 				t.Errorf("expected header %s to be set", header)
 			}
+		}
+		if got := capturedRequest.Header.Get(httpclient.CapabilitiesHeader); got != httpclient.Capabilities {
+			t.Errorf("%s = %q, want %q", httpclient.CapabilitiesHeader, got, httpclient.Capabilities)
+		}
+	})
+
+	t.Run("should carry a task's sealed env", func(t *testing.T) {
+		keys := setupTestKeys(t)
+		server := createJSONResponse(t, []task.Task{{ID: "task-1", Command: "true", SealedEnv: "envelope"}})
+		defer server.Close()
+
+		tasks, err := setupTestFetcherWithKeys(t, server.URL, keys).Fetch()
+
+		if err != nil || len(tasks) != 1 || tasks[0].SealedEnv != "envelope" {
+			t.Fatalf("tasks = %+v, err = %v", tasks, err)
 		}
 	})
 
