@@ -82,6 +82,10 @@ func TestClientHelloPayloadAdvertisesRolloutCapabilities(t *testing.T) {
 	if capabilities["results_enabled"] != true || capabilities["delivery_enabled"] != false {
 		t.Fatalf("capabilities = %#v", capabilities)
 	}
+	// selfhost #3168: always sent, so a hello without it is an agent that cannot open sealed envs.
+	if capabilities["sealed_env"] != true {
+		t.Fatalf("capabilities = %#v, want sealed_env true", capabilities)
+	}
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("Start returned error: %v", err)
@@ -317,6 +321,34 @@ func TestClientReceivesTaskDeliverStoresAcksAndQueues(t *testing.T) {
 	waitFor(t, func() bool { return len(enqueuer.tasks()) == 1 }, "task to be queued")
 	queued := enqueuer.tasks()[0]
 	if queued.ID != "task-1" || queued.ExecutionAttemptID != "attempt-1" || queued.Command != "printf hi" || queued.Priority != 2 {
+		t.Fatalf("queued task = %#v", queued)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+}
+
+// selfhost #3168: a pushed task's sealed env reaches the runner with it.
+func TestClientQueuesAPushedTaskWithItsSealedEnv(t *testing.T) {
+	store := newClientTestStore(t)
+	enqueuer := &fakeTaskEnqueuer{}
+	conn := newFakeConn()
+	client := newTestClient(t, &fakeDialer{conn: conn}, WithReceiptStore(store), WithTaskEnqueuer(enqueuer))
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- client.Start(runCtx) }()
+
+	hello := conn.waitForWrite(t)
+	conn.readCh <- helloAckEnvelope(hello.MessageID)
+	deliver := deliverEnvelope("msg_sealed", "task-sealed", "attempt-1", "true", 2)
+	deliver.Payload["sealed_env"] = "envelope"
+	conn.readCh <- deliver
+
+	waitFor(t, func() bool { return len(enqueuer.tasks()) == 1 }, "task to be queued")
+	if queued := enqueuer.tasks()[0]; queued.SealedEnv != "envelope" {
 		t.Fatalf("queued task = %#v", queued)
 	}
 	cancel()

@@ -145,6 +145,22 @@ func TestHeartbeat_Unauthorized(t *testing.T) {
 	assert.Nil(t, resp)
 }
 
+// TestHeartbeat_PendingTasksCarryTheirSealedEnv - a task's sealed env (selfhost #3168) survives
+// the heartbeat path, as it does polling and WebSocket delivery.
+func TestHeartbeat_PendingTasksCarryTheirSealedEnv(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"message":"Heartbeat received","pending_tasks":[{"id":"tsk_sealed","command":"true","status":"pending","sealed_env":"envelope"}]}`))
+	}))
+	defer server.Close()
+
+	resp, err := setupTestClient(t, server.URL).Heartbeat(context.Background(), "agent-123")
+
+	require.NoError(t, err)
+	require.Len(t, resp.PendingTasks, 1)
+	assert.Equal(t, "envelope", resp.PendingTasks[0].SealedEnv)
+}
+
 // TestHeartbeat_PendingTasks - decodes pending_tasks from response
 func TestHeartbeat_PendingTasks(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
