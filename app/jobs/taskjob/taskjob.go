@@ -232,7 +232,8 @@ func (tj *TaskJob) runTask(ctx context.Context, t task.Task, tr taskreporter.Tas
 	}
 	tempFile.Close()
 
-	if err := os.Chmod(tempFile.Name(), 0755); err != nil {
+	// Owner-only: an agent too old for sealed envs still gets secrets inlined in the script.
+	if err := os.Chmod(tempFile.Name(), 0700); err != nil {
 		t.Error = fmt.Sprintf("failed to chmod: %v", err)
 		t.Status = "failed"
 		if reportErr := tr.Report(t.ID, &taskreporter.TaskResult{

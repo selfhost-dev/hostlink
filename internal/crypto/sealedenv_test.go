@@ -20,7 +20,7 @@ func testKey(t *testing.T) *rsa.PrivateKey {
 
 func TestSealedEnvRoundTrip(t *testing.T) {
 	key := testKey(t)
-	env := map[string]string{"TLS_KEY_PEM": "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", "EMPTY": ""}
+	env := map[string]string{"SELFHOST_SEALED_TLS_KEY_PEM": "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", "SELFHOST_SEALED_EMPTY": ""}
 
 	sealed, err := SealEnv(env, "task_123", &key.PublicKey)
 	if err != nil {
@@ -34,14 +34,14 @@ func TestSealedEnvRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	if len(opened) != 2 || opened["TLS_KEY_PEM"] != env["TLS_KEY_PEM"] || opened["EMPTY"] != "" {
+	if len(opened) != 2 || opened["SELFHOST_SEALED_TLS_KEY_PEM"] != env["SELFHOST_SEALED_TLS_KEY_PEM"] || opened["SELFHOST_SEALED_EMPTY"] != "" {
 		t.Fatalf("opened %v, want %v", opened, env)
 	}
 }
 
 func TestSealedEnvOpensOnlyForItsTask(t *testing.T) {
 	key := testKey(t)
-	sealed, _ := SealEnv(map[string]string{"A": "1"}, "task_123", &key.PublicKey)
+	sealed, _ := SealEnv(map[string]string{"SELFHOST_SEALED_A": "1"}, "task_123", &key.PublicKey)
 
 	if _, err := OpenSealedEnv(sealed, "task_456", key); err == nil {
 		t.Fatal("an envelope sealed for one task opened for another")
@@ -49,7 +49,7 @@ func TestSealedEnvOpensOnlyForItsTask(t *testing.T) {
 }
 
 func TestSealedEnvOpensOnlyWithTheAgentKey(t *testing.T) {
-	sealed, _ := SealEnv(map[string]string{"A": "1"}, "task_123", &testKey(t).PublicKey)
+	sealed, _ := SealEnv(map[string]string{"SELFHOST_SEALED_A": "1"}, "task_123", &testKey(t).PublicKey)
 
 	if _, err := OpenSealedEnv(sealed, "task_123", testKey(t)); err == nil {
 		t.Fatal("another agent's key opened the envelope")
@@ -58,7 +58,7 @@ func TestSealedEnvOpensOnlyWithTheAgentKey(t *testing.T) {
 
 func TestSealedEnvRejectsTampering(t *testing.T) {
 	key := testKey(t)
-	sealed, _ := SealEnv(map[string]string{"A": "1"}, "task_123", &key.PublicKey)
+	sealed, _ := SealEnv(map[string]string{"SELFHOST_SEALED_A": "1"}, "task_123", &key.PublicKey)
 	var envelope sealedEnvelope
 	if err := json.Unmarshal([]byte(sealed), &envelope); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -85,7 +85,7 @@ func TestSealedEnvRefusesUnknownFormatsAndNames(t *testing.T) {
 		}
 	}
 
-	for _, bad := range []string{"lower", "1LEADING_DIGIT", "WITH-DASH", "WITH SPACE", "A=B", ""} {
+	for _, bad := range []string{"PATH", "LD_PRELOAD", "BASH_ENV", "SELFHOST_SEALED_", "selfhost_sealed_x", "SELFHOST_SEALED_A-B", "SELFHOST_SEALED_A=B", ""} {
 		sealed, _ := SealEnv(map[string]string{bad: "x"}, "task_123", &key.PublicKey)
 		if _, err := OpenSealedEnv(sealed, "task_123", key); err == nil {
 			t.Errorf("variable name %q accepted", bad)
@@ -95,7 +95,7 @@ func TestSealedEnvRefusesUnknownFormatsAndNames(t *testing.T) {
 
 func TestSealedEnvRefusesAValueWithANulByte(t *testing.T) {
 	key := testKey(t)
-	sealed, _ := SealEnv(map[string]string{"A": "x\x00y"}, "task_123", &key.PublicKey)
+	sealed, _ := SealEnv(map[string]string{"SELFHOST_SEALED_A": "x\x00y"}, "task_123", &key.PublicKey)
 
 	if _, err := OpenSealedEnv(sealed, "task_123", key); err == nil {
 		t.Fatal("a value with a NUL byte cannot be passed through the environment")

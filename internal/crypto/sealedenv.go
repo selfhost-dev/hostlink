@@ -33,7 +33,9 @@ type sealedEnvelope struct {
 	Data    string `json:"ct"`
 }
 
-var sealedEnvName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
+// Only the control plane's own names (SELFHOST_SEALED_*): an envelope can never set PATH,
+// LD_PRELOAD, BASH_ENV or anything else the script or its tools read.
+var sealedEnvName = regexp.MustCompile(`^SELFHOST_SEALED_[A-Z0-9_]+$`)
 
 // OpenSealedEnv opens a task's sealed environment with the agent's private key.
 func OpenSealedEnv(sealed string, taskID string, privateKey *rsa.PrivateKey) (map[string]string, error) {

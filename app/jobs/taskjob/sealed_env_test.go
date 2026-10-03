@@ -23,11 +23,11 @@ func TestTaskJobRunsTheScriptWithItsSealedEnv(t *testing.T) {
 			if sealed != "envelope" || taskID != "task-1" {
 				t.Fatalf("opened %q for %q", sealed, taskID)
 			}
-			return map[string]string{"TLS_KEY_PEM": "s3cret"}, nil
+			return map[string]string{"SELFHOST_SEALED_TLS_KEY_PEM": "s3cret"}, nil
 		},
 	})
 
-	job.processTask(context.Background(), task.Task{ID: "task-1", Command: `printf '%s' "$TLS_KEY_PEM"`, SealedEnv: "envelope"}, reporter, nil)
+	job.processTask(context.Background(), task.Task{ID: "task-1", Command: `printf '%s' "$SELFHOST_SEALED_TLS_KEY_PEM"`, SealedEnv: "envelope"}, reporter, nil)
 
 	if got := reporter.results[0]; got.Status != "completed" || got.ExitCode != 0 || got.Output != "s3cret" {
 		t.Fatalf("result = %+v", got)
@@ -78,14 +78,14 @@ func TestDefaultSealedEnvOpenerUsesTheAgentKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("HOSTLINK_PRIVATE_KEY_PATH", keyPath)
-	sealed, err := crypto.SealEnv(map[string]string{"A": "1"}, "task-1", &key.PublicKey)
+	sealed, err := crypto.SealEnv(map[string]string{"SELFHOST_SEALED_A": "1"}, "task-1", &key.PublicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	env, err := defaultSealedEnvOpener(sealed, "task-1")
 
-	if err != nil || env["A"] != "1" {
+	if err != nil || env["SELFHOST_SEALED_A"] != "1" {
 		t.Fatalf("env = %v, err = %v", env, err)
 	}
 }
