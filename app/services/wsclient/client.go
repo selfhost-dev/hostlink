@@ -367,6 +367,7 @@ func (c *Client) receiveTaskDeliver(ctx context.Context, conn Conn, env wsprotoc
 			ID:                 env.TaskID,
 			ExecutionAttemptID: env.ExecutionAttemptID,
 			Command:            payload.Command,
+			SealedEnv:          payload.SealedEnv,
 			Status:             "pending",
 			Priority:           payload.Priority,
 		})
@@ -533,6 +534,7 @@ func (c *Client) buildHelloPayload() wsprotocol.HelloPayload {
 		Capabilities: wsprotocol.HelloCapabilities{
 			ResultsEnabled:  c.resultsEnabled,
 			DeliveryEnabled: c.deliveryEnabled,
+			SealedEnv:       true,
 		},
 	}
 	if c.receipts == nil {

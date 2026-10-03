@@ -8,6 +8,7 @@ import (
 	"hostlink/app/services/requestsigner"
 	"hostlink/config/appconf"
 	"hostlink/domain/task"
+	"hostlink/internal/httpclient"
 	"net/http"
 	"time"
 )
@@ -77,6 +78,7 @@ func (tf *taskfetcher) Fetch() ([]task.Task, error) {
 	if err := tf.signer.SignRequest(req); err != nil {
 		return nil, fmt.Errorf("failed to sign request: %w", err)
 	}
+	req.Header.Set(httpclient.CapabilitiesHeader, httpclient.Capabilities)
 
 	resp, err := tf.client.Do(req)
 	if err != nil {

@@ -11,7 +11,9 @@ import (
 	"hostlink/app/services/localtaskstore"
 	"hostlink/app/services/taskfetcher"
 	"hostlink/app/services/taskreporter"
+	"hostlink/config/appconf"
 	"hostlink/domain/task"
+	"hostlink/internal/crypto"
 	"hostlink/internal/telemetry"
 	"io"
 	"os"
@@ -29,11 +31,15 @@ type PollingGate interface {
 	ShouldPoll() bool
 }
 
+// SealedEnvOpener opens a task's sealed env (selfhost #3168) into its environment variables.
+type SealedEnvOpener func(sealed, taskID string) (map[string]string, error)
+
 type TaskJobConfig struct {
 	Trigger              TriggerFunc
 	OutputFlushInterval  time.Duration
 	OutputFlushThreshold int
 	PollingGate          PollingGate
+	SealedEnvOpener      SealedEnvOpener
 }
 
 type ResultChannel interface {
@@ -66,6 +72,9 @@ func NewJobWithConf(cfg TaskJobConfig) *TaskJob {
 	}
 	if cfg.OutputFlushThreshold == 0 {
 		cfg.OutputFlushThreshold = 16 * 1024
+	}
+	if cfg.SealedEnvOpener == nil {
+		cfg.SealedEnvOpener = defaultSealedEnvOpener
 	}
 
 	return &TaskJob{
@@ -237,6 +246,23 @@ func (tj *TaskJob) runTask(ctx context.Context, t task.Task, tr taskreporter.Tas
 		return
 	}
 	execCmd := buildTaskCmd(tempFile.Name())
+	if t.SealedEnv != "" {
+		env, err := tj.config.SealedEnvOpener(t.SealedEnv, t.ID)
+		if err != nil {
+			t.Error = fmt.Sprintf("failed to open the task's sealed env: %v", err)
+			t.Status = "failed"
+			if reportErr := tr.Report(t.ID, &taskreporter.TaskResult{
+				Status:   t.Status,
+				Output:   t.Output,
+				Error:    t.Error,
+				ExitCode: t.ExitCode,
+			}); reportErr != nil {
+				log.Errorf("failed to report task %s: %v", t.ID, reportErr)
+			}
+			return
+		}
+		execCmd.Env = append(os.Environ(), crypto.SealedEnvAsEnviron(env)...)
+	}
 	if channel != nil && t.ExecutionAttemptID != "" {
 		tj.processTaskWithResultChannel(ctx, t, execCmd, tr, channel)
 		return
@@ -423,4 +449,13 @@ func (tj *TaskJob) Shutdown() {
 		tj.cancel()
 	}
 	tj.wg.Wait()
+}
+
+// defaultSealedEnvOpener opens a sealed env with the agent's own private key.
+func defaultSealedEnvOpener(sealed, taskID string) (map[string]string, error) {
+	privateKey, err := crypto.LoadPrivateKey(appconf.AgentPrivateKeyPath())
+	if err != nil {
+		return nil, fmt.Errorf("agent key: %w", err)
+	}
+	return crypto.OpenSealedEnv(sealed, taskID, privateKey)
 }
