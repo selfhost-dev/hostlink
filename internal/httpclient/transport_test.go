@@ -41,8 +41,8 @@ func TestAgentTransport_SetsAllHeaders(t *testing.T) {
 	}
 
 	// The control plane seals task secrets only to agents that can open them (selfhost #3168).
-	if got := receivedHeaders.Get("X-Agent-Capabilities"); got != "sealed-env-v1" {
-		t.Errorf("X-Agent-Capabilities = %q, want sealed-env-v1", got)
+	if got := receivedHeaders.Get("X-Agent-Capabilities"); got != "sealed-env-v1,mysql-tls-probe-v1" {
+		t.Errorf("X-Agent-Capabilities = %q, want sealed-env-v1,mysql-tls-probe-v1", got)
 	}
 }
 
