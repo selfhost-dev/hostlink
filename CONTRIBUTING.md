@@ -6,7 +6,7 @@ Thank you for your interest in contributing to Hostlink!
 
 ### Prerequisites
 
-- Go 1.23 or higher
+- Go 1.27.2 or higher
 - SQLite (included in most systems)
 
 ### Running Locally
