@@ -11,9 +11,10 @@ import (
 
 // Capabilities the control plane may rely on, sent on every agent request (CapabilitiesHeader).
 // sealed-env-v1: the agent opens a task's sealed env (selfhost #3168).
+// mysql-tls-probe-v1: the agent probes MySQL over TLS (selfhost #3465).
 const (
 	CapabilitiesHeader = "X-Agent-Capabilities"
-	Capabilities       = "sealed-env-v1"
+	Capabilities       = "sealed-env-v1,mysql-tls-probe-v1"
 )
 
 // AgentTransport wraps an http.RoundTripper and injects agent identification headers.

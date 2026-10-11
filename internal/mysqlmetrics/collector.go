@@ -33,7 +33,13 @@ func New() Collector {
 	return &mysqlCollector{queryTimeout: 10 * time.Second}
 }
 
-func (mc *mysqlCollector) Collect(cred credential.Credential) (metrics.MySQLDatabaseMetrics, error) {
+// buildDSN connects over TCP with tls=preferred: TLS whenever the server offers
+// it, plaintext otherwise. A TLS-enabled member runs require_secure_transport=ON
+// and refuses a plaintext login even on loopback; go-sql-driver is plaintext
+// unless told otherwise, so the ping failed and the agent reported an enforcing
+// member down (selfhost-dev/selfhost#3393). preferred does not verify the
+// certificate: the question here is "is the server alive", over its own port.
+func buildDSN(cred credential.Credential) string {
 	password := ""
 	if cred.Password != nil {
 		password = *cred.Password
@@ -43,10 +49,16 @@ func (mc *mysqlCollector) Collect(cred credential.Credential) (metrics.MySQLData
 	if cred.Database != "" {
 		dbPath = "/" + cred.Database
 	}
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)%s?timeout=10s&readTimeout=10s",
-		cred.Username, password, cred.Host, cred.Port, dbPath)
+	tlsMode := "preferred"
+	if cred.SSLMode != "" && cred.SSLMode != "disabled" {
+		tlsMode = cred.SSLMode
+	}
+	return fmt.Sprintf("%s:%s@tcp(%s:%d)%s?timeout=10s&readTimeout=10s&tls=%s",
+		cred.Username, password, cred.Host, cred.Port, dbPath, tlsMode)
+}
 
-	db, err := sql.Open("mysql", dsn)
+func (mc *mysqlCollector) Collect(cred credential.Credential) (metrics.MySQLDatabaseMetrics, error) {
+	db, err := sql.Open("mysql", buildDSN(cred))
 	if err != nil {
 		return metrics.MySQLDatabaseMetrics{}, fmt.Errorf("open: %w", err)
 	}

@@ -12,6 +12,8 @@ type Credential struct {
 	Database      string     `json:"database"`
 	PasswdEnc     string     `json:"passwd_enc"`
 	Password      *string    `json:"password"`
+	SSLMode       string     `json:"ssl_mode,omitempty"`
+	TLSEnabled    bool       `json:"tls_enabled,omitempty"`
 	DataDirectory string     `json:"data_directory"`
 	AgentID       string     `json:"agent_id"`
 	CreatedAt     time.Time  `json:"created_at"`
