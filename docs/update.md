@@ -17,7 +17,6 @@ not in your system right now. In case of install everything is fresh and new so
 decision making would be easier. In case of update you need to make sure that
 certain race conditions and execution order is maintained.
 
-
 ## Self-update download fallback
 
 The self-update job downloads the tarball from `agent_url` in the control

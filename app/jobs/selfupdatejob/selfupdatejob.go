@@ -215,7 +215,7 @@ func (j *SelfUpdateJob) runUpdate(ctx context.Context) error {
 		if _, ferr := j.config.Downloader.DownloadAndVerify(ctx, info.AgentFallbackURL, agentDest, info.AgentSHA256); ferr != nil {
 			log.Errorf("failed to download agent from the fallback too (update_id=%s): %v", updateID, ferr)
 			writeErrorState(fmt.Sprintf("failed to download agent: %s; fallback: %s", err, ferr))
-			return fmt.Errorf("failed to download agent: %w (fallback: %v)", err, ferr)
+			return fmt.Errorf("failed to download agent: %w (fallback: %w)", err, ferr)
 		}
 	}
 	log.Infof("agent tarball downloaded successfully (update_id=%s, dest=%s)", updateID, agentDest)
