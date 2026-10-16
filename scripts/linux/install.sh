@@ -13,11 +13,6 @@ INITIAL_DELAY=1
 MAX_DELAY=60
 DOWNLOAD_TIMEOUT=60
 
-# Check if running as root
-if [[ $EUID -ne 0 ]]; then
-  echo "This script must be run as root (use sudo)"
-  exit $EXIT_GENERAL
-fi
 
 check_dependencies() {
   # Check for curl
@@ -121,29 +116,63 @@ show_download_error() {
 TOKEN_ID="default-token-id"
 TOKEN_KEY="default-token-key"
 SERVER_URL="http://localhost:8080"
+# Pinned release tag (e.g. v0.8.45). Empty: ask GitHub's API for the latest,
+# which is unauthenticated and rate-limited per IP (60/h) — a pinned version
+# skips that lookup entirely.
+VERSION=""
+# Where hostlink_Linux_<arch>.tar.gz is downloaded from. Empty: this version's
+# GitHub release. A mirror (e.g. https://<bucket>.s3.amazonaws.com/hostlink/v0.8.45)
+# keeps installs off GitHub.
+DOWNLOAD_BASE_URL=""
+# Expected sha256 of the tarball for each architecture. When the one for this
+# machine's arch is set, a download that does not match is rejected and retried.
+SHA256_X86_64=""
+SHA256_ARM64=""
 
-# Parse command line arguments
-while [[ $# -gt 0 ]]; do
-  case $1 in
-    --token-id)
-      TOKEN_ID="$2"
-      shift 2
-      ;;
-    --token-key)
-      TOKEN_KEY="$2"
-      shift 2
-      ;;
-    --server-url)
-      SERVER_URL="$2"
-      shift 2
-      ;;
-    *)
-      echo "Unknown option: $1"
-      echo "Usage: $0 [--token-id ID] [--token-key KEY] [--server-url URL]"
-      exit 1
-      ;;
-  esac
-done
+usage() {
+  echo "Usage: $0 [--token-id ID] [--token-key KEY] [--server-url URL] [--version TAG]"
+  echo "          [--download-base-url URL] [--sha256-x86_64 HEX] [--sha256-arm64 HEX]"
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --token-id)
+        TOKEN_ID="$2"
+        shift 2
+        ;;
+      --token-key)
+        TOKEN_KEY="$2"
+        shift 2
+        ;;
+      --server-url)
+        SERVER_URL="$2"
+        shift 2
+        ;;
+      --version)
+        VERSION="$2"
+        shift 2
+        ;;
+      --download-base-url)
+        DOWNLOAD_BASE_URL="$2"
+        shift 2
+        ;;
+      --sha256-x86_64)
+        SHA256_X86_64="$2"
+        shift 2
+        ;;
+      --sha256-arm64)
+        SHA256_ARM64="$2"
+        shift 2
+        ;;
+      *)
+        echo "Unknown option: $1"
+        usage
+        exit 1
+        ;;
+    esac
+  done
+}
 
 uninstall_existing() {
   echo "Checking for existing installation..."
@@ -231,6 +260,47 @@ latest_version() {
   exit $EXIT_VERSION_FETCH
 }
 
+# The release tag to install: the pinned --version, else GitHub's latest.
+resolve_version() {
+  if [ -n "$VERSION" ]; then
+    echo "Using pinned version: $VERSION" >&2
+    echo "$VERSION"
+  else
+    latest_version
+  fi
+}
+
+download_url() {
+  local base="${DOWNLOAD_BASE_URL%/}"
+  if [ -z "$base" ]; then
+    base="https://github.com/selfhost-dev/hostlink/releases/download/${VERSION}"
+  fi
+  echo "${base}/hostlink_Linux_${ARCH}.tar.gz"
+}
+
+expected_sha256() {
+  case $ARCH in
+    x86_64) echo "$SHA256_X86_64" ;;
+    arm64) echo "$SHA256_ARM64" ;;
+  esac
+}
+
+# True when no checksum is expected for this arch, or the file matches it.
+verify_sha256() {
+  local file="$1"
+  local expected
+  expected=$(expected_sha256)
+  [ -z "$expected" ] && return 0
+
+  if ! command -v sha256sum &> /dev/null; then
+    echo "ERROR: sha256sum is required to verify the download." >&2
+    return 1
+  fi
+  local actual
+  actual=$(sha256sum "$file" | cut -d' ' -f1)
+  [ "$actual" = "$expected" ]
+}
+
 detect_arch() {
   local arch=$(uname -m)
   case $arch in
@@ -247,28 +317,15 @@ detect_arch() {
   esac
 }
 
-# Run dependency checks first
-check_dependencies
-create_temp_dir
-
-ARCH=$(detect_arch)
-
-# latest_version outputs messages to stderr, version to stdout
-VERSION=$(latest_version)
-if [ -z "$VERSION" ]; then
-  echo "ERROR: Failed to determine version."
-  exit $EXIT_VERSION_FETCH
-fi
-
-HOSTLINK_TAR=hostlink_$VERSION.tar.gz
 
 download_tar() {
-  local download_url="https://github.com/selfhost-dev/hostlink/releases/download/${VERSION}/hostlink_Linux_${ARCH}.tar.gz"
+  local download_url
+  download_url=$(download_url)
   local tar_file="$TEMP_DIR/$HOSTLINK_TAR"
   local attempt=0
   local http_status=""
 
-  echo "Downloading hostlink $VERSION..."
+  echo "Downloading hostlink $VERSION from $download_url..."
 
   while [ "$attempt" -lt "$MAX_RETRIES" ]; do
     attempt=$((attempt + 1))
@@ -289,11 +346,13 @@ download_tar() {
 
     # Check for success (2xx status) and validate gzip
     if [[ "$http_status" =~ ^2[0-9][0-9]$ ]]; then
-      if validate_gzip "$tar_file"; then
+      if ! validate_gzip "$tar_file"; then
+        echo "Download completed but file is not valid gzip (possibly corrupted)."
+      elif ! verify_sha256 "$tar_file"; then
+        echo "Download completed but its sha256 does not match the expected checksum for ${ARCH}."
+      else
         echo "Download successful."
         return 0
-      else
-        echo "Download completed but file is not valid gzip (possibly corrupted)."
       fi
     fi
 
@@ -356,10 +415,40 @@ install_service() {
   echo "Service started."
 }
 
-uninstall_existing
-download_tar
-extract_tar
-move_bin
-create_directories
-create_env_file
-install_service
+main() {
+  parse_args "$@"
+
+  if [[ $EUID -ne 0 ]]; then
+    echo "This script must be run as root (use sudo)"
+    exit $EXIT_GENERAL
+  fi
+
+  # Run dependency checks first
+  check_dependencies
+  create_temp_dir
+
+  ARCH=$(detect_arch)
+
+  # resolve_version outputs messages to stderr, version to stdout
+  VERSION=$(resolve_version)
+  if [ -z "$VERSION" ]; then
+    echo "ERROR: Failed to determine version."
+    exit $EXIT_VERSION_FETCH
+  fi
+
+  HOSTLINK_TAR=hostlink_$VERSION.tar.gz
+
+  uninstall_existing
+  download_tar
+  extract_tar
+  move_bin
+  create_directories
+  create_env_file
+  install_service
+}
+
+# Run when executed — as a file or piped (`curl … | sudo bash -s -- …`) —
+# never when sourced, so the functions can be tested (install_test.sh).
+if ! (return 0 2>/dev/null); then
+  main "$@"
+fi

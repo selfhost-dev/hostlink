@@ -11,7 +11,7 @@ permissions:
   contents: write
   # packages: write
   # issues: write
-  # id-token: write
+  id-token: write # GitHub OIDC for the S3 mirror's AWS role
 
 jobs:
   goreleaser:
@@ -41,3 +41,18 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Your GoReleaser Pro key, if you are using the 'goreleaser-pro' distribution
           # GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+
+      # Mirror the Linux agent to S3 so servers install hostlink without GitHub
+      # (scripts/release/mirror_to_s3.sh). Skipped until the mirror exists: set
+      # the repository variables HOSTLINK_MIRROR_BUCKET, HOSTLINK_MIRROR_ROLE_ARN
+      # (an IAM role trusting this repo's tag workflows via GitHub OIDC) and,
+      # optionally, HOSTLINK_MIRROR_REGION.
+      - name: Configure AWS credentials for the S3 mirror
+        if: ${{ vars.HOSTLINK_MIRROR_BUCKET != '' && vars.HOSTLINK_MIRROR_ROLE_ARN != '' }}
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.HOSTLINK_MIRROR_ROLE_ARN }}
+          aws-region: ${{ vars.HOSTLINK_MIRROR_REGION || 'ap-south-1' }}
+      - name: Mirror release to S3
+        if: ${{ vars.HOSTLINK_MIRROR_BUCKET != '' && vars.HOSTLINK_MIRROR_ROLE_ARN != '' }}
+        run: scripts/release/mirror_to_s3.sh "$GITHUB_REF_NAME" dist "s3://${{ vars.HOSTLINK_MIRROR_BUCKET }}/hostlink"
