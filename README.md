@@ -29,6 +29,27 @@ curl -fsSL https://raw.githubusercontent.com/selfhost-dev/hostlink/refs/heads/ma
   sudo bash -s -- --server-url "https://your-server.com" --token-id "your-token-id" --token-key "your-token-key"
 ```
 
+### Install a pinned version, from a mirror, with checksums
+
+By default the installer asks GitHub's API for the latest release (unauthenticated,
+rate-limited per IP) and downloads it from GitHub. To skip both:
+
+```sh
+curl -fsSL https://<bucket>.s3.amazonaws.com/hostlink/v0.8.45/install.sh -o install.sh
+sudo bash install.sh --server-url "https://your-server.com" --token-id "your-token-id" --token-key "your-token-key" \
+  --version v0.8.45 \
+  --download-base-url https://<bucket>.s3.amazonaws.com/hostlink/v0.8.45 \
+  --sha256-x86_64 <sha256> --sha256-arm64 <sha256>
+```
+
+- `--version` installs that tag and never calls GitHub's API.
+- `--download-base-url` downloads `hostlink_Linux_<arch>.tar.gz` from there instead of the GitHub release.
+- `--sha256-x86_64` / `--sha256-arm64`: a download whose sha256 does not match the one for the machine's arch is rejected and retried.
+
+Every tagged release is mirrored to S3 by the release workflow
+(`scripts/release/mirror_to_s3.sh`) once the repository variables
+`HOSTLINK_MIRROR_BUCKET` and `HOSTLINK_MIRROR_ROLE_ARN` are set.
+
 Just running this above script will make the server up and running on your
 machine. You can access it on port :1232 of your machine.
 
