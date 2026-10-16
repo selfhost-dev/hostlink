@@ -45,6 +45,24 @@ func TestCheck_UpdateAvailable(t *testing.T) {
 	}
 }
 
+// The control plane's raw JSON, so the wire name agent_fallback_url is
+// asserted, not just the struct's own round trip.
+func TestCheck_DecodesAgentFallbackURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"update_available":true,"target_version":"2.0.0","agent_url":"https://github.com/a.tar.gz",` +
+			`"agent_sha256":"abc","agent_size":1,"agent_fallback_url":"https://mirror.example/a.tar.gz"}`))
+	}))
+	defer server.Close()
+
+	info, err := newTestChecker(t, server.Client(), server.URL, nil).Check()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.AgentFallbackURL != "https://mirror.example/a.tar.gz" {
+		t.Errorf("expected AgentFallbackURL https://mirror.example/a.tar.gz, got %q", info.AgentFallbackURL)
+	}
+}
+
 func TestCheck_NoUpdateAvailable(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := UpdateInfo{

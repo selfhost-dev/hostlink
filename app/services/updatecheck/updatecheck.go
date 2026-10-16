@@ -18,6 +18,10 @@ type UpdateInfo struct {
 	AgentURL        string `json:"agent_url"`
 	AgentSHA256     string `json:"agent_sha256"`
 	AgentSize       int64  `json:"agent_size"`
+	// AgentFallbackURL is the control plane's S3 copy of the same binary
+	// (same sha256), tried when the download from AgentURL fails. Empty when
+	// the control plane has no such copy.
+	AgentFallbackURL string `json:"agent_fallback_url"`
 }
 
 // RequestSignerInterface abstracts request signing for testability.

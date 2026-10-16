@@ -3,6 +3,7 @@ package selfupdatejob
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -444,6 +445,115 @@ func TestUpdateFlow_DownloadFailure(t *testing.T) {
 	// Lock should still be released on failure
 	if lock.unlockCount.Load() != 1 {
 		t.Errorf("expected lock to be released on failure, unlock count: %d", lock.unlockCount.Load())
+	}
+}
+
+// fallbackJob builds a job whose update check offers agent_url plus, when
+// fallbackURL is set, agent_fallback_url (the control plane's S3 copy of the
+// same binary).
+func fallbackJob(downloader *mockDownloader, spawner *mockSpawner, lock *mockLockManager, fallbackURL string) *SelfUpdateJob {
+	checker := &mockUpdateChecker{
+		result: &updatecheck.UpdateInfo{
+			UpdateAvailable:  true,
+			TargetVersion:    "2.0.0",
+			AgentURL:         "https://github.com/agent.tar.gz",
+			AgentSHA256:      "abc",
+			AgentFallbackURL: fallbackURL,
+		},
+	}
+	return NewWithConfig(SelfUpdateJobConfig{
+		UpdateChecker:    checker,
+		Downloader:       downloader,
+		PreflightChecker: &mockPreflight{result: &updatepreflight.PreflightResult{Passed: true}},
+		LockManager:      lock,
+		StateWriter:      &mockStateWriter{},
+		Spawn:            spawner.spawn,
+		InstallBinary:    noopInstaller,
+		CurrentVersion:   "1.0.0",
+		InstallPath:      "/usr/bin/hostlink",
+		StagingDir:       "/tmp/staging",
+	})
+}
+
+func TestUpdateFlow_DownloadFailure_TriesFallbackURL(t *testing.T) {
+	downloader := &mockDownloader{err: errors.New("github.com unreachable"), failOnCall: 1}
+	spawner := &mockSpawner{}
+	lock := &mockLockManager{}
+
+	if err := fallbackJob(downloader, spawner, lock, "https://mirror.example/agent.tar.gz").runUpdate(context.Background()); err != nil {
+		t.Fatalf("expected the fallback download to complete the update, got %v", err)
+	}
+
+	want := []string{"https://github.com/agent.tar.gz", "https://mirror.example/agent.tar.gz"}
+	if !slices.Equal(downloader.urls, want) {
+		t.Errorf("download urls = %v, want %v", downloader.urls, want)
+	}
+	if !slices.Equal(downloader.sha256s, []string{"abc", "abc"}) {
+		t.Errorf("the fallback must be verified against the same sha256, got %v", downloader.sha256s)
+	}
+	if spawner.callCount.Load() != 1 {
+		t.Errorf("expected upgrade to be spawned once, got %d", spawner.callCount.Load())
+	}
+}
+
+func TestUpdateFlow_DownloadSuccess_NeverTouchesFallbackURL(t *testing.T) {
+	downloader := &mockDownloader{}
+	spawner := &mockSpawner{}
+
+	if err := fallbackJob(downloader, spawner, &mockLockManager{}, "https://mirror.example/agent.tar.gz").runUpdate(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !slices.Equal(downloader.urls, []string{"https://github.com/agent.tar.gz"}) {
+		t.Errorf("download urls = %v, want only agent_url", downloader.urls)
+	}
+}
+
+func TestUpdateFlow_DownloadFailure_FallbackAlsoFails(t *testing.T) {
+	downloader := &mockDownloader{err: errors.New("download failed")}
+	spawner := &mockSpawner{}
+	lock := &mockLockManager{}
+
+	err := fallbackJob(downloader, spawner, lock, "https://mirror.example/agent.tar.gz").runUpdate(context.Background())
+
+	if err == nil {
+		t.Fatal("expected an error when both downloads fail")
+	}
+	if downloader.callCount.Load() != 2 {
+		t.Errorf("expected 2 download attempts, got %d", downloader.callCount.Load())
+	}
+	if spawner.callCount.Load() != 0 {
+		t.Error("spawner should not be called when both downloads fail")
+	}
+	if lock.unlockCount.Load() != 1 {
+		t.Errorf("expected lock to be released on failure, unlock count: %d", lock.unlockCount.Load())
+	}
+}
+
+func TestUpdateFlow_DownloadFailure_NoFallbackURL_SingleAttempt(t *testing.T) {
+	downloader := &mockDownloader{err: errors.New("download failed")}
+
+	if err := fallbackJob(downloader, &mockSpawner{}, &mockLockManager{}, "").runUpdate(context.Background()); err == nil {
+		t.Fatal("expected an error when the download fails")
+	}
+
+	if downloader.callCount.Load() != 1 {
+		t.Errorf("expected 1 download attempt without agent_fallback_url, got %d", downloader.callCount.Load())
+	}
+}
+
+func TestUpdateFlow_DownloadCancelled_SkipsFallbackURL(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	downloader := &mockDownloader{err: context.Canceled, onCall: func(int32) { cancel() }}
+
+	err := fallbackJob(downloader, &mockSpawner{}, &mockLockManager{}, "https://mirror.example/agent.tar.gz").runUpdate(ctx)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got %v", err)
+	}
+	if downloader.callCount.Load() != 1 {
+		t.Errorf("a cancelled update must not try the fallback, got %d download attempts", downloader.callCount.Load())
 	}
 }
 
@@ -1223,6 +1333,8 @@ type mockDownloader struct {
 	failOnCall int32 // fail on this call number (1-indexed), 0 means all fail if err is set
 	callCount  atomic.Int32
 	destPaths  []string
+	urls       []string
+	sha256s    []string
 	onCall     func(count int32) // called after each download with 1-indexed call number
 	mu         sync.Mutex
 }
@@ -1231,6 +1343,8 @@ func (m *mockDownloader) DownloadAndVerify(ctx context.Context, url, destPath, s
 	count := m.callCount.Add(1)
 	m.mu.Lock()
 	m.destPaths = append(m.destPaths, destPath)
+	m.urls = append(m.urls, url)
+	m.sha256s = append(m.sha256s, sha256)
 	m.mu.Unlock()
 	if m.onCall != nil {
 		m.onCall(count)

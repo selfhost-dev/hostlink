@@ -203,9 +203,20 @@ func (j *SelfUpdateJob) runUpdate(ctx context.Context) error {
 	log.Infof("downloading agent tarball (update_id=%s, url=%s)", updateID, info.AgentURL)
 	agentDest := filepath.Join(j.config.StagingDir, updatedownload.AgentTarballName)
 	if _, err := j.config.Downloader.DownloadAndVerify(ctx, info.AgentURL, agentDest, info.AgentSHA256); err != nil {
-		log.Errorf("failed to download agent (update_id=%s): %v", updateID, err)
-		writeErrorState(fmt.Sprintf("failed to download agent: %s", err))
-		return fmt.Errorf("failed to download agent: %w", err)
+		if info.AgentFallbackURL == "" || ctx.Err() != nil {
+			log.Errorf("failed to download agent (update_id=%s): %v", updateID, err)
+			writeErrorState(fmt.Sprintf("failed to download agent: %s", err))
+			return fmt.Errorf("failed to download agent: %w", err)
+		}
+
+		// The control plane's S3 copy of the same binary, verified against the
+		// same sha256: for hosts that cannot reach the primary (e.g. github.com).
+		log.Warnf("failed to download agent from %s (update_id=%s): %v; trying the fallback %s", info.AgentURL, updateID, err, info.AgentFallbackURL)
+		if _, ferr := j.config.Downloader.DownloadAndVerify(ctx, info.AgentFallbackURL, agentDest, info.AgentSHA256); ferr != nil {
+			log.Errorf("failed to download agent from the fallback too (update_id=%s): %v", updateID, ferr)
+			writeErrorState(fmt.Sprintf("failed to download agent: %s; fallback: %s", err, ferr))
+			return fmt.Errorf("failed to download agent: %w (fallback: %w)", err, ferr)
+		}
 	}
 	log.Infof("agent tarball downloaded successfully (update_id=%s, dest=%s)", updateID, agentDest)
 
