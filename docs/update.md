@@ -17,3 +17,13 @@ not in your system right now. In case of install everything is fresh and new so
 decision making would be easier. In case of update you need to make sure that
 certain race conditions and execution order is maintained.
 
+
+## Self-update download fallback
+
+The self-update job downloads the tarball from `agent_url` in the control
+plane's update check, and verifies it against `agent_sha256`. When the control
+plane also sends `agent_fallback_url` (its own S3 copy of the same binary), a
+failed download from `agent_url`, for example because the host cannot reach
+github.com, is retried once from `agent_fallback_url`. The retry is verified
+against the same `agent_sha256`. Without the field, a failed download fails the
+update as before, and the next check tries again.
