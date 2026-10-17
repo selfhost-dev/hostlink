@@ -186,8 +186,15 @@ func (mc *mysqlCollector) collectReplication(ctx context.Context, db *sql.DB, m 
 
 	row := make(map[string]string, len(cols))
 	for i, col := range cols {
-		if vals[i] != nil {
-			row[col] = fmt.Sprintf("%v", vals[i])
+		switch v := vals[i].(type) {
+		case nil:
+		case []byte:
+			// go-sql-driver returns text columns as []byte, and "%v" of a
+			// []byte is "[89 101 115]", not "Yes": every replica read as
+			// disconnected and its lag as 0 (selfhost-dev/selfhost).
+			row[col] = string(v)
+		default:
+			row[col] = fmt.Sprintf("%v", v)
 		}
 	}
 
