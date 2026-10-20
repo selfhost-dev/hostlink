@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Block staged files larger than MAX_TOKENS (tokens = bytes / 4).
+# Checks the staged blob, not the working tree. Skips files not authored by
+# agents/humans: lockfiles, generated code, binaries, vendored/build output.
+set -euo pipefail
+
+MAX_TOKENS="${MAX_FILE_TOKENS:-5000}"
+MAX_BYTES=$((MAX_TOKENS * 4))
+
+is_ignored() {
+  local f="$1" base="${1##*/}"
+  case "$base" in
+    go.sum | go.work.sum | package-lock.json | npm-shrinkwrap.json | yarn.lock | pnpm-lock.yaml | \
+      bun.lock | bun.lockb | Cargo.lock | Gemfile.lock | poetry.lock | uv.lock | Pipfile.lock | \
+      composer.lock | flake.lock | *.lock | *.lockb | *.min.js | *.min.css | *.map | \
+      *.pb.go | *_gen.go | *.gen.go | *_generated.go | *.generated.* | *_string.go | mock_*.go | *.snap)
+      return 0 ;;
+  esac
+  case "$f" in
+    vendor/* | */vendor/* | node_modules/* | */node_modules/* | dist/* | bin/*) return 0 ;;
+  esac
+  # Honour .gitattributes: linguist-generated / linguist-vendored.
+  local attr
+  attr=$(git check-attr linguist-generated linguist-vendored -- "$f" | awk -F': ' '$3=="set"||$3=="true"{print "y"}')
+  [ -n "$attr" ] && return 0
+  # Generated-code marker in the staged content (Go convention, widely used).
+  header=$(git show ":$f" | head -n 20 || true)
+  if grep -Eq '^(//|#|/\*|\*) ?(Code generated .* DO NOT EDIT|@generated|DO NOT EDIT)' <<<"$header"; then
+    return 0
+  fi
+  return 1
+}
+
+# Binary files show "-" in numstat; skip them.
+binaries=$(git diff --cached --numstat --diff-filter=ACM | awk -F"\t" '$1=="-"{print $3}')
+
+offenders=()
+while IFS= read -r -d '' f; do
+  printf '%s\n' "$binaries" | grep -qxF -- "$f" && continue
+  is_ignored "$f" && continue
+  bytes=$(git cat-file -s ":$f")
+  if [ "$bytes" -gt "$MAX_BYTES" ]; then
+    offenders+=("$f|$((bytes / 4))")
+  fi
+done < <(git diff --cached --name-only --diff-filter=ACM -z)
+
+[ "${#offenders[@]}" -eq 0 ] && exit 0
+
+{
+  echo "pre-commit: file(s) exceed ${MAX_TOKENS} tokens (tokens = bytes/4). Commit blocked."
+  echo
+  for o in "${offenders[@]}"; do
+    echo "  ${o%%|*}  ~${o##*|} tokens (limit ${MAX_TOKENS})"
+  done
+  cat <<EOF
+
+How to split (do this, then re-stage and commit):
+  1. Read the file. List its distinct responsibilities (types, handlers,
+     helpers, constants, sections).
+  2. Target 2+ new files, each well under ${MAX_TOKENS} tokens (~$((MAX_BYTES / 2)) bytes is a safe goal).
+     Group by one responsibility per file. Name files after that responsibility
+     (e.g. foo.go -> foo.go, foo_store.go, foo_validate.go).
+  3. Go: keep the same package; move declarations only. No import-path or
+     API changes. Move tests next to the code they cover (foo_store_test.go).
+     Other languages: move code to sibling modules and re-export from the
+     original entry point if callers import it.
+     Markdown/docs: split by heading into separate files; link them from an index.
+  4. Do NOT change behaviour while splitting. Do NOT delete or shorten
+     comments. Do NOT truncate content to fit.
+  5. Verify: run the build and tests (e.g. 'go build ./... && go test ./...').
+  6. 'git add' the original and all new files, then commit again.
+
+Not agent-authored (lockfiles, generated code, binaries) are skipped
+automatically. Mark other generated files with a 'Code generated ... DO NOT EDIT.'
+header or 'path linguist-generated' in .gitattributes.
+Override the limit once: MAX_FILE_TOKENS=8000 git commit ...
+EOF
+} >&2
+exit 1
