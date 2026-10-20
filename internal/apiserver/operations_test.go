@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -52,7 +53,7 @@ func TestHeartbeat_Success(t *testing.T) {
 	defer server.Close()
 
 	c := setupTestClient(t, server.URL)
-	resp, err := c.Heartbeat(context.Background(), "test-agent-123")
+	resp, err := c.Heartbeat(context.Background(), "test-agent-123", nil)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
@@ -71,7 +72,7 @@ func TestHeartbeat_SendsToCorrectEndpoint(t *testing.T) {
 	defer server.Close()
 
 	c := setupTestClient(t, server.URL)
-	resp, err := c.Heartbeat(context.Background(), "agent-xyz")
+	resp, err := c.Heartbeat(context.Background(), "agent-xyz", nil)
 
 	require.NoError(t, err)
 	assert.NotNil(t, resp)
@@ -90,7 +91,7 @@ func TestHeartbeat_SendsEmptyBody(t *testing.T) {
 	defer server.Close()
 
 	c := setupTestClient(t, server.URL)
-	resp, err := c.Heartbeat(context.Background(), "test-agent-123")
+	resp, err := c.Heartbeat(context.Background(), "test-agent-123", nil)
 
 	require.NoError(t, err)
 	assert.NotNil(t, resp)
@@ -108,7 +109,7 @@ func TestHeartbeat_AuthenticationHeadersIncluded(t *testing.T) {
 	defer server.Close()
 
 	c := setupTestClient(t, server.URL)
-	resp, err := c.Heartbeat(context.Background(), "test-agent-123")
+	resp, err := c.Heartbeat(context.Background(), "test-agent-123", nil)
 
 	require.NoError(t, err)
 	assert.NotNil(t, resp)
@@ -127,7 +128,7 @@ func TestHeartbeat_ServerError(t *testing.T) {
 	defer server.Close()
 
 	c := setupTestClient(t, server.URL)
-	resp, err := c.Heartbeat(context.Background(), "test-agent-123")
+	resp, err := c.Heartbeat(context.Background(), "test-agent-123", nil)
 
 	assert.Error(t, err)
 	assert.Nil(t, resp)
@@ -142,7 +143,7 @@ func TestHeartbeat_Unauthorized(t *testing.T) {
 	defer server.Close()
 
 	c := setupTestClient(t, server.URL)
-	resp, err := c.Heartbeat(context.Background(), "test-agent-123")
+	resp, err := c.Heartbeat(context.Background(), "test-agent-123", nil)
 
 	assert.Error(t, err)
 	assert.Nil(t, resp)
@@ -157,11 +158,32 @@ func TestHeartbeat_PendingTasks(t *testing.T) {
 	defer server.Close()
 
 	c := setupTestClient(t, server.URL)
-	resp, err := c.Heartbeat(context.Background(), "test-agent-123")
+	resp, err := c.Heartbeat(context.Background(), "test-agent-123", nil)
 
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	assert.Len(t, resp.PendingTasks, 1)
 	assert.Equal(t, "tsk_test", resp.PendingTasks[0].ID)
 	assert.Equal(t, "echo hello", resp.PendingTasks[0].Command)
+}
+
+// TestHeartbeat_SendsSlowRequestCounts - the counts travel as the JSON body.
+func TestHeartbeat_SendsSlowRequestCounts(t *testing.T) {
+	var body []byte
+	var contentType string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		contentType = r.Header.Get("Content-Type")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"message":"ok"}`))
+	}))
+	defer server.Close()
+
+	c := setupTestClient(t, server.URL)
+	slow := []slowrequest.Count{{Endpoint: "/api/v1/tasks", Method: "GET", Count: 3, MaxMs: 4100}}
+	_, err := c.Heartbeat(context.Background(), "test-agent-123", slow)
+
+	require.NoError(t, err)
+	assert.Equal(t, "application/json", contentType)
+	assert.JSONEq(t, `{"slow_requests":[{"endpoint":"/api/v1/tasks","method":"GET","count":3,"max_ms":4100}]}`, string(body))
 }

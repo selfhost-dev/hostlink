@@ -8,6 +8,7 @@ import (
 	"hostlink/app/services/agentstate"
 	"hostlink/app/services/requestsigner"
 	"hostlink/config/appconf"
+	"hostlink/internal/slowrequest"
 	"net/http"
 	"time"
 
@@ -40,6 +41,7 @@ type taskreporter struct {
 	controlPlaneURL string
 	retryConfig     *RetryConfig
 	sleepFunc       SleepFunc
+	slowReporter    slowrequest.Reporter
 }
 
 type Config struct {
@@ -49,11 +51,17 @@ type Config struct {
 	Timeout         time.Duration
 	RetryConfig     *RetryConfig
 	SleepFunc       SleepFunc
+	// SlowRequestThreshold is the duration after which a result post is
+	// reported as slow. Zero means the configured default.
+	SlowRequestThreshold time.Duration
 }
 
 func New(cfg *Config) (*taskreporter, error) {
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 10 * time.Second
+	}
+	if cfg.SlowRequestThreshold == 0 {
+		cfg.SlowRequestThreshold = appconf.APISlowRequestThreshold()
 	}
 
 	retryConfig := cfg.RetryConfig
@@ -92,6 +100,7 @@ func New(cfg *Config) (*taskreporter, error) {
 		controlPlaneURL: cfg.ControlPlaneURL,
 		retryConfig:     retryConfig,
 		sleepFunc:       sleepFunc,
+		slowReporter:    slowrequest.New(cfg.SlowRequestThreshold),
 	}, nil
 }
 
@@ -135,18 +144,22 @@ func (tr *taskreporter) Report(taskID string, result *TaskResult) error {
 			return fmt.Errorf("failed to sign request: %w", err)
 		}
 
+		// Each attempt is measured on its own: a slow attempt is reported even
+		// when a later one succeeds.
+		started := time.Now()
 		resp, err := tr.client.Do(req)
+		elapsed := time.Since(started)
 		if err != nil {
-			lastErr = fmt.Errorf("request failed: %w", err)
+			lastErr = tr.slowReporter.Report(req, elapsed, fmt.Errorf("request failed: %w", err))
 		} else {
 			statusCode := resp.StatusCode
 			resp.Body.Close()
 
 			if statusCode == http.StatusOK {
-				return nil
+				return tr.slowReporter.Report(req, elapsed, nil)
 			}
 
-			lastErr = fmt.Errorf("unexpected status code: %d", statusCode)
+			lastErr = tr.slowReporter.Report(req, elapsed, fmt.Errorf("unexpected status code: %d", statusCode))
 			retryable := statusCode >= 500 ||
 				statusCode == http.StatusTooManyRequests ||
 				statusCode == http.StatusRequestTimeout
