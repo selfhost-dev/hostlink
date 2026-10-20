@@ -19,6 +19,10 @@ import (
 
 var appconf config.AppConfiger
 
+// DefaultAPISlowRequestThreshold is the default duration after which a
+// control-plane request is reported as slow.
+const DefaultAPISlowRequestThreshold = 2 * time.Second
+
 func Port() string {
 	return appconf.GetPort()
 }
@@ -198,6 +202,20 @@ func MetricsPushInterval() time.Duration {
 // Controlled by HOSTLINK_HEARTBEAT_INTERVAL (default: 5s, clamped to [10ms, 5m]).
 func HeartbeatInterval() time.Duration {
 	return parseDurationClamped("HOSTLINK_HEARTBEAT_INTERVAL", 5*time.Second, 10*time.Millisecond, 5*time.Minute)
+}
+
+// APISlowRequestThreshold returns the duration after which a control-plane
+// request is reported as slow.
+// Controlled by HOSTLINK_API_SLOW_REQUEST_THRESHOLD (default: 2s, clamped to [100ms, 5m]).
+func APISlowRequestThreshold() time.Duration {
+	return parseDurationClamped("HOSTLINK_API_SLOW_REQUEST_THRESHOLD", DefaultAPISlowRequestThreshold, 100*time.Millisecond, 5*time.Minute)
+}
+
+// APIHeartbeatTimeout returns the timeout applied to control-plane heartbeat
+// requests.
+// Controlled by HOSTLINK_API_HEARTBEAT_TIMEOUT (default: 10s, clamped to [1s, 25s]).
+func APIHeartbeatTimeout() time.Duration {
+	return parseDurationClamped("HOSTLINK_API_HEARTBEAT_TIMEOUT", 10*time.Second, time.Second, 25*time.Second)
 }
 
 // TraefikEndpoint returns the Traefik metrics endpoint.
