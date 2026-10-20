@@ -29,7 +29,7 @@ func NewWithConf() (*heartbeatService, error) {
 		return nil, err
 	}
 
-	client, err := apiserver.NewDefaultClient()
+	client, err := apiserver.NewHeartbeatClient()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create api client: %w", err)
 	}

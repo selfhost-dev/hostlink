@@ -46,11 +46,25 @@ func NewClient(cfg Config) (*client, error) {
 }
 
 func NewDefaultClient() (*client, error) {
+	return newControlPlaneClient(30 * time.Second)
+}
+
+// NewHeartbeatClient returns a client that uses the dedicated heartbeat
+// timeout, which is shorter than the default control-plane timeout.
+func NewHeartbeatClient() (*client, error) {
+	return newControlPlaneClient(appconf.APIHeartbeatTimeout())
+}
+
+// newControlPlaneClient builds a client for the control plane with the given
+// request timeout. Every control-plane request is measured against the
+// slow-request threshold, so a transport stall is reported instead of being
+// silent.
+func newControlPlaneClient(timeout time.Duration) (*client, error) {
 	return NewClient(Config{
 		baseURL:              appconf.ControlPlaneURL(),
 		privateKeyPath:       appconf.AgentPrivateKeyPath(),
 		agentStatePath:       appconf.AgentStatePath(),
-		timeout:              30 * time.Second,
+		timeout:              timeout,
 		slowRequestThreshold: appconf.APISlowRequestThreshold(),
 	})
 }
