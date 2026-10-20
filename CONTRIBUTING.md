@@ -17,6 +17,11 @@ Thank you for your interest in contributing to Hostlink!
    cd hostlink
    ```
 
+   Enable the repo git hooks (blocks staged files over 5,000 tokens, tokens = bytes/4; lockfiles, generated code and binaries are skipped):
+   ```bash
+   make install-hooks
+   ```
+
 2. **Set up environment (optional)**
 
    Copy the example environment file:

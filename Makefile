@@ -1,3 +1,9 @@
+.PHONY: install-hooks
+
+# Use versioned git hooks in .githooks
+install-hooks:
+	git config core.hooksPath .githooks
+
 .PHONY: test test-it test-smoke test-in-docker dev build build-hlctl pushbuild clean
 
 # Run unit tests
