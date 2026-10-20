@@ -15,8 +15,7 @@ permissions:
 
 jobs:
   goreleaser:
-    # Self-hosted org runner (Hetzner group), same as selfhost CI: free and unmetered.
-    runs-on: hetzner
+    runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
