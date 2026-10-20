@@ -206,6 +206,56 @@ func TestHeartbeatInterval_CustomValue(t *testing.T) {
 	assert.Equal(t, 200*time.Millisecond, HeartbeatInterval())
 }
 
+func TestAPISlowRequestThreshold_Default2s(t *testing.T) {
+	t.Setenv("HOSTLINK_API_SLOW_REQUEST_THRESHOLD", "")
+	assert.Equal(t, 2*time.Second, APISlowRequestThreshold())
+}
+
+func TestAPISlowRequestThreshold_CustomValue(t *testing.T) {
+	t.Setenv("HOSTLINK_API_SLOW_REQUEST_THRESHOLD", "750ms")
+	assert.Equal(t, 750*time.Millisecond, APISlowRequestThreshold())
+}
+
+func TestAPISlowRequestThreshold_ClampedToMin(t *testing.T) {
+	t.Setenv("HOSTLINK_API_SLOW_REQUEST_THRESHOLD", "50ms")
+	assert.Equal(t, 100*time.Millisecond, APISlowRequestThreshold())
+}
+
+func TestAPISlowRequestThreshold_ClampedToMax(t *testing.T) {
+	t.Setenv("HOSTLINK_API_SLOW_REQUEST_THRESHOLD", "10m")
+	assert.Equal(t, 5*time.Minute, APISlowRequestThreshold())
+}
+
+func TestAPISlowRequestThreshold_InvalidFallsToDefault(t *testing.T) {
+	t.Setenv("HOSTLINK_API_SLOW_REQUEST_THRESHOLD", "garbage")
+	assert.Equal(t, 2*time.Second, APISlowRequestThreshold())
+}
+
+func TestAPIHeartbeatTimeout_Default10s(t *testing.T) {
+	t.Setenv("HOSTLINK_API_HEARTBEAT_TIMEOUT", "")
+	assert.Equal(t, 10*time.Second, APIHeartbeatTimeout())
+}
+
+func TestAPIHeartbeatTimeout_CustomValue(t *testing.T) {
+	t.Setenv("HOSTLINK_API_HEARTBEAT_TIMEOUT", "3s")
+	assert.Equal(t, 3*time.Second, APIHeartbeatTimeout())
+}
+
+func TestAPIHeartbeatTimeout_ClampedToMin(t *testing.T) {
+	t.Setenv("HOSTLINK_API_HEARTBEAT_TIMEOUT", "500ms")
+	assert.Equal(t, time.Second, APIHeartbeatTimeout())
+}
+
+func TestAPIHeartbeatTimeout_ClampedToMax(t *testing.T) {
+	t.Setenv("HOSTLINK_API_HEARTBEAT_TIMEOUT", "1m")
+	assert.Equal(t, 25*time.Second, APIHeartbeatTimeout())
+}
+
+func TestAPIHeartbeatTimeout_InvalidFallsToDefault(t *testing.T) {
+	t.Setenv("HOSTLINK_API_HEARTBEAT_TIMEOUT", "garbage")
+	assert.Equal(t, 10*time.Second, APIHeartbeatTimeout())
+}
+
 func TestTraefikEndpoint_Default(t *testing.T) {
 	t.Setenv("HOSTLINK_TRAEFIK_ENDPOINT", "")
 	assert.Equal(t, "http://localhost:8080/metrics", TraefikEndpoint())

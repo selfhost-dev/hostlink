@@ -3,12 +3,17 @@ package heartbeat
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	"hostlink/domain/task"
 	"hostlink/internal/apiserver"
+	"hostlink/internal/testutil"
 )
 
 type MockAPIServer struct {
@@ -138,4 +143,34 @@ func TestSend_WithPendingTasks(t *testing.T) {
 	assert.Len(t, pendingTasks, 1)
 	assert.Equal(t, "tsk_test", pendingTasks[0].ID)
 	assert.Equal(t, "echo hello", pendingTasks[0].Command)
+}
+
+// TestSend_TimesOutWithHeartbeatTimeout - the heartbeat uses its own, shorter
+// request timeout, so a stalled control plane fails fast instead of blocking
+// for the shared 30s budget.
+func TestSend_TimesOutWithHeartbeatTimeout(t *testing.T) {
+	released := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-released
+	}))
+	defer func() {
+		close(released)
+		server.Close()
+	}()
+
+	t.Setenv("SH_CONTROL_PLANE_URL", server.URL)
+	t.Setenv("HOSTLINK_API_HEARTBEAT_TIMEOUT", "1s")
+
+	testutil.SetupAgentIdentity(t)
+
+	service, err := New()
+	require.NoError(t, err)
+
+	started := time.Now()
+	_, err = service.Send()
+	elapsed := time.Since(started)
+
+	require.Error(t, err, "expected the heartbeat to fail on the control plane timeout")
+	assert.ErrorIs(t, err, context.DeadlineExceeded, "expected a deadline error, got: %v", err)
+	assert.Less(t, elapsed, 10*time.Second, "expected the heartbeat to fail fast on its own timeout budget")
 }

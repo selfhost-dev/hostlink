@@ -9,17 +9,19 @@ import (
 	"hostlink/app/services/agentstate"
 	"hostlink/app/services/requestsigner"
 	"hostlink/config/appconf"
+	"hostlink/internal/slowrequest"
 	"io"
 	"net/http"
 	"time"
 )
 
 type client struct {
-	httpClient *http.Client
-	signer     *requestsigner.RequestSigner
-	agentState *agentstate.AgentState
-	baseURL    string
-	maxRetries int
+	httpClient   *http.Client
+	signer       *requestsigner.RequestSigner
+	agentState   *agentstate.AgentState
+	baseURL      string
+	maxRetries   int
+	slowReporter slowrequest.Reporter
 }
 
 func NewClient(cfg Config) (*client, error) {
@@ -36,18 +38,34 @@ func NewClient(cfg Config) (*client, error) {
 		httpClient: &http.Client{
 			Timeout: cfg.timeout,
 		},
-		signer:     signer,
-		baseURL:    cfg.baseURL,
-		maxRetries: cfg.maxRetries,
+		signer:       signer,
+		baseURL:      cfg.baseURL,
+		maxRetries:   cfg.maxRetries,
+		slowReporter: slowrequest.New(cfg.slowRequestThreshold),
 	}, nil
 }
 
 func NewDefaultClient() (*client, error) {
+	return newControlPlaneClient(30 * time.Second)
+}
+
+// NewHeartbeatClient returns a client that uses the dedicated heartbeat
+// timeout, which is shorter than the default control-plane timeout.
+func NewHeartbeatClient() (*client, error) {
+	return newControlPlaneClient(appconf.APIHeartbeatTimeout())
+}
+
+// newControlPlaneClient builds a client for the control plane with the given
+// request timeout. Every control-plane request is measured against the
+// slow-request threshold, so a transport stall is reported instead of being
+// silent.
+func newControlPlaneClient(timeout time.Duration) (*client, error) {
 	return NewClient(Config{
-		baseURL:        appconf.ControlPlaneURL(),
-		privateKeyPath: appconf.AgentPrivateKeyPath(),
-		agentStatePath: appconf.AgentStatePath(),
-		timeout:        30 * time.Second,
+		baseURL:              appconf.ControlPlaneURL(),
+		privateKeyPath:       appconf.AgentPrivateKeyPath(),
+		agentStatePath:       appconf.AgentStatePath(),
+		timeout:              timeout,
+		slowRequestThreshold: appconf.APISlowRequestThreshold(),
 	})
 }
 
@@ -75,6 +93,21 @@ func (c *client) do(ctx context.Context, method, path string, body any, result a
 		return fmt.Errorf("failed to sign request: %w", err)
 	}
 
+	// The measurement covers the request execution only. With request-level
+	// retries enabled it would cover every attempt, but retries are off: the
+	// job loop is the retry.
+	started := time.Now()
+	err = c.execute(req, result)
+	elapsed := time.Since(started)
+
+	c.slowReporter.Report(req, elapsed, err)
+
+	return err
+}
+
+// execute performs the HTTP round trip, the status handling and the response
+// decoding of a request.
+func (c *client) execute(req *http.Request, result any) error {
 	resp, err := c.executeWithRetry(req)
 	if err != nil {
 		return err
@@ -87,7 +120,7 @@ func (c *client) do(ctx context.Context, method, path string, body any, result a
 
 	if result != nil {
 		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
-			return fmt.Errorf("failed to decode response: %w", err)
+			return &decodeError{err: err}
 		}
 	}
 
@@ -102,16 +135,29 @@ func (c *client) executeWithRetry(req *http.Request) (*http.Response, error) {
 		}
 
 		resp, err := c.httpClient.Do(req)
-		if err == nil && resp.StatusCode < 500 {
-			return resp, nil
+		if err == nil {
+			if resp.StatusCode < 500 {
+				return resp, nil
+			}
+			// The server answered with an error status. The response is not
+			// handed to the caller, so its body is closed here.
+			err = fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+			closeBody(resp)
 		}
 
 		lastErr = err
-		if resp != nil && resp.StatusCode < 500 {
-			return resp, nil
-		}
 	}
 	return nil, fmt.Errorf("request failed after %d retries: %w", c.maxRetries, lastErr)
+}
+
+// closeBody drains and closes a response body that is not handed to the
+// caller, so the connection can be reused instead of leaked.
+func closeBody(resp *http.Response) {
+	if resp == nil || resp.Body == nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
 }
 
 func (c *client) Get(ctx context.Context, path string, result any) error {

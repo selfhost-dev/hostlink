@@ -10,7 +10,9 @@ import (
 	"testing"
 
 	"hostlink/app/services/requestsigner"
+	"hostlink/config/appconf"
 	"hostlink/internal/crypto"
+	"hostlink/internal/slowrequest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,10 +35,11 @@ func setupTestClient(t *testing.T, serverURL string) *client {
 	require.NoError(t, err)
 
 	return &client{
-		httpClient: http.DefaultClient,
-		signer:     signer,
-		baseURL:    serverURL,
-		maxRetries: 0,
+		httpClient:   http.DefaultClient,
+		signer:       signer,
+		baseURL:      serverURL,
+		maxRetries:   0,
+		slowReporter: slowrequest.New(appconf.DefaultAPISlowRequestThreshold),
 	}
 }
 

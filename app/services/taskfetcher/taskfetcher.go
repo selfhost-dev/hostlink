@@ -9,6 +9,7 @@ import (
 	"hostlink/config/appconf"
 	"hostlink/domain/task"
 	"hostlink/internal/httpclient"
+	"hostlink/internal/slowrequest"
 	"net/http"
 	"time"
 )
@@ -21,6 +22,7 @@ type taskfetcher struct {
 	client          *http.Client
 	signer          *requestsigner.RequestSigner
 	controlPlaneURL string
+	slowReporter    slowrequest.Reporter
 }
 
 type Config struct {
@@ -28,11 +30,17 @@ type Config struct {
 	PrivateKeyPath  string
 	ControlPlaneURL string
 	Timeout         time.Duration
+	// SlowRequestThreshold is the duration after which a task poll is
+	// reported as slow. Zero means the default.
+	SlowRequestThreshold time.Duration
 }
 
 func New(cfg *Config) (*taskfetcher, error) {
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 10 * time.Second
+	}
+	if cfg.SlowRequestThreshold == 0 {
+		cfg.SlowRequestThreshold = appconf.APISlowRequestThreshold()
 	}
 
 	agentID := cfg.AgentState.GetAgentID()
@@ -51,6 +59,7 @@ func New(cfg *Config) (*taskfetcher, error) {
 		},
 		signer:          signer,
 		controlPlaneURL: cfg.ControlPlaneURL,
+		slowReporter:    slowrequest.New(cfg.SlowRequestThreshold),
 	}, nil
 }
 
@@ -80,6 +89,16 @@ func (tf *taskfetcher) Fetch() ([]task.Task, error) {
 	}
 	req.Header.Set(httpclient.CapabilitiesHeader, httpclient.Capabilities)
 
+	started := time.Now()
+	tasks, err := tf.fetch(req)
+	tf.slowReporter.Report(req, time.Since(started), err)
+
+	return tasks, err
+}
+
+// fetch performs the task poll: the HTTP round trip, the status check and the
+// decoding of the response.
+func (tf *taskfetcher) fetch(req *http.Request) ([]task.Task, error) {
 	resp, err := tf.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
