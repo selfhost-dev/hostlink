@@ -9,6 +9,7 @@ import (
 	"hostlink/app/services/agentstate"
 	"hostlink/app/services/requestsigner"
 	"hostlink/config/appconf"
+	"hostlink/internal/slowrequest"
 	"io"
 	"net/http"
 	"time"
@@ -18,8 +19,9 @@ type client struct {
 	httpClient   *http.Client
 	signer       *requestsigner.RequestSigner
 	agentState   *agentstate.AgentState
-	baseURL    string
-	maxRetries int
+	baseURL      string
+	maxRetries   int
+	slowReporter slowrequest.Reporter
 }
 
 func NewClient(cfg Config) (*client, error) {
@@ -36,18 +38,20 @@ func NewClient(cfg Config) (*client, error) {
 		httpClient: &http.Client{
 			Timeout: cfg.timeout,
 		},
-		signer:     signer,
-		baseURL:    cfg.baseURL,
-		maxRetries: cfg.maxRetries,
+		signer:       signer,
+		baseURL:      cfg.baseURL,
+		maxRetries:   cfg.maxRetries,
+		slowReporter: slowrequest.New(cfg.slowRequestThreshold),
 	}, nil
 }
 
 func NewDefaultClient() (*client, error) {
 	return NewClient(Config{
-		baseURL:        appconf.ControlPlaneURL(),
-		privateKeyPath: appconf.AgentPrivateKeyPath(),
-		agentStatePath: appconf.AgentStatePath(),
-		timeout:        30 * time.Second,
+		baseURL:              appconf.ControlPlaneURL(),
+		privateKeyPath:       appconf.AgentPrivateKeyPath(),
+		agentStatePath:       appconf.AgentStatePath(),
+		timeout:              30 * time.Second,
+		slowRequestThreshold: appconf.APISlowRequestThreshold(),
 	})
 }
 
@@ -75,6 +79,21 @@ func (c *client) do(ctx context.Context, method, path string, body any, result a
 		return fmt.Errorf("failed to sign request: %w", err)
 	}
 
+	// The measurement covers the request execution only. With request-level
+	// retries enabled it would cover every attempt, but retries are off: the
+	// job loop is the retry.
+	started := time.Now()
+	err = c.execute(req, result)
+	elapsed := time.Since(started)
+
+	c.slowReporter.Report(req, elapsed, err)
+
+	return err
+}
+
+// execute performs the HTTP round trip, the status handling and the response
+// decoding of a request.
+func (c *client) execute(req *http.Request, result any) error {
 	resp, err := c.executeWithRetry(req)
 	if err != nil {
 		return err
@@ -87,7 +106,7 @@ func (c *client) do(ctx context.Context, method, path string, body any, result a
 
 	if result != nil {
 		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
-			return fmt.Errorf("failed to decode response: %w", err)
+			return &decodeError{err: err}
 		}
 	}
 

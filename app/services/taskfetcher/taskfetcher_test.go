@@ -10,6 +10,7 @@ import (
 	"hostlink/app/services/agentstate"
 	"hostlink/domain/task"
 	"hostlink/internal/httpclient"
+	"hostlink/internal/testutil"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -259,6 +260,55 @@ func TestTaskFetcher_HandleErrors(t *testing.T) {
 	})
 }
 
+func TestTaskFetcher_ReportsSlowRequest(t *testing.T) {
+	keys := setupTestKeys(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(120 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode([]task.Task{})
+	}))
+	defer server.Close()
+
+	fetcher := setupTestFetcherWithThreshold(t, server.URL, keys, 50*time.Millisecond)
+
+	output := testutil.CaptureLogs(t, func() {
+		if _, err := fetcher.Fetch(); err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "slow control-plane request") {
+		t.Errorf("expected a slow request warning, got: %s", output)
+	}
+	if !strings.Contains(output, "endpoint=/api/v1/tasks") {
+		t.Errorf("expected the endpoint in the warning, got: %s", output)
+	}
+	if !strings.Contains(output, "method=GET") {
+		t.Errorf("expected the method in the warning, got: %s", output)
+	}
+}
+
+func TestTaskFetcher_QuietOnFastRequest(t *testing.T) {
+	keys := setupTestKeys(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode([]task.Task{})
+	}))
+	defer server.Close()
+
+	fetcher := setupTestFetcherWithThreshold(t, server.URL, keys, 2*time.Second)
+
+	output := testutil.CaptureLogs(t, func() {
+		if _, err := fetcher.Fetch(); err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+	})
+
+	if strings.Contains(output, "slow control-plane request") {
+		t.Errorf("expected no warning for a fast request, got: %s", output)
+	}
+}
+
 // Helper functions for tests
 type testKeys struct {
 	privateKey *rsa.PrivateKey
@@ -346,15 +396,22 @@ func saveTestPublicKey(t *testing.T, dir string, key *rsa.PublicKey) string {
 func setupTestFetcherWithKeys(t *testing.T, serverURL string, keys *testKeys) *taskfetcher {
 	t.Helper()
 
+	return setupTestFetcherWithThreshold(t, serverURL, keys, 0)
+}
+
+func setupTestFetcherWithThreshold(t *testing.T, serverURL string, keys *testKeys, threshold time.Duration) *taskfetcher {
+	t.Helper()
+
 	tempDir := t.TempDir()
 	agentState := setupTestAgentState(t, "test-agent-123")
 	privateKeyPath := saveTestPrivateKey(t, tempDir, keys.privateKey)
 
 	fetcher, err := New(&Config{
-		AgentState:      agentState,
-		PrivateKeyPath:  privateKeyPath,
-		ControlPlaneURL: serverURL,
-		Timeout:         5 * time.Second,
+		AgentState:           agentState,
+		PrivateKeyPath:       privateKeyPath,
+		ControlPlaneURL:      serverURL,
+		Timeout:              5 * time.Second,
+		SlowRequestThreshold: threshold,
 	})
 
 	if err != nil {

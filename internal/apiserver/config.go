@@ -3,6 +3,8 @@ package apiserver
 import (
 	"fmt"
 	"time"
+
+	"hostlink/config/appconf"
 )
 
 type Config struct {
@@ -11,6 +13,9 @@ type Config struct {
 	agentStatePath string
 	timeout        time.Duration
 	maxRetries     int
+	// slowRequestThreshold is the duration after which a control-plane request
+	// is reported as slow.
+	slowRequestThreshold time.Duration
 }
 
 func (c *Config) Validate() error {
@@ -25,6 +30,9 @@ func (c *Config) Validate() error {
 	}
 	if c.timeout == 0 {
 		c.timeout = 30 * time.Second
+	}
+	if c.slowRequestThreshold == 0 {
+		c.slowRequestThreshold = appconf.DefaultAPISlowRequestThreshold
 	}
 	return nil
 }
