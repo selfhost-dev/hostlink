@@ -15,9 +15,9 @@ import (
 )
 
 type client struct {
-	httpClient *http.Client
-	signer     *requestsigner.RequestSigner
-	agentState *agentstate.AgentState
+	httpClient   *http.Client
+	signer       *requestsigner.RequestSigner
+	agentState   *agentstate.AgentState
 	baseURL    string
 	maxRetries int
 }
@@ -102,16 +102,29 @@ func (c *client) executeWithRetry(req *http.Request) (*http.Response, error) {
 		}
 
 		resp, err := c.httpClient.Do(req)
-		if err == nil && resp.StatusCode < 500 {
-			return resp, nil
+		if err == nil {
+			if resp.StatusCode < 500 {
+				return resp, nil
+			}
+			// The server answered with an error status. The response is not
+			// handed to the caller, so its body is closed here.
+			err = fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+			closeBody(resp)
 		}
 
 		lastErr = err
-		if resp != nil && resp.StatusCode < 500 {
-			return resp, nil
-		}
 	}
 	return nil, fmt.Errorf("request failed after %d retries: %w", c.maxRetries, lastErr)
+}
+
+// closeBody drains and closes a response body that is not handed to the
+// caller, so the connection can be reused instead of leaked.
+func closeBody(resp *http.Response) {
+	if resp == nil || resp.Body == nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
 }
 
 func (c *client) Get(ctx context.Context, path string, result any) error {
