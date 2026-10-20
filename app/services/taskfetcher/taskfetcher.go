@@ -91,9 +91,7 @@ func (tf *taskfetcher) Fetch() ([]task.Task, error) {
 
 	started := time.Now()
 	tasks, err := tf.fetch(req)
-	tf.slowReporter.Report(req, time.Since(started), err)
-
-	return tasks, err
+	return tasks, tf.slowReporter.Report(req, time.Since(started), err)
 }
 
 // fetch performs the task poll: the HTTP round trip, the status check and the

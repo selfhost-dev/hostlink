@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"hostlink/domain/task"
 	"hostlink/internal/apiserver"
+	"hostlink/internal/slowrequest"
 	"hostlink/internal/testutil"
 )
 
@@ -20,8 +21,8 @@ type MockAPIServer struct {
 	mock.Mock
 }
 
-func (m *MockAPIServer) Heartbeat(ctx context.Context, agentID string) (*apiserver.HeartbeatResponse, error) {
-	args := m.Called(ctx, agentID)
+func (m *MockAPIServer) Heartbeat(ctx context.Context, agentID string, slow []slowrequest.Count) (*apiserver.HeartbeatResponse, error) {
+	args := m.Called(ctx, agentID, slow)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -61,6 +62,9 @@ func setupTestService() (*heartbeatService, *MockAPIServer, *MockAgentState) {
 	mockSvr := new(MockAPIServer)
 	agentstate := new(MockAgentState)
 	service := NewWithDependencies(mockSvr, agentstate)
+	// Fresh counts: other tests in the package make slow requests that land
+	// in slowrequest.Default.
+	service.slowCounts = slowrequest.NewCounts()
 	return service, mockSvr, agentstate
 }
 
@@ -81,7 +85,7 @@ func TestSend_Success(t *testing.T) {
 	service, mockSvr, agentstate := setupTestService()
 
 	agentstate.On("GetAgentID").Return("agent-123")
-	mockSvr.On("Heartbeat", mock.Anything, "agent-123").Return(&apiserver.HeartbeatResponse{}, nil)
+	mockSvr.On("Heartbeat", mock.Anything, "agent-123", noSlowRequests).Return(&apiserver.HeartbeatResponse{}, nil)
 
 	tasks, err := service.Send()
 
@@ -97,7 +101,7 @@ func TestSend_APIError(t *testing.T) {
 	expectedErr := errors.New("connection refused")
 
 	agentstate.On("GetAgentID").Return("agent-123")
-	mockSvr.On("Heartbeat", mock.Anything, "agent-123").Return(nil, expectedErr)
+	mockSvr.On("Heartbeat", mock.Anything, "agent-123", noSlowRequests).Return(nil, expectedErr)
 
 	tasks, err := service.Send()
 
@@ -115,7 +119,7 @@ func TestSend_UsesBackgroundContext(t *testing.T) {
 	mockSvr.On("Heartbeat", mock.MatchedBy(func(ctx context.Context) bool {
 		_, hasDeadline := ctx.Deadline()
 		return !hasDeadline && ctx.Err() == nil
-	}), "agent-123").Return(&apiserver.HeartbeatResponse{}, nil)
+	}), "agent-123", noSlowRequests).Return(&apiserver.HeartbeatResponse{}, nil)
 
 	tasks, err := service.Send()
 
@@ -135,7 +139,7 @@ func TestSend_WithPendingTasks(t *testing.T) {
 			{ID: "tsk_test", Command: "echo hello", Status: "pending"},
 		},
 	}
-	mockSvr.On("Heartbeat", mock.Anything, "agent-123").Return(resp, nil)
+	mockSvr.On("Heartbeat", mock.Anything, "agent-123", noSlowRequests).Return(resp, nil)
 
 	pendingTasks, err := service.Send()
 
@@ -173,4 +177,40 @@ func TestSend_TimesOutWithHeartbeatTimeout(t *testing.T) {
 	require.Error(t, err, "expected the heartbeat to fail on the control plane timeout")
 	assert.ErrorIs(t, err, context.DeadlineExceeded, "expected a deadline error, got: %v", err)
 	assert.Less(t, elapsed, 10*time.Second, "expected the heartbeat to fail fast on its own timeout budget")
+}
+
+// noSlowRequests is what a heartbeat carries when nothing was slow.
+var noSlowRequests []slowrequest.Count
+
+// TestSend_SendsTheSlowRequestCountsAndEmptiesThem - the heartbeat delivers
+// what the reporter counted since the last one, once.
+func TestSend_SendsTheSlowRequestCountsAndEmptiesThem(t *testing.T) {
+	service, mockSvr, agentstate := setupTestService()
+	slow := []slowrequest.Count{{Endpoint: "/api/v1/tasks", Method: "GET", Count: 2, MaxMs: 4100}}
+	service.slowCounts.Restore(slow)
+
+	agentstate.On("GetAgentID").Return("agent-123")
+	mockSvr.On("Heartbeat", mock.Anything, "agent-123", slow).Return(&apiserver.HeartbeatResponse{}, nil).Once()
+
+	_, err := service.Send()
+
+	require.NoError(t, err)
+	mockSvr.AssertExpectations(t)
+	assert.Empty(t, service.slowCounts.Drain(), "delivered counts are not sent again")
+}
+
+// TestSend_KeepsTheSlowRequestCountsWhenTheHeartbeatFails - a failed heartbeat
+// must not lose them; the next one carries them.
+func TestSend_KeepsTheSlowRequestCountsWhenTheHeartbeatFails(t *testing.T) {
+	service, mockSvr, agentstate := setupTestService()
+	slow := []slowrequest.Count{{Endpoint: "/api/v1/agents/:id/heartbeat", Method: "POST", Count: 1, MaxMs: 10012}}
+	service.slowCounts.Restore(slow)
+
+	agentstate.On("GetAgentID").Return("agent-123")
+	mockSvr.On("Heartbeat", mock.Anything, "agent-123", slow).Return(nil, errors.New("timeout")).Once()
+
+	_, err := service.Send()
+
+	require.Error(t, err)
+	assert.Equal(t, slow, service.slowCounts.Drain())
 }

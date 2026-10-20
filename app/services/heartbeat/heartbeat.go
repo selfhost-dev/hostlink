@@ -8,6 +8,7 @@ import (
 	"hostlink/config/appconf"
 	"hostlink/domain/task"
 	"hostlink/internal/apiserver"
+	"hostlink/internal/slowrequest"
 )
 
 type Service interface {
@@ -17,6 +18,9 @@ type Service interface {
 type heartbeatService struct {
 	apiserver  apiserver.HeartbeatOperations
 	agentstate agentstate.Operations
+	// slowCounts is where the agent's slow control-plane requests accumulate
+	// between heartbeats; each heartbeat carries and empties them.
+	slowCounts *slowrequest.Counts
 }
 
 func New() (*heartbeatService, error) {
@@ -37,6 +41,7 @@ func NewWithConf() (*heartbeatService, error) {
 	return &heartbeatService{
 		apiserver:  client,
 		agentstate: state,
+		slowCounts: slowrequest.Default,
 	}, nil
 }
 
@@ -47,6 +52,7 @@ func NewWithDependencies(
 	return &heartbeatService{
 		apiserver:  apiserver,
 		agentstate: agentstate,
+		slowCounts: slowrequest.Default,
 	}
 }
 
@@ -56,8 +62,11 @@ func (s *heartbeatService) Send() ([]task.Task, error) {
 		return nil, fmt.Errorf("agent not registered: missing agent ID")
 	}
 
-	resp, err := s.apiserver.Heartbeat(context.Background(), agentID)
+	slow := s.slowCounts.Drain()
+	resp, err := s.apiserver.Heartbeat(context.Background(), agentID, slow)
 	if err != nil {
+		// Not delivered: the next heartbeat carries them.
+		s.slowCounts.Restore(slow)
 		return nil, err
 	}
 	return resp.PendingTasks, nil

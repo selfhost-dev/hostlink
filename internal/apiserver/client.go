@@ -100,9 +100,7 @@ func (c *client) do(ctx context.Context, method, path string, body any, result a
 	err = c.execute(req, result)
 	elapsed := time.Since(started)
 
-	c.slowReporter.Report(req, elapsed, err)
-
-	return err
+	return c.slowReporter.Report(req, elapsed, err)
 }
 
 // execute performs the HTTP round trip, the status handling and the response
@@ -120,7 +118,7 @@ func (c *client) execute(req *http.Request, result any) error {
 
 	if result != nil {
 		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
-			return &decodeError{err: err}
+			return fmt.Errorf("failed to decode response: %w", err)
 		}
 	}
 

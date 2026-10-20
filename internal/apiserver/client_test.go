@@ -12,6 +12,7 @@ import (
 	"time"
 
 	domainmetrics "hostlink/domain/metrics"
+	"hostlink/internal/slowrequest"
 	"hostlink/internal/telemetry/telemetrytest"
 	"hostlink/internal/testutil"
 
@@ -139,7 +140,7 @@ func TestDo_SlowRequest_ReportsTelemetry(t *testing.T) {
 	})
 
 	require.NotEmpty(t, metric, "expected a slow request metric, got: %v", entries)
-	assert.Equal(t, "/api/v1/agents/test-agent-123/heartbeat", metric["endpoint"])
+	assert.Equal(t, "/api/v1/agents/:id/heartbeat", metric["endpoint"], "the agent ID is grouped out of the metric")
 	assert.Equal(t, "GET", metric["method"])
 
 	value, ok := metric["value"].(float64)
@@ -170,92 +171,6 @@ func TestDo_Timeout_ReturnsDeadlineError(t *testing.T) {
 	assert.Less(t, elapsed, 5*time.Second, "expected the request to fail on the client timeout")
 }
 
-func TestDo_SlowFailingRequest_LogsSingleWarningWithError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(120 * time.Millisecond)
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte("internal server error"))
-	}))
-	defer server.Close()
-
-	c := newTestClient(t, server.URL, 5*time.Second, 50*time.Millisecond)
-
-	output := testutil.CaptureLogs(t, func() {
-		err := c.Get(context.Background(), "/api/v1/agents/test-agent-123/heartbeat?token=super-secret", nil)
-		require.Error(t, err)
-	})
-
-	assert.Equal(t, 1, strings.Count(output, "slow control-plane request"), "expected exactly one warning, got: %s", output)
-	assert.Contains(t, output, "endpoint=/api/v1/agents/test-agent-123/heartbeat")
-	assert.Contains(t, output, "error=")
-	assert.NotContains(t, output, "super-secret")
-	assert.NotContains(t, output, "token=")
-}
-
-func TestDo_SlowFailingRequest_DoesNotLogResponseBody(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(120 * time.Millisecond)
-		w.WriteHeader(http.StatusForbidden)
-		_, _ = w.Write([]byte("database password leaked by the control plane"))
-	}))
-	defer server.Close()
-
-	c := newTestClient(t, server.URL, 5*time.Second, 50*time.Millisecond)
-
-	output := testutil.CaptureLogs(t, func() {
-		err := c.Get(context.Background(), "/api/v1/agents/test-agent-123/heartbeat", nil)
-		require.Error(t, err)
-	})
-
-	assert.Equal(t, 1, strings.Count(output, "slow control-plane request"), "expected exactly one warning, got: %s", output)
-	assert.Contains(t, output, "error=")
-	assert.Contains(t, output, "API error (status 403)")
-	assert.NotContains(t, output, "database password leaked")
-}
-
-func TestDo_SlowServerError_LogsStatusCode(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(120 * time.Millisecond)
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte("internal server error"))
-	}))
-	defer server.Close()
-
-	c := newTestClient(t, server.URL, 5*time.Second, 50*time.Millisecond)
-
-	output := testutil.CaptureLogs(t, func() {
-		err := c.Get(context.Background(), "/api/v1/agents/test-agent-123/heartbeat", nil)
-		require.Error(t, err)
-	})
-
-	assert.Equal(t, 1, strings.Count(output, "slow control-plane request"), "expected exactly one warning, got: %s", output)
-	assert.Contains(t, output, "error=")
-	assert.Contains(t, output, "unexpected status code: 500")
-}
-
-func TestDo_SlowTimeoutRequest_LogsWithoutLeakingQueryString(t *testing.T) {
-	released := make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-released
-	}))
-	defer func() {
-		close(released)
-		server.Close()
-	}()
-
-	c := newTestClient(t, server.URL, 300*time.Millisecond, 100*time.Millisecond)
-
-	output := testutil.CaptureLogs(t, func() {
-		err := c.Get(context.Background(), "/api/v1/agents/test-agent-123/heartbeat?token=super-secret", nil)
-		require.Error(t, err)
-	})
-
-	assert.Equal(t, 1, strings.Count(output, "slow control-plane request"), "expected exactly one warning, got: %s", output)
-	assert.Contains(t, output, "error=")
-	assert.NotContains(t, output, "super-secret")
-	assert.NotContains(t, output, "token=")
-}
-
 func TestDo_ReportsSlowRequestForEveryEndpoint(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(120 * time.Millisecond)
@@ -271,7 +186,7 @@ func TestDo_ReportsSlowRequestForEveryEndpoint(t *testing.T) {
 	c := newTestClient(t, server.URL, 5*time.Second, 50*time.Millisecond)
 
 	output := testutil.CaptureLogs(t, func() {
-		_, err := c.Heartbeat(context.Background(), "test-agent-123")
+		_, err := c.Heartbeat(context.Background(), "test-agent-123", nil)
 		require.NoError(t, err)
 
 		err = c.PushMetrics(context.Background(), metricsPayload())
@@ -347,23 +262,59 @@ func TestNewDefaultClient_UsesDefaultSlowRequestThreshold(t *testing.T) {
 	assert.NotContains(t, output, "slow control-plane request", "expected the default threshold to be two seconds")
 }
 
-func TestDo_SlowMalformedResponse_DoesNotLogResponseBody(t *testing.T) {
+// A slow failure is logged once, by the caller's loop: the reporter adds the
+// duration to the error instead of writing its own line.
+func TestDo_SlowFailingRequest_AddsTheDurationToTheErrorInsteadOfLogging(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(120 * time.Millisecond)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"secret":"hunter2"`))
+		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer server.Close()
 
 	c := newTestClient(t, server.URL, 5*time.Second, 50*time.Millisecond)
 
+	var err error
 	output := testutil.CaptureLogs(t, func() {
-		var result map[string]any
-		err := c.Get(context.Background(), "/api/v1/agents/test-agent-123/heartbeat", &result)
-		require.Error(t, err)
+		err = c.Get(context.Background(), "/api/v1/agents/test-agent-123/heartbeat", nil)
 	})
 
-	assert.Equal(t, 1, strings.Count(output, "slow control-plane request"), "expected exactly one warning, got: %s", output)
-	assert.Contains(t, output, "error=failed to decode response")
-	assert.NotContains(t, output, "hunter2")
+	require.Error(t, err)
+	assert.Empty(t, output, "the reporter must not log a failure the caller logs")
+	assert.Contains(t, err.Error(), "unexpected status code: 500")
+	assert.Regexp(t, `\(after \d+ms\)$`, err.Error())
+
+	var slow *slowrequest.Error
+	require.ErrorAs(t, err, &slow)
+	assert.GreaterOrEqual(t, slow.Elapsed, 50*time.Millisecond)
+}
+
+func TestDo_SlowClientError_StaysAnAPIError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(120 * time.Millisecond)
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"not found"}`))
+	}))
+	defer server.Close()
+
+	c := newTestClient(t, server.URL, 5*time.Second, 50*time.Millisecond)
+
+	err := c.Get(context.Background(), "/api/v1/agents/test-agent-123/heartbeat", nil)
+
+	var apiErr *APIError
+	require.ErrorAs(t, err, &apiErr, "callers that branch on APIError must still see it")
+	assert.True(t, apiErr.IsNotFound())
+}
+
+func TestDo_FastFailingRequest_ReturnsTheErrorUnannotated(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	c := newTestClient(t, server.URL, 5*time.Second, 2*time.Second)
+
+	err := c.Get(context.Background(), "/api/v1/agents/test-agent-123/heartbeat", nil)
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "(after")
 }
