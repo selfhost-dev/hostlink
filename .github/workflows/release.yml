@@ -56,3 +56,18 @@ jobs:
       - name: Mirror release to S3
         if: ${{ vars.HOSTLINK_MIRROR_BUCKET != '' && vars.HOSTLINK_MIRROR_ROLE_ARN != '' }}
         run: scripts/release/mirror_to_s3.sh "$GITHUB_REF_NAME" dist "s3://${{ vars.HOSTLINK_MIRROR_BUCKET }}/hostlink"
+      # Repo policy (AGENTS.md): a release becomes latest only after the
+      # pipeline succeeds. GoReleaser publishes with make_latest=false; this
+      # step promotes once artifacts are verified present.
+      - name: Promote release to latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Expect hostlink x2 + hlctl x6 + checksums = 9 assets.
+          count=$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length')
+          if [ "$count" -lt 9 ]; then
+            echo "expected at least 9 assets, found $count; refusing to promote" >&2
+            exit 1
+          fi
+          gh release edit "$GITHUB_REF_NAME" --latest
