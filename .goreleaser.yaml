@@ -74,6 +74,9 @@ changelog:
       - "^test:"
 
 release:
+  # Repo policy (AGENTS.md): new releases MUST NOT become latest automatically.
+  # Promote manually after the pipeline succeeds: gh release edit <tag> --latest.
+  make_latest: false
   footer: >-
 
     ---
