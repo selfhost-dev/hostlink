@@ -449,9 +449,16 @@ install_service() {
 # Install, but do not verify: the check would fail every such server.
 check_port_free() {
   local port="${APP_PORT:-8080}"
-  command -v ss &> /dev/null || return 0
+  # No ss: whether the port is free cannot be told, and a false failure is
+  # worse than no check (the old behaviour).
+  if ! command -v ss &> /dev/null; then
+    echo "WARNING: ss not found; cannot tell whether port $port is free. Skipping the service check." >&2
+    SKIP_VERIFY=1
+    return 0
+  fi
   if [ -n "$(ss -Hltn "sport = :$port" 2>/dev/null)" ]; then
     echo "WARNING: port $port is already in use; the agent cannot start on it until it is moved (--app-port). Skipping the service check." >&2
+    ss -Hltnp "sport = :$port" >&2 2>/dev/null || true
     SKIP_VERIFY=1
   fi
 }

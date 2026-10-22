@@ -167,6 +167,10 @@ APP_PORT=""; SKIP_VERIFY=0
 check_port_free > /dev/null 2>&1
 assert_eq "$SKIP_VERIFY" "0" "a free default port is verified"
 unset -f ss
+if ! command -v ss > /dev/null 2>&1; then   # macOS: no ss at all
+  SKIP_VERIFY=0; check_port_free > /dev/null 2>&1
+  assert_eq "$SKIP_VERIFY" "1" "no ss: the port cannot be checked, so neither is the service"
+fi
 STAGE="verify"; SKIP_VERIFY=1; (finish_install 0 > /dev/null 2>&1)
 assert_eq "$(status_field status)" "unverified" "an install whose check was skipped says so"
 SKIP_VERIFY=0
