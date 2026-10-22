@@ -1,6 +1,6 @@
 module hostlink
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/docker/docker v28.3.3+incompatible
