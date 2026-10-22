@@ -47,6 +47,12 @@ func TestClassify(t *testing.T) {
 		{"mysql too many connections", &mysql.MySQLError{Number: 1040}, "too_many_connections", true, true},
 		{"mysql shutting down", &mysql.MySQLError{Number: 1053}, "starting_up", true, true},
 		{"mysql no privilege", &mysql.MySQLError{Number: 1227}, "permission_denied", false, true},
+		// 1130: no account admits the agent's host (seen on UAT: a MySQL whose
+		// first start was cut off, leaving only root@localhost). 1129: the
+		// host is blocked after too many connection errors. The server
+		// answered, but neither is a reading on its health.
+		{"mysql host not allowed", fmt.Errorf("ping: %w", &mysql.MySQLError{Number: 1130, Message: "Host '10.0.2.1' is not allowed to connect to this MySQL server"}), "host_not_allowed", false, true},
+		{"mysql host blocked", &mysql.MySQLError{Number: 1129}, "host_blocked", false, true},
 		{"mysql other", &mysql.MySQLError{Number: 1146}, "query_failed", false, true},
 
 		{"mongo auth", mongo.CommandError{Code: 18, Name: "AuthenticationFailed"}, "auth_failed", false, true},
@@ -78,6 +84,12 @@ func TestVerdictFromKind(t *testing.T) {
 	up, health = Verdict("auth_failed", false, true)
 	assert.Nil(t, up, "a rejected login is not a verdict on the database")
 	assert.Equal(t, "unknown", health)
+
+	for _, kind := range []string{"host_not_allowed", "host_blocked"} {
+		up, health = Verdict(kind, false, true)
+		assert.Nil(t, up, "%s: refused before any login, not a healthy database", kind)
+		assert.Equal(t, "unknown", health, kind)
+	}
 
 	up, health = Verdict("permission_denied", false, true)
 	assert.True(t, *up, "the server answered: it is up, only the reading failed")

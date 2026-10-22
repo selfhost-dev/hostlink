@@ -287,3 +287,22 @@ func TestEngine_RepairIsRateLimited(t *testing.T) {
 
 	assert.Len(t, *calls, 1)
 }
+
+// MySQL turns the agent's host away before any login (1130): no account to
+// repair can help (root is turned away too), so the agent neither runs a
+// repair nor calls it healthy. It reports unknown / host_not_allowed.
+func TestEngine_HostNotAllowedIsUnknownAndNotRepaired(t *testing.T) {
+	notAllowed := fmt.Errorf("ping: %w", &mysql.MySQLError{Number: 1130, Message: "Host '10.0.2.1' is not allowed to connect to this MySQL server"})
+	my := &scriptedEngine{results: []any{nil}, errs: []error{notAllowed}}
+	mp, calls, pushed := engineHost(t, []dockerdiscovery.DiscoveredDatabase{engineDB(dockerdiscovery.DatabaseTypeMySQL, "mysqluuid", 3306)},
+		map[string]*scriptedEngine{"mysqluuid000000000000": my}, nil)
+	mp.setContainerCreds([]credential.Credential{engineCred("mysql", "mysqluuid", "app-pw", "mon-pw", "root-pw")})
+
+	require.NoError(t, mp.Push(credential.Credential{}))
+
+	assert.Empty(t, *calls, "a host the server turns away cannot be repaired from it")
+	m := engineSet(t, pushed, domainmetrics.MetricTypeMySQLDatabase, "mysqluuid")
+	assert.Nil(t, m["up"])
+	assert.Equal(t, "unknown", m["health"])
+	assert.Equal(t, "host_not_allowed", m["collection_error"])
+}

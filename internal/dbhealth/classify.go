@@ -38,6 +38,12 @@ func Classify(err error) (kind string, down, connected bool) {
 			return "auth_failed", false, true
 		case 1049:
 			return "database_missing", false, true
+		case 1130:
+			// No account admits the agent's host: the server answered but
+			// turns every login from here away, root included.
+			return "host_not_allowed", false, true
+		case 1129:
+			return "host_blocked", false, true
 		case 1040, 1203:
 			return "too_many_connections", true, true
 		case 1053, 1077:
@@ -101,18 +107,23 @@ func Classify(err error) (kind string, down, connected bool) {
 	return "connection_failed", false, false
 }
 
-// Verdict: up and health for a failure. A server that answered is up (only
-// the reading failed); a proven outage is down; anything else is unknown,
-// with up null.
+// Verdict: up and health for a failure. A server that answered and let the
+// agent in is up (only the reading failed); a proven outage is down;
+// anything else is unknown, with up null, including a server that answered
+// but turned the login away before any reading (refusedLogin).
 func Verdict(kind string, down, connected bool) (*bool, string) {
 	switch {
 	case down:
 		up := false
 		return &up, Unhealthy
-	case connected && kind != "auth_failed" && kind != "database_missing":
+	case connected && !refusedLogin[kind]:
 		up := true
 		return &up, Healthy
 	default:
 		return nil, Unknown
 	}
+}
+
+var refusedLogin = map[string]bool{
+	"auth_failed": true, "database_missing": true, "host_not_allowed": true, "host_blocked": true,
 }
