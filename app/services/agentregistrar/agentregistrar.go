@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hostlink/config/appconf"
 	"hostlink/internal/crypto"
+	"hostlink/internal/httpclient"
 	"net/http"
 	"os"
 	"time"
@@ -65,9 +66,7 @@ func NewWithConfig(cfg *Config) *Registrar {
 	}
 
 	return &Registrar{
-		client: &http.Client{
-			Timeout: cfg.Timeout,
-		},
+		client:          httpclient.NewControlPlaneClient(cfg.Timeout),
 		controlPlaneURL: cfg.ControlPlaneURL,
 		tokenID:         cfg.TokenID,
 		tokenKey:        cfg.TokenKey,

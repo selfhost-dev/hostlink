@@ -54,9 +54,7 @@ func New(cfg *Config) (*taskfetcher, error) {
 	}
 
 	return &taskfetcher{
-		client: &http.Client{
-			Timeout: cfg.Timeout,
-		},
+		client:          httpclient.NewControlPlaneClient(cfg.Timeout),
 		signer:          signer,
 		controlPlaneURL: cfg.ControlPlaneURL,
 		slowReporter:    slowrequest.New(cfg.SlowRequestThreshold),
