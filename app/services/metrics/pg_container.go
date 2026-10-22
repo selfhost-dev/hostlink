@@ -204,16 +204,6 @@ func (mp *metricspusher) logPGContainer(state *pgContainerState, d dockerdiscove
 	log.Warnj(entry)
 }
 
-// hostOrLocalhost keeps the MySQL and MongoDB containers' behaviour from
-// before discovery could say "no address": they still try localhost. Only
-// the PostgreSQL path reports no_address.
-func hostOrLocalhost(host string) string {
-	if host == "" {
-		return "localhost"
-	}
-	return host
-}
-
 // repairMonitorRole creates the monitoring role, or restores it (a database
 // provisioned before it existed, or a customer who changed it), through the
 // container's local socket as the container's bootstrap superuser.
@@ -248,12 +238,12 @@ func (mp *metricspusher) repairMonitorRole(ctx context.Context, d dockerdiscover
 	return true
 }
 
-// setContainerCreds keeps the platform's credentials for Coolify PostgreSQL
-// containers, by container name (the database uuid).
+// setContainerCreds keeps the platform's credentials for Coolify database
+// containers (every engine), by container name (the database uuid).
 func (mp *metricspusher) setContainerCreds(creds []credential.Credential) {
 	byName := map[string]credential.Credential{}
 	for _, c := range creds {
-		if c.Dialect == "postgresql" && c.ContainerName != "" {
+		if c.ContainerName != "" {
 			byName[c.ContainerName] = c
 		}
 	}

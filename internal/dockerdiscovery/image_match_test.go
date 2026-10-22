@@ -26,7 +26,6 @@ func TestDiscoverDatabases_FindsTaggedImagesAsRealDockerListsThem(t *testing.T) 
 		{ID: "my", Image: "mysql:8.4", Names: []string{"/mysql-x"}},
 		{ID: "maria", Image: "mariadb:11.4", Names: []string{"/maria-x"}},
 		{ID: "mongo", Image: "mongo:7.0", Names: []string{"/mongo-x"}},
-		{ID: "redis", Image: "redis:7-alpine", Names: []string{"/redis-x"}},
 		{ID: "postgrest", Image: "postgrest/postgrest:v12.2.3", Names: []string{"/rest-x"}},
 		{ID: "other-pg", Image: "ghcr.io/acme/postgres:1", Names: []string{"/acme-x"}},
 		{ID: "coolify-db", Image: "postgres:15-alpine", Names: []string{"/coolify-db"}},
@@ -45,7 +44,7 @@ func TestDiscoverDatabases_FindsTaggedImagesAsRealDockerListsThem(t *testing.T) 
 	assert.Equal(t, map[string]DatabaseType{
 		"pg-alpine": DatabaseTypePostgreSQL, "pg-hub": DatabaseTypePostgreSQL, "pg-digest": DatabaseTypePostgreSQL,
 		"supa": DatabaseTypePostgreSQL, "my": DatabaseTypeMySQL, "maria": DatabaseTypeMySQL, "mongo": DatabaseTypeMongoDB,
-	}, got, "redis, postgrest, another registry's postgres and Coolify's own database are not customer databases")
+	}, got, "postgrest, another registry's postgres and Coolify's own database are not customer databases")
 	cli.AssertExpectations(t)
 }
 
@@ -130,6 +129,30 @@ func TestDiscoverDatabases_AnInspectFailureSkipsOnlyThatContainer(t *testing.T) 
 	assert.NoError(t, err)
 	if assert.Len(t, databases, 1) {
 		assert.Equal(t, "fine", databases[0].ContainerID)
+	}
+	cli.AssertExpectations(t)
+}
+
+// Coolify Redis (redis:8) is a customer database; Coolify's own coolify-redis
+// queue is not.
+func TestDiscoverDatabases_FindsRedisButNotCoolifysOwn(t *testing.T) {
+	cli := new(mockDockerClient)
+	d := NewWithClient(cli)
+	cli.On("ContainerList", mock.Anything, mock.Anything).Return([]container.Summary{
+		{ID: "cust", Image: "redis:8", Names: []string{"/dbuuid9"}},
+		{ID: "own", Image: "redis:7-alpine", Names: []string{"/coolify-redis"}},
+	}, nil).Once()
+	cli.On("ContainerInspect", mock.Anything, "cust").Return(container.InspectResponse{
+		Config: &container.Config{Env: []string{"REDIS_PASSWORD=rpw"}},
+	}, nil).Once()
+
+	databases, err := d.DiscoverDatabases(context.Background())
+
+	assert.NoError(t, err)
+	if assert.Len(t, databases, 1) {
+		assert.Equal(t, DatabaseTypeRedis, databases[0].Type)
+		assert.Equal(t, uint16(6379), databases[0].Port)
+		assert.Equal(t, "rpw", databases[0].Password)
 	}
 	cli.AssertExpectations(t)
 }

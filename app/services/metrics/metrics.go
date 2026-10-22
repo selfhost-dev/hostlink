@@ -62,10 +62,15 @@ type metricspusher struct {
 	// keyed by container id: each owns that database's rate baseline.
 	pgContainers   map[string]*pgContainerState
 	newPGContainer func(containerID string) pgContainerCollector
-	// The platform's credentials for Coolify PostgreSQL containers, by
+	// The platform's credentials for Coolify database containers, by
 	// container name, refreshed with every credential fetch.
 	containerCreds map[string]credential.Credential
 	roleEnsurer    roleEnsurer
+
+	// MySQL / MongoDB / Redis containers (engine_container.go).
+	engineContainers   map[string]*engineContainerState
+	newEngineCollector func(containerID string, t dockerdiscovery.DatabaseType) engineCollectFunc
+	engineEnsurer      func(ctx context.Context, t dockerdiscovery.DatabaseType, admin credential.Credential, user, password string) error
 }
 
 func NewWithConf() (*metricspusher, error) {
@@ -187,6 +192,7 @@ func (mp *metricspusher) GetCreds() ([]credential.Credential, error) {
 		creds[i].Password = &decPasswd
 	}
 	mp.decryptMonitorPasswords(creds, privateKey)
+	mp.decryptAdminPasswords(creds, privateKey)
 	mp.setContainerCreds(creds)
 
 	return creds, nil
@@ -350,18 +356,19 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 		log.Warnf("docker database discovery failed: %v", err)
 	}
 	seenPG := map[string]bool{}
+	seenEngine := map[string]bool{}
 	for _, d := range dockerDBs {
 		switch d.Type {
 		case dockerdiscovery.DatabaseTypePostgreSQL:
 			seenPG[d.ContainerID] = true
 			mp.collectDockerPGMetrics(ctx, d, &metricSets)
-		case dockerdiscovery.DatabaseTypeMySQL:
-			mp.collectDockerMySQLMetrics(ctx, d, &metricSets)
-		case dockerdiscovery.DatabaseTypeMongoDB:
-			mp.collectDockerMongoDBMetrics(ctx, d, &metricSets)
+		case dockerdiscovery.DatabaseTypeMySQL, dockerdiscovery.DatabaseTypeMongoDB, dockerdiscovery.DatabaseTypeRedis:
+			seenEngine[d.ContainerID] = true
+			mp.collectDockerEngine(ctx, d, &metricSets)
 		}
 	}
 	mp.prunePGContainers(seenPG)
+	mp.pruneEngineContainers(seenEngine)
 
 	// ── Storage metrics ──────────────────────────────────────────────────────
 
@@ -475,68 +482,4 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 	}
 
 	return mp.apiserver.PushMetrics(ctx, payload)
-}
-
-func (mp *metricspusher) collectDockerMySQLMetrics(ctx context.Context, d dockerdiscovery.DiscoveredDatabase, metricSets *[]domainmetrics.MetricSet) {
-	dockerCred := credential.Credential{
-		Host:     hostOrLocalhost(d.Host),
-		Port:     int(d.Port),
-		Username: d.Username,
-		Database: d.Database,
-		Dialect:  "mysql",
-	}
-	if d.Password != "" {
-		dockerCred.Password = &d.Password
-	}
-
-	m, err := mp.mysqlcollector.Collect(dockerCred)
-	if err != nil {
-		log.Warnf("docker MySQL metrics collection failed for %s: %v", d.ContainerName, err)
-		m = domainmetrics.MySQLDatabaseMetrics{Up: false}
-	} else {
-		m.Up = true
-	}
-	*metricSets = append(*metricSets, domainmetrics.MetricSet{
-		Type: domainmetrics.MetricTypeMySQLDatabase,
-		Attributes: map[string]any{
-			"container_id":   d.ContainerID[:12],
-			"container_name": d.ContainerName,
-			"database_name":  d.Database,
-			"port":           d.Port,
-			"source":         "docker",
-		},
-		Metrics: m,
-	})
-}
-
-func (mp *metricspusher) collectDockerMongoDBMetrics(ctx context.Context, d dockerdiscovery.DiscoveredDatabase, metricSets *[]domainmetrics.MetricSet) {
-	dockerCred := credential.Credential{
-		Host:     hostOrLocalhost(d.Host),
-		Port:     int(d.Port),
-		Username: d.Username,
-		Database: d.Database,
-		Dialect:  "mongodb",
-	}
-	if d.Password != "" {
-		dockerCred.Password = &d.Password
-	}
-
-	m, err := mp.mongodbcollector.Collect(dockerCred)
-	if err != nil {
-		log.Warnf("docker MongoDB metrics collection failed for %s: %v", d.ContainerName, err)
-		m = domainmetrics.MongoDBMetrics{Up: false}
-	} else {
-		m.Up = true
-	}
-	*metricSets = append(*metricSets, domainmetrics.MetricSet{
-		Type: domainmetrics.MetricTypeMongoDBDatabase,
-		Attributes: map[string]any{
-			"container_id":   d.ContainerID[:12],
-			"container_name": d.ContainerName,
-			"database_name":  d.Database,
-			"port":           d.Port,
-			"source":         "docker",
-		},
-		Metrics: m,
-	})
 }
