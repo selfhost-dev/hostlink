@@ -81,10 +81,18 @@ func (e *Ensurer) Ensure(ctx context.Context, containerID, superuser, database, 
 // then forced to a minimal login role every time, so a customer's changes to
 // it are undone too. pg_monitor reads every pg_stat_* view and setting the
 // collector needs, and nothing else.
+//
+// lock_timeout / statement_timeout: a customer's open transaction holding the
+// role must make this fail fast, never wait. GRANT CONNECT on the database the
+// agent monitors: a database hardened with REVOKE CONNECT ... FROM PUBLIC
+// would otherwise refuse the role for good.
 func ensureSQL(role, verifier string) string {
-	return fmt.Sprintf(`SELECT 'CREATE ROLE %[1]s' WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '%[1]s') \gexec
+	return fmt.Sprintf(`SET lock_timeout = '5s';
+SET statement_timeout = '15s';
+SELECT 'CREATE ROLE %[1]s' WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '%[1]s') \gexec
 ALTER ROLE %[1]s WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 3 PASSWORD '%[2]s';
 GRANT pg_monitor TO %[1]s;
+SELECT format('GRANT CONNECT ON DATABASE %%I TO %[1]s', current_database()) \gexec
 `, role, verifier)
 }
 
@@ -137,6 +145,10 @@ func (d *dockerExecer) Exec(ctx context.Context, containerID, user string, cmd [
 		return 0, "", err
 	}
 	defer attached.Close()
+	// The hijacked stream does not watch ctx: close it when ctx ends, so a
+	// psql that never exits cannot hold the caller.
+	stop := context.AfterFunc(ctx, func() { attached.Close() })
+	defer stop()
 
 	if _, err := attached.Conn.Write(stdin); err != nil {
 		return 0, "", err
@@ -146,7 +158,13 @@ func (d *dockerExecer) Exec(ctx context.Context, containerID, user string, cmd [
 	}
 	var out bytes.Buffer
 	if _, err := stdcopy.StdCopy(&out, &out, attached.Reader); err != nil {
+		if ctx.Err() != nil {
+			return 0, out.String(), ctx.Err()
+		}
 		return 0, "", err
+	}
+	if ctx.Err() != nil {
+		return 0, out.String(), ctx.Err()
 	}
 
 	inspected, err := d.cli.ContainerExecInspect(ctx, created.ID)

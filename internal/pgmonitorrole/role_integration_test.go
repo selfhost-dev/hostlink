@@ -120,3 +120,19 @@ func TestIntegration_EnsureIsIdempotentAndRestoresATamperedRole(t *testing.T) {
 	require.Nil(t, failure, "%+v", failure)
 	assert.Equal(t, metrics.HealthHealthy, fixed.Health)
 }
+
+// A database hardened with REVOKE CONNECT ... FROM PUBLIC: the ensure grants
+// the role CONNECT, and it logs in.
+func TestIntegration_RevokedPublicConnectIsGranted(t *testing.T) {
+	host, port, admin, db := setup(t)
+	_, err := db.Exec(`REVOKE CONNECT ON DATABASE ` + itDB + ` FROM PUBLIC`)
+	require.NoError(t, err)
+	password := "ThirdMonitorPassword0123456789abcdefghi"
+
+	require.NoError(t, New(localPsql{}).Ensure(context.Background(), "local", admin, itDB, itRole, password))
+
+	pw := password
+	m, failure := pgmetrics.NewContainerCollector().Collect(credential.Credential{Host: host, Port: port, Username: itRole, Password: &pw, Database: itDB})
+	require.Nil(t, failure, "%+v", failure)
+	assert.Equal(t, metrics.HealthHealthy, m.Health)
+}
