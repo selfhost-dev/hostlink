@@ -6,12 +6,26 @@ EXIT_DEPENDENCY=2
 EXIT_VERSION_FETCH=3
 EXIT_DOWNLOAD=4
 EXIT_UNSUPPORTED_ARCH=5
+EXIT_INSTALL=6
+EXIT_SERVICE=7
 
 # Retry configuration
 MAX_RETRIES=5
 INITIAL_DELAY=1
 MAX_DELAY=60
 DOWNLOAD_TIMEOUT=60
+
+# After start, the service must be active within VERIFY_TIMEOUT seconds and
+# still active VERIFY_SETTLE seconds later (a crash loop is briefly active).
+VERIFY_TIMEOUT=20
+VERIFY_SETTLE=3
+
+# The install's outcome, for recovery tooling (hostlink#236): key=value lines
+# status (running|installed|unverified|failed), stage, version, exit_code, updated_at.
+# Under /var/lib/hostlink, not cloud-init's directory: servers installed over
+# SSH (Coolify) have no cloud-init. Never holds the token.
+INSTALL_STATUS_FILE=/var/lib/hostlink/install-status
+STAGE="start"
 
 
 check_dependencies() {
@@ -128,10 +142,16 @@ DOWNLOAD_BASE_URL=""
 # machine's arch is set, a download that does not match is rejected and retried.
 SHA256_X86_64=""
 SHA256_ARM64=""
+# The agent's HTTP port (SH_APP_PORT), written before its first start. Empty:
+# the agent's default, 8080, which Coolify's proxy already holds.
+APP_PORT=""
+HOSTLINK_ENV_FILE=/etc/hostlink/hostlink.env
+# Set when the agent's port is taken before start (see check_port_free).
+SKIP_VERIFY=0
 
 usage() {
   echo "Usage: $0 [--token-id ID] [--token-key KEY] [--server-url URL] [--version TAG]"
-  echo "          [--download-base-url URL] [--sha256-x86_64 HEX] [--sha256-arm64 HEX]"
+  echo "          [--download-base-url URL] [--sha256-x86_64 HEX] [--sha256-arm64 HEX] [--app-port PORT]"
 }
 
 parse_args() {
@@ -163,6 +183,10 @@ parse_args() {
         ;;
       --sha256-arm64)
         SHA256_ARM64="$2"
+        shift 2
+        ;;
+      --app-port)
+        APP_PORT="$2"
         shift 2
         ;;
       *)
@@ -386,50 +410,150 @@ move_bin() {
 
 create_directories() {
   echo "Creating hostlink directories..."
-  sudo mkdir -p /var/lib/hostlink
-  sudo mkdir -p /var/log/hostlink
-  sudo mkdir -p /etc/hostlink
-  sudo chmod 700 /var/lib/hostlink
-  sudo chmod 755 /var/log/hostlink
-  sudo chmod 755 /etc/hostlink
+  sudo mkdir -p /var/lib/hostlink &&
+    sudo mkdir -p /var/log/hostlink &&
+    sudo mkdir -p /etc/hostlink &&
+    sudo chmod 700 /var/lib/hostlink &&
+    sudo chmod 755 /var/log/hostlink &&
+    sudo chmod 755 /etc/hostlink || return 1
   echo "Directories created."
 }
 
 create_env_file() {
   echo "Creating environment configuration..."
-  cat > /etc/hostlink/hostlink.env <<EOF
+  cat > "$HOSTLINK_ENV_FILE" <<EOF || return 1
 SH_CONTROL_PLANE_URL=$SERVER_URL
 HOSTLINK_TOKEN_ID=$TOKEN_ID
 HOSTLINK_TOKEN_KEY=$TOKEN_KEY
 EOF
-  sudo chmod 600 /etc/hostlink/hostlink.env
-  echo "Environment file created at /etc/hostlink/hostlink.env"
+  if [ -n "$APP_PORT" ]; then
+    echo "SH_APP_PORT=$APP_PORT" >> "$HOSTLINK_ENV_FILE" || return 1
+  fi
+  sudo chmod 600 "$HOSTLINK_ENV_FILE" || return 1
+  echo "Environment file created at $HOSTLINK_ENV_FILE"
 }
 
 install_service() {
   echo "Installing systemd service..."
-  sudo cp "$TEMP_DIR/scripts/hostlink.service" /etc/systemd/system/
-  sudo systemctl daemon-reload
-  sudo systemctl enable hostlink
-  sudo systemctl start hostlink
+  sudo cp "$TEMP_DIR/scripts/hostlink.service" /etc/systemd/system/ &&
+    sudo systemctl daemon-reload &&
+    sudo systemctl enable hostlink &&
+    sudo systemctl start hostlink || return 1
   echo "Service started."
+}
+
+# Before start (the old agent already stopped): when another process holds
+# the agent's port, the agent cannot start until the caller moves it. That is
+# a Coolify server installed without --app-port: Traefik holds 8080, and the
+# caller appends SH_APP_PORT and restarts the agent after this installer.
+# Install, but do not verify: the check would fail every such server.
+check_port_free() {
+  local port="${APP_PORT:-8080}"
+  # No ss: whether the port is free cannot be told, and a false failure is
+  # worse than no check (the old behaviour).
+  if ! command -v ss &> /dev/null; then
+    echo "WARNING: ss not found; cannot tell whether port $port is free. Skipping the service check." >&2
+    SKIP_VERIFY=1
+    return 0
+  fi
+  if [ -n "$(ss -Hltn "sport = :$port" 2>/dev/null)" ]; then
+    echo "WARNING: port $port is already in use; the agent cannot start on it until it is moved (--app-port). Skipping the service check." >&2
+    ss -Hltnp "sport = :$port" >&2 2>/dev/null || true
+    SKIP_VERIFY=1
+  fi
+}
+
+# The service must come up, and stay up past VERIFY_SETTLE: an agent that
+# crashes on start is active for a moment before systemd restarts it.
+verify_service() {
+  echo "Verifying the hostlink service..."
+  local waited=0
+  until systemctl is-active --quiet hostlink; do
+    if [ "$waited" -ge "$VERIFY_TIMEOUT" ]; then
+      echo "ERROR: hostlink service is not active after ${VERIFY_TIMEOUT}s." >&2
+      systemctl status hostlink --no-pager -n 20 >&2 || true
+      exit $EXIT_SERVICE
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  sleep "$VERIFY_SETTLE"
+  if ! systemctl is-active --quiet hostlink; then
+    echo "ERROR: hostlink service stopped right after starting." >&2
+    systemctl status hostlink --no-pager -n 20 >&2 || true
+    exit $EXIT_SERVICE
+  fi
+  echo "hostlink service is running."
+}
+
+# Each step returns non-zero when any of its commands fails, not only its
+# last one; run_step turns that into a non-zero exit naming the step, so a
+# caller retrying the install (selfhost's Hostlink::InstallScript) retries
+# instead of reading a half-done install as success (hostlink#236).
+run_step() {
+  STAGE="$1"
+  shift
+  if ! "$@"; then
+    echo "ERROR: install step '$STAGE' failed." >&2
+    exit $EXIT_INSTALL
+  fi
+}
+
+write_install_status() {
+  local status="$1" exit_code="$2" tmp
+  mkdir -p "$(dirname "$INSTALL_STATUS_FILE")" 2>/dev/null || return 0
+  tmp="$INSTALL_STATUS_FILE.tmp"
+  {
+    echo "status=$status"
+    echo "stage=$STAGE"
+    echo "version=${VERSION:-}"
+    echo "exit_code=$exit_code"
+    echo "updated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$tmp" 2>/dev/null && mv "$tmp" "$INSTALL_STATUS_FILE" 2>/dev/null
+  return 0
+}
+
+# EXIT trap: every way out of main, an explicit exit included, records the
+# outcome. Only a verified install is "installed".
+finish_install() {
+  local code="$1"
+  if [ "$code" -eq 0 ] && [ "$STAGE" = "verify" ]; then
+    if [ "$SKIP_VERIFY" = 1 ]; then
+      write_install_status unverified 0
+    else
+      write_install_status installed 0
+    fi
+  else
+    write_install_status failed "$code"
+    echo "hostlink install failed at stage '$STAGE' (exit $code). Status: $INSTALL_STATUS_FILE" >&2
+  fi
+}
+
+check_root() {
+  if [[ $EUID -ne 0 ]]; then
+    echo "This script must be run as root (use sudo)"
+    exit $EXIT_GENERAL
+  fi
 }
 
 main() {
   parse_args "$@"
 
-  if [[ $EUID -ne 0 ]]; then
-    echo "This script must be run as root (use sudo)"
-    exit $EXIT_GENERAL
-  fi
+  check_root
+
+  trap 'finish_install $?' EXIT
+  write_install_status running 0
 
   # Run dependency checks first
+  STAGE="dependencies"
   check_dependencies
   create_temp_dir
 
-  ARCH=$(detect_arch)
+  STAGE="arch"
+  ARCH=$(detect_arch) || exit $EXIT_UNSUPPORTED_ARCH
 
   # resolve_version outputs messages to stderr, version to stdout
+  STAGE="version"
   VERSION=$(resolve_version)
   if [ -z "$VERSION" ]; then
     echo "ERROR: Failed to determine version."
@@ -438,13 +562,22 @@ main() {
 
   HOSTLINK_TAR=hostlink_$VERSION.tar.gz
 
+  STAGE="uninstall"
   uninstall_existing
+  STAGE="download"
   download_tar
-  extract_tar
-  move_bin
-  create_directories
-  create_env_file
-  install_service
+  run_step extract extract_tar
+  run_step move move_bin
+  run_step directories create_directories
+  run_step env create_env_file
+  check_port_free
+  run_step service install_service
+  STAGE="verify"
+  if [ "$SKIP_VERIFY" = 1 ]; then
+    echo "hostlink service started; not verified (port in use)."
+  else
+    verify_service
+  fi
 }
 
 # Run when executed — as a file or piped (`curl … | sudo bash -s -- …`) —
