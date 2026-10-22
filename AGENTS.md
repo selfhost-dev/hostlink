@@ -16,3 +16,13 @@ When asked to create release follow these steps:
 - DO NOT make the new release latest
 - Wait for the release pipeline to complete
 - Once release is complete, make the release latest
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues in `selfhost-dev/hostlink`, via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context: root `GLOSSARY.md` and `docs/adr/`. See `docs/agents/domain.md`.
