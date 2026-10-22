@@ -9,6 +9,13 @@
 version: 2
 project_name: hostlink
 
+git:
+  # An RC tag is a release note of its own. Ignore RC tags when finding the
+  # previous tag so both the RC and the final release list everything since the
+  # last stable release, instead of the final only listing the rc.N delta.
+  ignore_tags:
+    - "*-rc.*"
+
 builds:
   - id: hostlink
     binary: hostlink
@@ -74,8 +81,12 @@ changelog:
       - "^test:"
 
 release:
+  # A vX.Y.Z-rc.N tag becomes a GitHub prerelease, so /releases/latest never
+  # returns it. Final tags remain full releases.
+  prerelease: auto
   # Repo policy (AGENTS.md): new releases MUST NOT become latest automatically.
-  # Promote manually after the pipeline succeeds: gh release edit <tag> --latest.
+  # Promote a final release only after the pipeline succeeds:
+  # gh release edit <tag> --latest. RCs are never promoted.
   make_latest: false
   footer: >-
 
