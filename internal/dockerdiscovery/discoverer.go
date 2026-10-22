@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 
@@ -52,8 +51,14 @@ type imageRule struct {
 
 var discoveryRules = []imageRule{
 	{
-		dbType:       DatabaseTypePostgreSQL,
-		images:       []string{"postgres", "supabase/postgres"},
+		dbType: DatabaseTypePostgreSQL,
+		// postgres: selfhost's Coolify default (postgres:<major>-alpine); the
+		// pgvector and timescale images are what it creates a database with
+		// extensions on (PostgresqlStrategy / PostgresExtensions::Catalog).
+		images: []string{
+			"postgres", "supabase/postgres",
+			"pgvector/pgvector", "timescale/timescaledb", "timescale/timescaledb-ha",
+		},
 		excludeNames: []string{"coolify-db"},
 	},
 	{
@@ -176,41 +181,87 @@ func NewWithClient(cli dockerClient) Discoverer {
 	return &dockerDiscoverer{client: cli}
 }
 
+// DiscoverDatabases lists the running containers once and keeps those whose
+// image repository is a database the rules name, whatever its registry, tag
+// or digest. It used to ask Docker per bare name with the ancestor filter,
+// which resolves "postgres" to postgres:latest: postgres:17-alpine (selfhost's
+// Coolify default), mysql:8.4, mongo:7 ... never matched, and the Docker path
+// found nothing (selfhost-dev/hostlink#263). Docker unreachable: no databases.
 func (d *dockerDiscoverer) DiscoverDatabases(ctx context.Context) ([]DiscoveredDatabase, error) {
-	var result []DiscoveredDatabase
-	for _, rule := range discoveryRules {
-		dbs, err := d.discoverByRule(ctx, rule)
-		if err != nil {
-			continue
-		}
-		result = append(result, dbs...)
+	containers, err := d.client.ContainerList(ctx, container.ListOptions{})
+	if err != nil {
+		return nil, nil
 	}
-	return result, nil
-}
 
-func (d *dockerDiscoverer) discoverByRule(ctx context.Context, rule imageRule) ([]DiscoveredDatabase, error) {
-	seen := map[string]bool{}
 	var result []DiscoveredDatabase
-	for _, image := range rule.images {
-		containers, err := d.client.ContainerList(ctx, container.ListOptions{
-			Filters: filters.NewArgs(filters.Arg("ancestor", image)),
-		})
-		if err != nil {
-			continue
-		}
-		for _, c := range containers {
-			if seen[c.ID] || isExcluded(c, rule.excludeNames) {
-				continue
-			}
-			seen[c.ID] = true
-			db, err := inspectContainer(ctx, d.client, c, rule.dbType)
-			if err != nil {
-				continue
-			}
+	for _, c := range containers {
+		db, ok := d.discover(ctx, c)
+		if ok {
 			result = append(result, db)
 		}
 	}
 	return result, nil
+}
+
+func (d *dockerDiscoverer) discover(ctx context.Context, c container.Summary) (DiscoveredDatabase, bool) {
+	ref := c.Image
+	var info *container.InspectResponse
+	if isImageID(ref) {
+		// A tag that moved after a re-pull: Docker lists the image by ID, and
+		// the name the container was created from is in its config.
+		inspected, err := d.client.ContainerInspect(ctx, c.ID)
+		if err != nil || inspected.Config == nil {
+			return DiscoveredDatabase{}, false
+		}
+		info, ref = &inspected, inspected.Config.Image
+	}
+
+	rule, ok := ruleFor(imageRepository(ref))
+	if !ok || isExcluded(c, rule.excludeNames) {
+		return DiscoveredDatabase{}, false
+	}
+	if info == nil {
+		inspected, err := d.client.ContainerInspect(ctx, c.ID)
+		if err != nil {
+			return DiscoveredDatabase{}, false
+		}
+		info = &inspected
+	}
+	return describe(c, *info, rule.dbType), true
+}
+
+func ruleFor(repository string) (imageRule, bool) {
+	for _, rule := range discoveryRules {
+		for _, image := range rule.images {
+			if repository == image {
+				return rule, true
+			}
+		}
+	}
+	return imageRule{}, false
+}
+
+// imageRepository is an image reference's repository: no registry host, no
+// tag, no digest, no implicit "library/" (docker.io/library/postgres:16 and
+// postgres@sha256:... are both "postgres"; supabase/postgres:15.8 is
+// "supabase/postgres").
+func imageRepository(ref string) string {
+	ref, _, _ = strings.Cut(ref, "@")
+	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
+		ref = ref[:i]
+	}
+	parts := strings.Split(ref, "/")
+	if len(parts) > 1 && (strings.ContainsAny(parts[0], ".:") || parts[0] == "localhost") {
+		parts = parts[1:]
+	}
+	if len(parts) == 2 && parts[0] == "library" {
+		parts = parts[1:]
+	}
+	return strings.Join(parts, "/")
+}
+
+func isImageID(ref string) bool {
+	return strings.HasPrefix(ref, "sha256:")
 }
 
 func isExcluded(c container.Summary, excludes []string) bool {
@@ -228,12 +279,7 @@ func isExcluded(c container.Summary, excludes []string) bool {
 	return false
 }
 
-func inspectContainer(ctx context.Context, cli dockerClient, c container.Summary, dbType DatabaseType) (DiscoveredDatabase, error) {
-	info, err := cli.ContainerInspect(ctx, c.ID)
-	if err != nil {
-		return DiscoveredDatabase{}, fmt.Errorf("inspect %s: %w", c.ID[:12], err)
-	}
-
+func describe(c container.Summary, info container.InspectResponse, dbType DatabaseType) DiscoveredDatabase {
 	containerName := dockerutil.ResolveContainerName(c.ID, c.Names, c.Labels)
 
 	host, port := resolveAddress(info, defaultPorts[dbType])
@@ -259,7 +305,7 @@ func inspectContainer(ctx context.Context, cli dockerClient, c container.Summary
 		Database:      database,
 		Username:      username,
 		Password:      password,
-	}, nil
+	}
 }
 
 // resolveAddress is where the agent, running on the host, reaches the

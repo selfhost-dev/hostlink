@@ -28,6 +28,9 @@ type pgContainerState struct {
 	missed       int // consecutive pushes the container was not discovered in
 	lastRepair   time.Time
 	repairedWith string // the monitoring password the last repair set
+	// roleUnavailable: the last repair failed, so until the next one is due
+	// the container is collected on the platform's customer login directly.
+	roleUnavailable bool
 }
 
 // repairDue: at most every pgRepairEvery, unless the platform's monitoring
@@ -117,12 +120,7 @@ func (mp *metricspusher) collectDockerPGMetrics(ctx context.Context, d dockerdis
 		// and none in the env): say so, never a login that reads as zeros.
 		dbMetrics, failure = pgmetrics.Unavailable("missing_credentials", errors.New("no usable credential for the container"))
 	} else {
-		dbMetrics, failure = state.collector.Collect(dockerCred)
-		if monitored && needsRepair(failure) && state.repairDue(*platform.MonitorPassword) {
-			if mp.repairMonitorRole(ctx, d, platform) {
-				dbMetrics, failure = state.collector.Collect(dockerCred)
-			}
-		}
+		dbMetrics, failure = mp.collectPlatformContainer(ctx, state, d, dockerCred, platform, monitored)
 	}
 	mp.logPGContainer(state, d, dbMetrics, failure)
 
@@ -291,4 +289,53 @@ func (mp *metricspusher) decryptMonitorPasswords(creds []credential.Credential, 
 		}
 		creds[i].MonitorPassword = &password
 	}
+}
+
+// collectPlatformContainer collects a container the platform names. With a
+// monitoring login: as selfhost_monitor; a refused login repairs the role and
+// retries. When the role cannot be made (an image whose local socket psql does
+// not find, a renamed superuser), the platform's record of the customer's
+// password is used instead of reporting auth_failed for good, until the next
+// repair is due. Without a monitoring login, dockerCred already holds the
+// platform's (or the env's) login.
+func (mp *metricspusher) collectPlatformContainer(ctx context.Context, state *pgContainerState, d dockerdiscovery.DiscoveredDatabase,
+	dockerCred credential.Credential, platform credential.Credential, monitored bool) (domainmetrics.PostgreSQLContainerMetrics, *pgmetrics.Failure) {
+	customer := dockerCred
+	if platform.Password != nil {
+		customer.Username, customer.Password = platform.Username, platform.Password
+	}
+	canFallBack := monitored && platform.Password != nil
+
+	if monitored && state.roleUnavailable && canFallBack && !state.repairPending(*platform.MonitorPassword) {
+		return state.collector.Collect(customer)
+	}
+
+	dbMetrics, failure := state.collector.Collect(dockerCred)
+	if !monitored || !needsRepair(failure) {
+		if monitored && failure == nil {
+			state.roleUnavailable = false
+		}
+		return dbMetrics, failure
+	}
+
+	if state.repairDue(*platform.MonitorPassword) {
+		if mp.repairMonitorRole(ctx, d, platform) {
+			state.roleUnavailable = false
+			dbMetrics, failure = state.collector.Collect(dockerCred)
+			if !needsRepair(failure) {
+				return dbMetrics, failure
+			}
+		}
+		state.roleUnavailable = true
+	}
+	if canFallBack {
+		return state.collector.Collect(customer)
+	}
+	return dbMetrics, failure
+}
+
+// repairPending: a repair would run now (window elapsed or password changed),
+// without claiming it.
+func (s *pgContainerState) repairPending(password string) bool {
+	return password != s.repairedWith || time.Since(s.lastRepair) >= pgRepairEvery
 }

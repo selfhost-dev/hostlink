@@ -153,3 +153,27 @@ func (d *deadlineEnsurer) Ensure(ctx context.Context, _, _, _, _, _ string) erro
 	_, d.hadDeadline = ctx.Deadline()
 	return errors.New("still refused")
 }
+
+// The role cannot be created (an image whose local socket psql does not find,
+// a renamed superuser): collect with the platform's record of the customer's
+// password rather than report auth_failed for good.
+func TestPush_ARoleThatCannotBeCreatedFallsBackToThePlatformLogin(t *testing.T) {
+	mp, _, _, pushed := setupCoolifyHost(t, []dockerdiscovery.DiscoveredDatabase{coolifyPG("dbuuid1")})
+	pg := &scriptedPG{
+		results: []domainmetrics.PostgreSQLContainerMetrics{authFailed, healthy},
+		fails:   []*pgmetrics.Failure{authErr, nil},
+	}
+	mp.newPGContainer = func(string) pgContainerCollector { return pg }
+	mp.roleEnsurer = &fakeRoleEnsurer{err: errors.New("psql: could not connect to socket")}
+	mp.setContainerCreds([]credential.Credential{platformCred("dbuuid1", "customer-pw", "monitor-pw")})
+
+	assert.NoError(t, mp.Push(credential.Credential{}))
+
+	if assert.Len(t, pg.creds, 2) {
+		assert.Equal(t, "selfhost_monitor", pg.creds[0].Username)
+		assert.Equal(t, "customer", pg.creds[1].Username)
+		assert.Equal(t, "customer-pw", *pg.creds[1].Password)
+	}
+	body, _ := json.Marshal(pgSet(t, pushed, "dbuuid1").Metrics)
+	assert.Contains(t, string(body), `"health":"healthy"`)
+}
