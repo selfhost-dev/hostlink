@@ -183,6 +183,10 @@ git tag v0.8.56 v0.8.56-rc.1^{commit}
 git push origin refs/tags/v0.8.56
 ```
 
+Both tags can point at the same commit. The workflow passes the pushed tag as
+`GORELEASER_CURRENT_TAG`, so GoReleaser builds and publishes `v0.8.56` instead
+of selecting the RC tag with `git describe`.
+
 The workflow then:
 
 1. Builds and publishes the full release with `make_latest=false`.
