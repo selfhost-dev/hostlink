@@ -6,6 +6,8 @@ import (
 	"hostlink/app/services/metrics"
 	"hostlink/domain/credential"
 	"sync"
+
+	"github.com/labstack/gommon/log"
 )
 
 type TriggerFunc func(context.Context, func() error)
@@ -56,12 +58,17 @@ func (mj *MetricsJob) Register(ctx context.Context, mp metrics.Pusher, mcred met
 				(mj.config.CredFetchInterval > 0 && beatCount%mj.config.CredFetchInterval == 0)
 
 			if shouldFetch {
-				creds, err = mcred.GetCreds()
-				if err != nil {
-					return err
+				// A failed fetch costs the database set at most: system,
+				// network and storage need no credential, and the last good
+				// credentials stay in use (selfhost#3963).
+				fetched, fetchErr := mcred.GetCreds()
+				if fetchErr != nil {
+					log.Warnj(log.JSON{"event": "metrics_credentials_fetch_failed", "error": fetchErr.Error(), "cached_credentials": len(creds)})
+				} else {
+					creds = fetched
 				}
 
-				if len(creds) > 0 {
+				if fetchErr == nil && len(creds) > 0 {
 					next, coolifyPostgres := singleDatabaseCred(creds)
 					switch {
 					case next.Dialect != "":

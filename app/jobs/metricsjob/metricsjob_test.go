@@ -270,10 +270,13 @@ func TestRegister_HandlesGetCredsError(t *testing.T) {
 
 	job.Shutdown()
 
-	// GetCreds fails on first fetch attempt (shouldFetch=true, len(creds)==0)
-	// The error is returned, so Push is not called
-	if len(pusher.pushCalls) != 0 {
-		t.Errorf("expected 0 Push calls on error, got %d", len(pusher.pushCalls))
+	// GetCreds fails on the first fetch: the beat still pushes system,
+	// network and storage, without a database credential (selfhost#3963).
+	if len(pusher.pushCalls) != 1 {
+		t.Fatalf("expected 1 Push call on a credential error, got %d", len(pusher.pushCalls))
+	}
+	if pusher.pushCalls[0].Dialect != "" {
+		t.Errorf("expected no database credential, got %q", pusher.pushCalls[0].Dialect)
 	}
 }
 

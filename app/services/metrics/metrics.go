@@ -57,6 +57,8 @@ type metricspusher struct {
 	dockerDiscoverer    dockerdiscovery.Discoverer
 	crypto              crypto.Service
 	privateKeyPath      string
+	// credFetchTimeout bounds GetCreds; zero reads appconf.APICredentialsTimeout.
+	credFetchTimeout time.Duration
 
 	// One collector per discovered PostgreSQL container (a Coolify database),
 	// keyed by container id: each owns that database's rate baseline.
@@ -158,7 +160,13 @@ func (mp *metricspusher) GetCreds() ([]credential.Credential, error) {
 		return nil, fmt.Errorf("agent not registered: missing agent ID")
 	}
 
-	creds, err := mp.apiserver.GetMetricsCreds(context.Background(), agentID)
+	timeout := mp.credFetchTimeout
+	if timeout <= 0 {
+		timeout = appconf.APICredentialsTimeout()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	creds, err := mp.apiserver.GetMetricsCreds(ctx, agentID)
 	if err != nil {
 		return nil, err
 	}
