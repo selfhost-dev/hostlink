@@ -2,6 +2,7 @@ package dockerdiscovery
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/docker/docker/api/types/container"
@@ -110,4 +111,25 @@ func TestImageRepository(t *testing.T) {
 	} {
 		assert.Equal(t, want, imageRepository(ref), ref)
 	}
+}
+
+// A container that cannot be inspected is skipped, and only that one: the
+// rest are still found, and nothing is guessed for it.
+func TestDiscoverDatabases_AnInspectFailureSkipsOnlyThatContainer(t *testing.T) {
+	cli := new(mockDockerClient)
+	d := NewWithClient(cli)
+	cli.On("ContainerList", mock.Anything, mock.Anything).Return([]container.Summary{
+		{ID: "gone", Image: "postgres:17-alpine", Names: []string{"/dbuuid1"}},
+		{ID: "fine", Image: "postgres:17-alpine", Names: []string{"/dbuuid2"}},
+	}, nil).Once()
+	cli.On("ContainerInspect", mock.Anything, "gone").Return(container.InspectResponse{}, errors.New("No such container")).Once()
+	cli.On("ContainerInspect", mock.Anything, "fine").Return(container.InspectResponse{Config: &container.Config{}}, nil).Once()
+
+	databases, err := d.DiscoverDatabases(context.Background())
+
+	assert.NoError(t, err)
+	if assert.Len(t, databases, 1) {
+		assert.Equal(t, "fine", databases[0].ContainerID)
+	}
+	cli.AssertExpectations(t)
 }
