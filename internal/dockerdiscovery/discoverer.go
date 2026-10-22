@@ -3,10 +3,12 @@ package dockerdiscovery
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 
 	"hostlink/internal/dockerutil"
@@ -29,11 +31,13 @@ type DiscoveredDatabase struct {
 	Type          DatabaseType
 	ContainerID   string
 	ContainerName string
-	Host          string
-	Port          uint16
-	Database      string
-	Username      string
-	Password      string
+	// Host is "" when no address reaching the container is known (see
+	// resolveAddress); a collector reports that, it never dials a guess.
+	Host     string
+	Port     uint16
+	Database string
+	Username string
+	Password string
 }
 
 type Discoverer interface {
@@ -232,20 +236,7 @@ func inspectContainer(ctx context.Context, cli dockerClient, c container.Summary
 
 	containerName := dockerutil.ResolveContainerName(c.ID, c.Names, c.Labels)
 
-	port := defaultPorts[dbType]
-	if info.NetworkSettings != nil {
-		for containerPort, bindings := range info.NetworkSettings.Ports {
-			if strings.HasPrefix(string(containerPort), fmt.Sprintf("%d/", port)) && len(bindings) > 0 {
-				if p := bindings[0].HostPort; p != "" {
-					var parsed uint16
-					if _, err := fmt.Sscanf(p, "%d", &parsed); err == nil && parsed > 0 {
-						port = parsed
-						break
-					}
-				}
-			}
-		}
-	}
+	host, port := resolveAddress(info, defaultPorts[dbType])
 
 	username, password, database := "", "", ""
 	if info.Config != nil {
@@ -263,12 +254,95 @@ func inspectContainer(ctx context.Context, cli dockerClient, c container.Summary
 		Type:          dbType,
 		ContainerID:   c.ID,
 		ContainerName: containerName,
-		Host:          "localhost",
+		Host:          host,
 		Port:          port,
 		Database:      database,
 		Username:      username,
 		Password:      password,
 	}, nil
+}
+
+// resolveAddress is where the agent, running on the host, reaches the
+// database inside the container:
+//
+//   - a port published to the host: that host port, at the address it is
+//     bound to (localhost when bound to all interfaces);
+//   - otherwise the container's own address on its Docker network, at the
+//     container port: IPv4 first, then the global IPv6 address. Coolify never
+//     publishes a database container's port (a "public" database is
+//     published by a separate <uuid>-proxy container), so this is every
+//     Coolify database. localhost:<container port> reached nothing there, and
+//     every Coolify PostgreSQL reported up:false;
+//   - host networking: localhost at the container port (the host's own stack);
+//   - anything else (no network, another container's namespace, no address
+//     yet): "" -- no address is known, and dialling a guess would turn "we
+//     cannot tell" into a false "down".
+//
+// With several networks, "coolify" wins, then the first by name, so the
+// address is stable between pushes. The host reaches any bridge network's
+// addresses, internal ones included; a Swarm overlay or macvlan address is
+// not reachable from the host and times out (reported as unknown).
+func resolveAddress(info container.InspectResponse, containerPort uint16) (string, uint16) {
+	if info.NetworkSettings != nil {
+		for cp, bindings := range info.NetworkSettings.Ports {
+			if !strings.HasPrefix(string(cp), fmt.Sprintf("%d/", containerPort)) || len(bindings) == 0 {
+				continue
+			}
+			if p := bindings[0].HostPort; p != "" {
+				var parsed uint16
+				if _, err := fmt.Sscanf(p, "%d", &parsed); err == nil && parsed > 0 {
+					return publishedHost(bindings[0].HostIP), parsed
+				}
+			}
+		}
+
+		if ip := networkIP(info.NetworkSettings.Networks); ip != "" {
+			return ip, containerPort
+		}
+	}
+
+	if info.ContainerJSONBase != nil && info.HostConfig != nil && info.HostConfig.NetworkMode.IsHost() {
+		return "localhost", containerPort
+	}
+	return "", containerPort
+}
+
+// publishedHost: a port bound to every interface is reached on localhost; one
+// bound to a specific address only there.
+func publishedHost(hostIP string) string {
+	switch hostIP {
+	case "", "0.0.0.0", "::":
+		return "localhost"
+	default:
+		return hostIP
+	}
+}
+
+const preferredNetwork = "coolify"
+
+func networkIP(networks map[string]*network.EndpointSettings) string {
+	names := make([]string, 0, len(networks))
+	for name := range networks {
+		if name != preferredNetwork {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	if _, ok := networks[preferredNetwork]; ok {
+		names = append([]string{preferredNetwork}, names...)
+	}
+
+	for _, pick := range []func(*network.EndpointSettings) string{
+		func(ep *network.EndpointSettings) string { return ep.IPAddress },
+		func(ep *network.EndpointSettings) string { return ep.GlobalIPv6Address },
+	} {
+		for _, name := range names {
+			if ep := networks[name]; ep != nil && pick(ep) != "" {
+				return pick(ep)
+			}
+		}
+	}
+	return ""
 }
 
 type noopDiscoverer struct{}

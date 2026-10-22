@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -101,6 +102,111 @@ func TestDiscoverDatabases_PostgresContainer(t *testing.T) {
 	assert.Equal(t, "customuser", databases[0].Username)
 	assert.Equal(t, "secret123", databases[0].Password)
 	cli.AssertExpectations(t)
+}
+
+// A Coolify-managed database publishes no host port (a "public" database is
+// published by a separate proxy container, never by this one). The agent runs
+// on the host, so the only address that reaches PostgreSQL is the container's
+// own IP on its Docker network, at the container port. localhost:5432 reaches
+// nothing, which reported every Coolify database as up:false.
+func TestDiscoverDatabases_UnpublishedContainerUsesItsNetworkAddress(t *testing.T) {
+	cli := new(mockDockerClient)
+	d := NewWithClient(cli)
+
+	containerID := "c0011f7db0000000"
+	cli.On("ContainerList", mock.Anything, matchAncestor("postgres")).Return([]container.Summary{
+		{ID: containerID, Names: []string{"/c0011f7db"}},
+	}, nil).Once()
+	cli.On("ContainerList", mock.Anything, matchAncestor("supabase/postgres")).Return([]container.Summary{}, nil).Once()
+	cli.On("ContainerList", mock.Anything, matchAncestor("mysql")).Return([]container.Summary{}, nil).Once()
+	cli.On("ContainerList", mock.Anything, matchAncestor("mariadb")).Return([]container.Summary{}, nil).Once()
+	cli.On("ContainerList", mock.Anything, matchAncestor("mongo")).Return([]container.Summary{}, nil).Once()
+
+	cli.On("ContainerInspect", mock.Anything, containerID).Return(container.InspectResponse{
+		NetworkSettings: &container.NetworkSettings{
+			NetworkSettingsBase: container.NetworkSettingsBase{
+				Ports: nat.PortMap{nat.Port("5432/tcp"): nil},
+			},
+			Networks: map[string]*network.EndpointSettings{
+				"coolify": {IPAddress: "10.0.1.7"},
+			},
+		},
+		Config: &container.Config{Env: []string{"POSTGRES_USER=app", "POSTGRES_DB=appdb", "POSTGRES_PASSWORD=pw"}},
+	}, nil)
+
+	databases, err := d.DiscoverDatabases(context.Background())
+
+	assert.NoError(t, err)
+	assert.Len(t, databases, 1)
+	assert.Equal(t, "10.0.1.7", databases[0].Host)
+	assert.Equal(t, uint16(5432), databases[0].Port)
+	cli.AssertExpectations(t)
+}
+
+// With several networks the coolify one wins, then the first by name, so the
+// address is stable between pushes.
+func TestResolveAddress_PrefersCoolifyNetworkThenName(t *testing.T) {
+	info := container.InspectResponse{NetworkSettings: &container.NetworkSettings{
+		Networks: map[string]*network.EndpointSettings{
+			"zeta":    {IPAddress: "10.9.0.2"},
+			"coolify": {IPAddress: "10.0.1.7"},
+			"alpha":   {IPAddress: "10.8.0.2"},
+		},
+	}}
+	host, port := resolveAddress(info, 5432)
+	assert.Equal(t, "10.0.1.7", host)
+	assert.Equal(t, uint16(5432), port)
+
+	delete(info.NetworkSettings.Networks, "coolify")
+	host, _ = resolveAddress(info, 5432)
+	assert.Equal(t, "10.8.0.2", host)
+}
+
+// Host networking shares the host's stack: localhost at the container port.
+func TestResolveAddress_HostNetworkingIsLocalhost(t *testing.T) {
+	info := container.InspectResponse{
+		ContainerJSONBase: &container.ContainerJSONBase{HostConfig: &container.HostConfig{NetworkMode: "host"}},
+		NetworkSettings: &container.NetworkSettings{
+			Networks: map[string]*network.EndpointSettings{"host": {IPAddress: ""}},
+		},
+	}
+	host, port := resolveAddress(info, 5432)
+	assert.Equal(t, "localhost", host)
+	assert.Equal(t, uint16(5432), port)
+}
+
+// No address known (no network, another container's namespace): "" rather
+// than a localhost guess, which would read as a refused, down database.
+func TestResolveAddress_NoKnownAddressIsEmpty(t *testing.T) {
+	for _, info := range []container.InspectResponse{
+		{},
+		{
+			ContainerJSONBase: &container.ContainerJSONBase{HostConfig: &container.HostConfig{NetworkMode: "container:abc"}},
+			NetworkSettings:   &container.NetworkSettings{Networks: map[string]*network.EndpointSettings{}},
+		},
+	} {
+		host, _ := resolveAddress(info, 5432)
+		assert.Equal(t, "", host)
+	}
+}
+
+func TestResolveAddress_IPv6OnlyNetworkUsesTheGlobalAddress(t *testing.T) {
+	info := container.InspectResponse{NetworkSettings: &container.NetworkSettings{
+		Networks: map[string]*network.EndpointSettings{"v6net": {GlobalIPv6Address: "fd00::7"}},
+	}}
+	host, _ := resolveAddress(info, 5432)
+	assert.Equal(t, "fd00::7", host)
+}
+
+func TestResolveAddress_PortPublishedOnOneAddressIsDialledThere(t *testing.T) {
+	info := container.InspectResponse{NetworkSettings: &container.NetworkSettings{
+		NetworkSettingsBase: container.NetworkSettingsBase{Ports: nat.PortMap{
+			nat.Port("5432/tcp"): []nat.PortBinding{{HostIP: "10.0.0.5", HostPort: "15432"}},
+		}},
+	}}
+	host, port := resolveAddress(info, 5432)
+	assert.Equal(t, "10.0.0.5", host)
+	assert.Equal(t, uint16(15432), port)
 }
 
 func TestDiscoverDatabases_SupabasePostgresContainer(t *testing.T) {
