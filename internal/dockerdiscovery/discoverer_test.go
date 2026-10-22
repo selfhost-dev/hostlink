@@ -34,17 +34,8 @@ func (m *mockDockerClient) NegotiateAPIVersion(ctx context.Context) {
 	m.Called(ctx)
 }
 
-func matchAncestor(image string) any {
-	return mock.MatchedBy(func(opts container.ListOptions) bool {
-		return opts.Filters.Match("ancestor", image)
-	})
-}
-
 func setupEmptyAllImages(cli *mockDockerClient) {
-	allImages := []string{"postgres", "supabase/postgres", "mysql", "mariadb", "mongo"}
-	for _, img := range allImages {
-		cli.On("ContainerList", mock.Anything, matchAncestor(img)).Return([]container.Summary{}, nil).Once()
-	}
+	cli.On("ContainerList", mock.Anything, mock.Anything).Return([]container.Summary{}, nil).Once()
 }
 
 func TestDiscoverDatabases_NoContainers(t *testing.T) {
@@ -64,13 +55,11 @@ func TestDiscoverDatabases_PostgresContainer(t *testing.T) {
 	d := NewWithClient(cli)
 
 	containerID := "abc123def456"
-	cli.On("ContainerList", mock.Anything, matchAncestor("postgres")).Return([]container.Summary{
-		{ID: containerID, Names: []string{"/my-postgres"}},
+	// One list of every running container, as real Docker returns it:
+	// each with the tagged image it runs.
+	cli.On("ContainerList", mock.Anything, mock.Anything).Return([]container.Summary{
+		{ID: containerID, Image: "postgres:17-alpine", Names: []string{"/my-postgres"}},
 	}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("supabase/postgres")).Return([]container.Summary{}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("mysql")).Return([]container.Summary{}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("mariadb")).Return([]container.Summary{}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("mongo")).Return([]container.Summary{}, nil).Once()
 
 	cli.On("ContainerInspect", mock.Anything, containerID).Return(container.InspectResponse{
 		NetworkSettings: &container.NetworkSettings{
@@ -114,13 +103,11 @@ func TestDiscoverDatabases_UnpublishedContainerUsesItsNetworkAddress(t *testing.
 	d := NewWithClient(cli)
 
 	containerID := "c0011f7db0000000"
-	cli.On("ContainerList", mock.Anything, matchAncestor("postgres")).Return([]container.Summary{
-		{ID: containerID, Names: []string{"/c0011f7db"}},
+	// One list of every running container, as real Docker returns it:
+	// each with the tagged image it runs.
+	cli.On("ContainerList", mock.Anything, mock.Anything).Return([]container.Summary{
+		{ID: containerID, Image: "postgres:17-alpine", Names: []string{"/c0011f7db"}},
 	}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("supabase/postgres")).Return([]container.Summary{}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("mysql")).Return([]container.Summary{}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("mariadb")).Return([]container.Summary{}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("mongo")).Return([]container.Summary{}, nil).Once()
 
 	cli.On("ContainerInspect", mock.Anything, containerID).Return(container.InspectResponse{
 		NetworkSettings: &container.NetworkSettings{
@@ -214,13 +201,11 @@ func TestDiscoverDatabases_SupabasePostgresContainer(t *testing.T) {
 	d := NewWithClient(cli)
 
 	containerID := "sup123"
-	cli.On("ContainerList", mock.Anything, matchAncestor("postgres")).Return([]container.Summary{}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("supabase/postgres")).Return([]container.Summary{
-		{ID: containerID, Names: []string{"/supabase-db"}},
+	// One list of every running container, as real Docker returns it:
+	// each with the tagged image it runs.
+	cli.On("ContainerList", mock.Anything, mock.Anything).Return([]container.Summary{
+		{ID: containerID, Image: "supabase/postgres:15.8.1.060", Names: []string{"/supabase-db"}},
 	}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("mysql")).Return([]container.Summary{}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("mariadb")).Return([]container.Summary{}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("mongo")).Return([]container.Summary{}, nil).Once()
 
 	cli.On("ContainerInspect", mock.Anything, containerID).Return(container.InspectResponse{
 		NetworkSettings: &container.NetworkSettings{
@@ -254,13 +239,11 @@ func TestDiscoverDatabases_MySQLContainer(t *testing.T) {
 	d := NewWithClient(cli)
 
 	containerID := "mysql111"
-	cli.On("ContainerList", mock.Anything, matchAncestor("postgres")).Return([]container.Summary{}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("supabase/postgres")).Return([]container.Summary{}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("mysql")).Return([]container.Summary{
-		{ID: containerID, Names: []string{"/my-mysql"}},
+	// One list of every running container, as real Docker returns it:
+	// each with the tagged image it runs.
+	cli.On("ContainerList", mock.Anything, mock.Anything).Return([]container.Summary{
+		{ID: containerID, Image: "mysql:8.4", Names: []string{"/my-mysql"}},
 	}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("mariadb")).Return([]container.Summary{}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("mongo")).Return([]container.Summary{}, nil).Once()
 
 	cli.On("ContainerInspect", mock.Anything, containerID).Return(container.InspectResponse{
 		NetworkSettings: &container.NetworkSettings{
@@ -295,12 +278,10 @@ func TestDiscoverDatabases_MongoDBContainer(t *testing.T) {
 	d := NewWithClient(cli)
 
 	containerID := "mongo222"
-	cli.On("ContainerList", mock.Anything, matchAncestor("postgres")).Return([]container.Summary{}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("supabase/postgres")).Return([]container.Summary{}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("mysql")).Return([]container.Summary{}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("mariadb")).Return([]container.Summary{}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("mongo")).Return([]container.Summary{
-		{ID: containerID, Names: []string{"/my-mongo"}},
+	// One list of every running container, as real Docker returns it:
+	// each with the tagged image it runs.
+	cli.On("ContainerList", mock.Anything, mock.Anything).Return([]container.Summary{
+		{ID: containerID, Image: "mongo:7", Names: []string{"/my-mongo"}},
 	}, nil).Once()
 
 	cli.On("ContainerInspect", mock.Anything, containerID).Return(container.InspectResponse{
@@ -335,15 +316,12 @@ func TestDiscoverDatabases_MultipleTypes(t *testing.T) {
 	cli := new(mockDockerClient)
 	d := NewWithClient(cli)
 
-	cli.On("ContainerList", mock.Anything, matchAncestor("postgres")).Return([]container.Summary{
-		{ID: "pg1", Names: []string{"/pg-one"}},
+	// One list of every running container, as real Docker returns it:
+	// each with the tagged image it runs.
+	cli.On("ContainerList", mock.Anything, mock.Anything).Return([]container.Summary{
+		{ID: "pg1", Image: "postgres:17-alpine", Names: []string{"/pg-one"}},
+		{ID: "mysql1", Image: "mysql:8.4", Names: []string{"/mysql-one"}},
 	}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("supabase/postgres")).Return([]container.Summary{}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("mysql")).Return([]container.Summary{
-		{ID: "mysql1", Names: []string{"/mysql-one"}},
-	}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("mariadb")).Return([]container.Summary{}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("mongo")).Return([]container.Summary{}, nil).Once()
 
 	cli.On("ContainerInspect", mock.Anything, "pg1").Return(container.InspectResponse{
 		NetworkSettings: &container.NetworkSettings{
@@ -383,14 +361,12 @@ func TestDiscoverDatabases_FiltersCoolifyDB(t *testing.T) {
 	cli := new(mockDockerClient)
 	d := NewWithClient(cli)
 
-	cli.On("ContainerList", mock.Anything, matchAncestor("postgres")).Return([]container.Summary{
-		{ID: "111", Names: []string{"/coolify-db"}},
-		{ID: "222", Names: []string{"/my-app-db"}},
+	// One list of every running container, as real Docker returns it:
+	// each with the tagged image it runs.
+	cli.On("ContainerList", mock.Anything, mock.Anything).Return([]container.Summary{
+		{ID: "111", Image: "postgres:17-alpine", Names: []string{"/coolify-db"}},
+		{ID: "222", Image: "postgres:17-alpine", Names: []string{"/my-app-db"}},
 	}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("supabase/postgres")).Return([]container.Summary{}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("mysql")).Return([]container.Summary{}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("mariadb")).Return([]container.Summary{}, nil).Once()
-	cli.On("ContainerList", mock.Anything, matchAncestor("mongo")).Return([]container.Summary{}, nil).Once()
 
 	cli.On("ContainerInspect", mock.Anything, "222").Return(container.InspectResponse{
 		Config: &container.Config{Env: []string{"POSTGRES_PASSWORD=pass"}},
