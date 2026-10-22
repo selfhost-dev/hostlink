@@ -207,19 +207,31 @@ type ContainerMetrics struct {
 // at the entrypoint level — not health probes.
 // Up is false when Traefik is unreachable or metrics are not enabled.
 // ConnectionsCurrent is reported even when there is no request traffic.
+//
+// RequestsTotal and the class counts are totals since the proxy started (Prometheus
+// counters); RequestsPerSecond is the rate between two collections; ErrorRate is the
+// percentage of 4xx and 5xx in the totals.
+//
+// Percentiles come from Traefik's duration histogram. One that falls in its lowest
+// bucket is null (hostlink#281): interpolating from 0 there only restates p (with
+// Traefik's default 100 ms first bucket, p50/p95/p99 read 50/95/99 ms whatever the
+// latency). ResponseTimeFloorMs is that bucket's upper edge, so a null percentile
+// means "under ResponseTimeFloorMs". The average is exact.
 type TraefikEntrypointMetrics struct {
-	Up                 bool    `json:"up"`
-	ConnectionsCurrent int64   `json:"connections_current"`
-	RequestsTotal      int64   `json:"requests_total"`
-	RequestsPerSecond  float64 `json:"requests_per_second"`
-	ErrorRate          float64 `json:"error_rate"` // % of 4xx + 5xx
-	Requests2xx        int64   `json:"requests_2xx"`
-	Requests4xx        int64   `json:"requests_4xx"`
-	Requests5xx        int64   `json:"requests_5xx"`
-	AvgResponseTimeMs  float64 `json:"avg_response_time_ms"`
-	P50ResponseTimeMs  float64 `json:"p50_response_time_ms"`
-	P95ResponseTimeMs  float64 `json:"p95_response_time_ms"`
-	P99ResponseTimeMs  float64 `json:"p99_response_time_ms"`
+	Up                  bool     `json:"up"`
+	ConnectionsCurrent  int64    `json:"connections_current"`
+	RequestsTotal       int64    `json:"requests_total"`
+	RequestsPerSecond   float64  `json:"requests_per_second"`
+	ErrorRate           float64  `json:"error_rate"` // % of 4xx + 5xx
+	Requests2xx         int64    `json:"requests_2xx"`
+	Requests3xx         int64    `json:"requests_3xx"`
+	Requests4xx         int64    `json:"requests_4xx"`
+	Requests5xx         int64    `json:"requests_5xx"`
+	AvgResponseTimeMs   float64  `json:"avg_response_time_ms"`
+	P50ResponseTimeMs   *float64 `json:"p50_response_time_ms"`
+	P95ResponseTimeMs   *float64 `json:"p95_response_time_ms"`
+	P99ResponseTimeMs   *float64 `json:"p99_response_time_ms"`
+	ResponseTimeFloorMs float64  `json:"response_time_floor_ms,omitempty"`
 }
 
 type TraefikEntrypointAttributes struct {
@@ -229,16 +241,19 @@ type TraefikEntrypointAttributes struct {
 // TraefikRouterMetrics holds per-router HTTP metrics. Unlike entrypoint metrics
 // which are aggregate across all traffic, router metrics map 1:1 to a deployed
 // app and exclude unmatched/catchall traffic noise.
+// The counters, error rate and percentiles follow TraefikEntrypointMetrics' rules.
 type TraefikRouterMetrics struct {
-	RequestsTotal     int64   `json:"requests_total"`
-	Requests2xx       int64   `json:"requests_2xx"`
-	Requests4xx       int64   `json:"requests_4xx"`
-	Requests5xx       int64   `json:"requests_5xx"`
-	ErrorRate         float64 `json:"error_rate"`
-	AvgResponseTimeMs float64 `json:"avg_response_time_ms"`
-	P50ResponseTimeMs float64 `json:"p50_response_time_ms"`
-	P95ResponseTimeMs float64 `json:"p95_response_time_ms"`
-	P99ResponseTimeMs float64 `json:"p99_response_time_ms"`
+	RequestsTotal       int64    `json:"requests_total"`
+	Requests2xx         int64    `json:"requests_2xx"`
+	Requests3xx         int64    `json:"requests_3xx"`
+	Requests4xx         int64    `json:"requests_4xx"`
+	Requests5xx         int64    `json:"requests_5xx"`
+	ErrorRate           float64  `json:"error_rate"`
+	AvgResponseTimeMs   float64  `json:"avg_response_time_ms"`
+	P50ResponseTimeMs   *float64 `json:"p50_response_time_ms"`
+	P95ResponseTimeMs   *float64 `json:"p95_response_time_ms"`
+	P99ResponseTimeMs   *float64 `json:"p99_response_time_ms"`
+	ResponseTimeFloorMs float64  `json:"response_time_floor_ms,omitempty"`
 }
 
 type TraefikRouterAttributes struct {

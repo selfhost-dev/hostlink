@@ -178,6 +178,7 @@ type entrypointAgg struct {
 	connectionsCurrent int64
 	requestsTotal      int64
 	requests2xx        int64
+	requests3xx        int64
 	requests4xx        int64
 	requests5xx        int64
 	// Histogram: le (seconds) → cumulative count aggregated across all label combos
@@ -214,6 +215,8 @@ func (tc *traefikCollector) aggregate(text string) ([]EntrypointMetricSet, error
 			switch {
 			case strings.HasPrefix(s.labels["code"], "2"):
 				agg.requests2xx += count
+			case strings.HasPrefix(s.labels["code"], "3"):
+				agg.requests3xx += count
 			case strings.HasPrefix(s.labels["code"], "4"):
 				agg.requests4xx += count
 			case strings.HasPrefix(s.labels["code"], "5"):
@@ -249,6 +252,7 @@ func (tc *traefikCollector) aggregate(text string) ([]EntrypointMetricSet, error
 			ConnectionsCurrent: agg.connectionsCurrent,
 			RequestsTotal:      agg.requestsTotal,
 			Requests2xx:        agg.requests2xx,
+			Requests3xx:        agg.requests3xx,
 			Requests4xx:        agg.requests4xx,
 			Requests5xx:        agg.requests5xx,
 		}
@@ -264,9 +268,10 @@ func (tc *traefikCollector) aggregate(text string) ([]EntrypointMetricSet, error
 
 		// Percentiles from histogram buckets
 		if agg.durationCount > 0 && len(agg.buckets) > 0 {
-			m.P50ResponseTimeMs = pct(agg.buckets, agg.durationCount, 0.50) * 1000
-			m.P95ResponseTimeMs = pct(agg.buckets, agg.durationCount, 0.95) * 1000
-			m.P99ResponseTimeMs = pct(agg.buckets, agg.durationCount, 0.99) * 1000
+			m.P50ResponseTimeMs = percentileMs(agg.buckets, agg.durationCount, 0.50)
+			m.P95ResponseTimeMs = percentileMs(agg.buckets, agg.durationCount, 0.95)
+			m.P99ResponseTimeMs = percentileMs(agg.buckets, agg.durationCount, 0.99)
+			m.ResponseTimeFloorMs = lowestBucket(agg.buckets) * 1000
 		}
 
 		// Requests/sec via delta on cumulative counter
@@ -312,6 +317,7 @@ type routerAgg struct {
 	service       string
 	requestsTotal int64
 	requests2xx   int64
+	requests3xx   int64
 	requests4xx   int64
 	requests5xx   int64
 	buckets       map[float64]float64
@@ -352,6 +358,8 @@ func (tc *traefikCollector) aggregateRouters(text string) ([]RouterMetricSet, er
 			switch {
 			case strings.HasPrefix(s.labels["code"], "2"):
 				agg.requests2xx += count
+			case strings.HasPrefix(s.labels["code"], "3"):
+				agg.requests3xx += count
 			case strings.HasPrefix(s.labels["code"], "4"):
 				agg.requests4xx += count
 			case strings.HasPrefix(s.labels["code"], "5"):
@@ -379,6 +387,7 @@ func (tc *traefikCollector) aggregateRouters(text string) ([]RouterMetricSet, er
 		m := domainmetrics.TraefikRouterMetrics{
 			RequestsTotal: agg.requestsTotal,
 			Requests2xx:   agg.requests2xx,
+			Requests3xx:   agg.requests3xx,
 			Requests4xx:   agg.requests4xx,
 			Requests5xx:   agg.requests5xx,
 		}
@@ -389,9 +398,10 @@ func (tc *traefikCollector) aggregateRouters(text string) ([]RouterMetricSet, er
 			m.AvgResponseTimeMs = (agg.durationSum / agg.durationCount) * 1000
 		}
 		if agg.durationCount > 0 && len(agg.buckets) > 0 {
-			m.P50ResponseTimeMs = pct(agg.buckets, agg.durationCount, 0.50) * 1000
-			m.P95ResponseTimeMs = pct(agg.buckets, agg.durationCount, 0.95) * 1000
-			m.P99ResponseTimeMs = pct(agg.buckets, agg.durationCount, 0.99) * 1000
+			m.P50ResponseTimeMs = percentileMs(agg.buckets, agg.durationCount, 0.50)
+			m.P95ResponseTimeMs = percentileMs(agg.buckets, agg.durationCount, 0.95)
+			m.P99ResponseTimeMs = percentileMs(agg.buckets, agg.durationCount, 0.99)
+			m.ResponseTimeFloorMs = lowestBucket(agg.buckets) * 1000
 		}
 		results = append(results, RouterMetricSet{
 			Attributes: domainmetrics.TraefikRouterAttributes{
@@ -405,15 +415,28 @@ func (tc *traefikCollector) aggregateRouters(text string) ([]RouterMetricSet, er
 	return results, nil
 }
 
-// pct returns the estimated p-th percentile (0–1) from a cumulative histogram.
-// buckets maps upper-bound seconds → cumulative count; total is the overall count.
-func pct(buckets map[float64]float64, total, p float64) float64 {
-	if total <= 0 || len(buckets) == 0 {
+// percentileMs is the p-th percentile (0–1) in milliseconds, or nil when it falls in
+// the histogram's lowest bucket (hostlink#281).
+func percentileMs(buckets map[float64]float64, total, p float64) *float64 {
+	seconds, ok := pct(buckets, total, p)
+	if !ok {
+		return nil
+	}
+	ms := seconds * 1000
+	return &ms
+}
+
+// lowestBucket is the histogram's lowest finite upper edge, in seconds: what a
+// percentile reported as nil is known to be under.
+func lowestBucket(buckets map[float64]float64) float64 {
+	les := finiteBounds(buckets)
+	if len(les) == 0 {
 		return 0
 	}
-	target := p * total
+	return les[0]
+}
 
-	// Collect finite bucket boundaries and sort them
+func finiteBounds(buckets map[float64]float64) []float64 {
 	les := make([]float64, 0, len(buckets))
 	for le := range buckets {
 		if !math.IsInf(le, 0) {
@@ -421,22 +444,37 @@ func pct(buckets map[float64]float64, total, p float64) float64 {
 		}
 	}
 	sort.Float64s(les)
+	return les
+}
+
+// pct returns the estimated p-th percentile (0–1) in seconds from a cumulative
+// histogram (buckets maps upper-bound seconds → cumulative count; total is the
+// overall count), interpolating linearly inside the bucket it falls in, as
+// Prometheus' histogram_quantile does. ok is false when it falls in the lowest
+// bucket: interpolating from 0 there only restates p (hostlink#281: Traefik's default
+// 0.1 s first bucket read every fast site as p50/p95/p99 = 50/95/99 ms). Past the
+// last finite bucket it is that bucket's edge, a lower bound.
+func pct(buckets map[float64]float64, total, p float64) (float64, bool) {
+	if total <= 0 || len(buckets) == 0 {
+		return 0, false
+	}
+	target := p * total
 
 	var prevCount, prevLe float64
-	for _, le := range les {
+	for i, le := range finiteBounds(buckets) {
 		count := buckets[le]
 		if count >= target {
-			if count == prevCount {
-				return prevLe
+			if i == 0 {
+				return 0, false
 			}
-			// Linear interpolation within this bucket
+			if count == prevCount {
+				return prevLe, true
+			}
 			fraction := (target - prevCount) / (count - prevCount)
-			return prevLe + fraction*(le-prevLe)
+			return prevLe + fraction*(le-prevLe), true
 		}
 		prevCount = count
 		prevLe = le
 	}
-	return prevLe
+	return prevLe, true
 }
-
-
