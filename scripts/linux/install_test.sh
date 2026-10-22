@@ -138,6 +138,60 @@ STAGE="verify"; (finish_install 7 > /dev/null 2>&1)
 assert_eq "$(status_field status)|$(status_field stage)|$(status_field exit_code)" "failed|verify|7" "a failed install is recorded with its stage"
 STAGE="verify"; (finish_install 0 > /dev/null 2>&1)
 assert_eq "$(status_field status)|$(status_field exit_code)" "installed|0" "a verified install is recorded as installed"
+# ── --app-port: the agent's port is set before its first start ─────────────
+APP_PORT=""
+parse_args --token-id tid --app-port 8081
+assert_eq "$APP_PORT" "8081" "--app-port is parsed"
+HOSTLINK_ENV_FILE="$TEMP_DIR/etc/hostlink.env"; mkdir -p "$TEMP_DIR/etc"
+SERVER_URL="https://cp.example"; TOKEN_ID="tid"; TOKEN_KEY="tkey"
+chmod() { :; }
+(create_env_file > /dev/null 2>&1) && pass || fail "create_env_file succeeds"
+grep -qx "SH_APP_PORT=8081" "$HOSTLINK_ENV_FILE" && pass || fail "SH_APP_PORT is written: $(cat "$HOSTLINK_ENV_FILE")"
+APP_PORT=""
+(create_env_file > /dev/null 2>&1)
+grep -q "SH_APP_PORT" "$HOSTLINK_ENV_FILE" && fail "no --app-port, no SH_APP_PORT (the agent's default)" || pass
+unset -f chmod
+
+# ── Port taken before start (Coolify: Traefik on 8080, the caller moves the ──
+# ── agent and restarts it after the installer): start, but do not verify ────
+ss() { [ "$*" = "-Hltn sport = :8080" ] && echo "LISTEN 0 4096 *:8080 *:*"; return 0; }
+APP_PORT=""; SKIP_VERIFY=0
+check_port_free > "$TEMP_DIR/port.out" 2>&1
+assert_eq "$SKIP_VERIFY" "1" "a taken agent port skips verification"
+grep -q "8080 is already in use" "$TEMP_DIR/port.out" && pass || fail "the skip is explained: $(cat "$TEMP_DIR/port.out")"
+APP_PORT="8081"; SKIP_VERIFY=0
+check_port_free > /dev/null 2>&1
+assert_eq "$SKIP_VERIFY" "0" "a free --app-port is verified"
+ss() { return 0; }
+APP_PORT=""; SKIP_VERIFY=0
+check_port_free > /dev/null 2>&1
+assert_eq "$SKIP_VERIFY" "0" "a free default port is verified"
+unset -f ss
+STAGE="verify"; SKIP_VERIFY=1; (finish_install 0 > /dev/null 2>&1)
+assert_eq "$(status_field status)" "unverified" "an install whose check was skipped says so"
+SKIP_VERIFY=0
+
+# ── main, end to end with every step stubbed: the trap records the outcome ──
+run_main() {   # $1: is-active answers, one per call (0 up, 3 down)
+  echo "$1" > "$TEMP_DIR/answers"
+  (
+    check_root() { :; }; check_dependencies() { :; }; create_temp_dir() { :; }
+    detect_arch() { echo x86_64; }; uninstall_existing() { :; }; download_tar() { :; }
+    extract_tar() { :; }; move_bin() { :; }; create_directories() { :; }; create_env_file() { :; }
+    install_service() { :; }; ss() { return 0; }
+    systemctl() {
+      [ "$1" = "is-active" ] || return 0
+      local first rest; read -r first rest < "$TEMP_DIR/answers"; echo "${rest:-$first}" > "$TEMP_DIR/answers"
+      return "$first"
+    }
+    main --version v1.2.3
+  ) > "$TEMP_DIR/main.out" 2>&1
+}
+run_main "0 0"; code=$?
+assert_eq "$code|$(status_field status)|$(status_field version)" "0|installed|v1.2.3" "a healthy install exits 0, recorded installed"
+run_main "0 3"; code=$?
+assert_eq "$code|$(status_field status)|$(status_field stage)" "$EXIT_SERVICE|failed|verify" "an agent that crashes after its first check fails the install"
+
 unset -f sudo
 
 echo "install_test.sh: $PASSES passed, $FAILS failed"
