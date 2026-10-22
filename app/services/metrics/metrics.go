@@ -57,6 +57,11 @@ type metricspusher struct {
 	dockerDiscoverer    dockerdiscovery.Discoverer
 	crypto              crypto.Service
 	privateKeyPath      string
+
+	// One collector per discovered PostgreSQL container (a Coolify database),
+	// keyed by container id: each owns that database's rate baseline.
+	pgContainers   map[string]*pgContainerState
+	newPGContainer func(containerID string) pgContainerCollector
 }
 
 func NewWithConf() (*metricspusher, error) {
@@ -331,15 +336,20 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 	if err != nil {
 		log.Warnf("docker database discovery failed: %v", err)
 	}
+	seenPG := map[string]bool{}
 	for _, d := range dockerDBs {
 		switch d.Type {
 		case dockerdiscovery.DatabaseTypePostgreSQL:
+			seenPG[d.ContainerID] = true
 			mp.collectDockerPGMetrics(ctx, d, &metricSets)
 		case dockerdiscovery.DatabaseTypeMySQL:
 			mp.collectDockerMySQLMetrics(ctx, d, &metricSets)
 		case dockerdiscovery.DatabaseTypeMongoDB:
 			mp.collectDockerMongoDBMetrics(ctx, d, &metricSets)
 		}
+	}
+	if err == nil {
+		mp.prunePGContainers(seenPG)
 	}
 
 	// ── Storage metrics ──────────────────────────────────────────────────────
@@ -454,38 +464,6 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 	}
 
 	return mp.apiserver.PushMetrics(ctx, payload)
-}
-
-func (mp *metricspusher) collectDockerPGMetrics(ctx context.Context, d dockerdiscovery.DiscoveredDatabase, metricSets *[]domainmetrics.MetricSet) {
-	dockerCred := credential.Credential{
-		Host:     d.Host,
-		Port:     int(d.Port),
-		Username: d.Username,
-		Database: d.Database,
-		Dialect:  "postgresql",
-	}
-	if d.Password != "" {
-		dockerCred.Password = &d.Password
-	}
-
-	dbMetrics, err := mp.metricscollector.Collect(dockerCred)
-	if err != nil {
-		log.Warnf("docker PG metrics collection failed for %s: %v", d.ContainerName, err)
-		dbMetrics = domainmetrics.PostgreSQLDatabaseMetrics{Up: false}
-	} else {
-		dbMetrics.Up = true
-	}
-	*metricSets = append(*metricSets, domainmetrics.MetricSet{
-		Type: domainmetrics.MetricTypePostgreSQLDatabase,
-		Attributes: map[string]any{
-			"container_id":   d.ContainerID[:12],
-			"container_name": d.ContainerName,
-			"database_name":  d.Database,
-			"port":           d.Port,
-			"source":         "docker",
-		},
-		Metrics: dbMetrics,
-	})
 }
 
 func (mp *metricspusher) collectDockerMySQLMetrics(ctx context.Context, d dockerdiscovery.DiscoveredDatabase, metricSets *[]domainmetrics.MetricSet) {

@@ -3,10 +3,12 @@ package dockerdiscovery
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 
 	"hostlink/internal/dockerutil"
@@ -232,20 +234,7 @@ func inspectContainer(ctx context.Context, cli dockerClient, c container.Summary
 
 	containerName := dockerutil.ResolveContainerName(c.ID, c.Names, c.Labels)
 
-	port := defaultPorts[dbType]
-	if info.NetworkSettings != nil {
-		for containerPort, bindings := range info.NetworkSettings.Ports {
-			if strings.HasPrefix(string(containerPort), fmt.Sprintf("%d/", port)) && len(bindings) > 0 {
-				if p := bindings[0].HostPort; p != "" {
-					var parsed uint16
-					if _, err := fmt.Sscanf(p, "%d", &parsed); err == nil && parsed > 0 {
-						port = parsed
-						break
-					}
-				}
-			}
-		}
-	}
+	host, port := resolveAddress(info, defaultPorts[dbType])
 
 	username, password, database := "", "", ""
 	if info.Config != nil {
@@ -263,12 +252,68 @@ func inspectContainer(ctx context.Context, cli dockerClient, c container.Summary
 		Type:          dbType,
 		ContainerID:   c.ID,
 		ContainerName: containerName,
-		Host:          "localhost",
+		Host:          host,
 		Port:          port,
 		Database:      database,
 		Username:      username,
 		Password:      password,
 	}, nil
+}
+
+// resolveAddress is where the agent, running on the host, reaches the
+// database inside the container:
+//
+//   - a port published to the host: localhost at that host port;
+//   - otherwise the container's own IP on its Docker network, at the
+//     container port. Coolify never publishes a database container's port (a
+//     "public" database is published by a separate <uuid>-proxy container),
+//     so this is every Coolify database. localhost:<container port> reached
+//     nothing there, and every Coolify PostgreSQL reported up:false;
+//   - no network address at all (host networking): localhost at the
+//     container port, which is the host's own stack.
+//
+// With several networks, "coolify" wins, then the first by name, so the
+// address is stable between pushes.
+func resolveAddress(info container.InspectResponse, containerPort uint16) (string, uint16) {
+	if info.NetworkSettings == nil {
+		return "localhost", containerPort
+	}
+
+	for cp, bindings := range info.NetworkSettings.Ports {
+		if !strings.HasPrefix(string(cp), fmt.Sprintf("%d/", containerPort)) || len(bindings) == 0 {
+			continue
+		}
+		if p := bindings[0].HostPort; p != "" {
+			var parsed uint16
+			if _, err := fmt.Sscanf(p, "%d", &parsed); err == nil && parsed > 0 {
+				return "localhost", parsed
+			}
+		}
+	}
+
+	if ip := networkIP(info.NetworkSettings.Networks); ip != "" {
+		return ip, containerPort
+	}
+	return "localhost", containerPort
+}
+
+const preferredNetwork = "coolify"
+
+func networkIP(networks map[string]*network.EndpointSettings) string {
+	if ep := networks[preferredNetwork]; ep != nil && ep.IPAddress != "" {
+		return ep.IPAddress
+	}
+	names := make([]string, 0, len(networks))
+	for name := range networks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if ep := networks[name]; ep != nil && ep.IPAddress != "" {
+			return ep.IPAddress
+		}
+	}
+	return ""
 }
 
 type noopDiscoverer struct{}
