@@ -62,6 +62,10 @@ type metricspusher struct {
 	// keyed by container id: each owns that database's rate baseline.
 	pgContainers   map[string]*pgContainerState
 	newPGContainer func(containerID string) pgContainerCollector
+	// The platform's credentials for Coolify PostgreSQL containers, by
+	// container name, refreshed with every credential fetch.
+	containerCreds map[string]credential.Credential
+	roleEnsurer    roleEnsurer
 }
 
 func NewWithConf() (*metricspusher, error) {
@@ -171,10 +175,19 @@ func (mp *metricspusher) GetCreds() ([]credential.Credential, error) {
 
 		decPasswd, err := mp.crypto.DecryptWithPrivateKey(encPasswd, privateKey)
 		if err != nil {
+			// One Coolify database's credential must not stop every metric:
+			// that container keeps its other logins, or reports
+			// missing_credentials (see collectDockerPGMetrics).
+			if creds[i].IsCoolify() {
+				log.Warnj(log.JSON{"event": "credential_undecryptable", "credential": creds[i].ID, "error": err.Error()})
+				continue
+			}
 			return nil, fmt.Errorf("failed to decrypt password for credential %d: %w", i, err)
 		}
 		creds[i].Password = &decPasswd
 	}
+	mp.decryptMonitorPasswords(creds, privateKey)
+	mp.setContainerCreds(creds)
 
 	return creds, nil
 }

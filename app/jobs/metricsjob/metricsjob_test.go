@@ -479,3 +479,52 @@ func TestRegister_ContextCancellation(t *testing.T) {
 
 	// Should complete without hanging
 }
+
+// A Coolify PostgreSQL credential (it names its container) is collected per
+// container by the Docker path. It must not also drive the single-database
+// path, which dials localhost and reported a second, false up:false.
+func TestRegister_CoolifyContainerPostgresIsNotTheSingleDatabaseCredential(t *testing.T) {
+	pusher := &mockPusher{}
+	authGetter := &mockAuthGetter{
+		creds: []credential.Credential{
+			{Dialect: "postgresql", Host: "localhost", ContainerName: "dbuuid1"},
+			{Dialect: "redis", Host: "localhost"},
+		},
+	}
+
+	job := NewJobWithConf(MetricsJobConfig{Trigger: syncTrigger, CredFetchInterval: 2})
+	cancel := job.Register(context.Background(), pusher, authGetter)
+	defer cancel()
+	job.Shutdown()
+
+	if len(pusher.pushCalls) != 1 {
+		t.Fatalf("expected 1 Push call, got %d", len(pusher.pushCalls))
+	}
+	if pusher.pushCalls[0].Dialect != "" {
+		t.Errorf("expected no single-database credential, got %q", pusher.pushCalls[0].Dialect)
+	}
+}
+
+// Matched by uuid, not list position: a Coolify PostgreSQL entry anywhere in
+// the list (even one without a container name yet, flagged only by source)
+// keeps the single-database path off, as before; a managed instance's
+// PostgreSQL credential is still used, unchanged.
+func TestSingleDatabaseCred_OrderIndependent(t *testing.T) {
+	cases := []struct {
+		name        string
+		creds       []credential.Credential
+		wantDialect string
+		wantCoolify bool
+	}{
+		{"coolify without uuid first", []credential.Credential{{Dialect: "postgresql", Source: "coolify"}, {Dialect: "postgresql", Source: "coolify", ContainerName: "u2"}}, "", true},
+		{"other engine before coolify postgres", []credential.Credential{{Dialect: "redis"}, {Dialect: "postgresql", Source: "coolify", ContainerName: "u1"}}, "", true},
+		{"managed instance", []credential.Credential{{Dialect: "postgresql", Host: "localhost"}}, "postgresql", false},
+		{"no postgres", []credential.Credential{{Dialect: "mysql"}}, "mysql", false},
+	}
+	for _, c := range cases {
+		got, coolify := singleDatabaseCred(c.creds)
+		if got.Dialect != c.wantDialect || coolify != c.wantCoolify {
+			t.Errorf("%s: got %q/%v, want %q/%v", c.name, got.Dialect, coolify, c.wantDialect, c.wantCoolify)
+		}
+	}
+}
