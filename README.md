@@ -29,6 +29,27 @@ curl -fsSL https://raw.githubusercontent.com/selfhost-dev/hostlink/refs/heads/ma
   sudo bash -s -- --server-url "https://your-server.com" --token-id "your-token-id" --token-key "your-token-key"
 ```
 
+### Install outcome: exit codes and status file
+
+The installer exits non-zero when any step fails, so a caller that retries the
+install (cloud-init user data, selfhost's `Hostlink::InstallScript`) retries
+instead of reading a half-done install as success:
+
+| Exit | Meaning |
+|---|---|
+| 0 | Installed, and the `hostlink` service is running (verified: active within 20s and still active 3s later) |
+| 1 | General error (not root, unknown option) |
+| 2 | Missing dependency (curl, or a gzip check tool: xxd, od or file) |
+| 3 | The release version could not be determined (GitHub API, after retries) |
+| 4 | The release could not be downloaded (after retries, checksum verified) |
+| 5 | Unsupported architecture |
+| 6 | An install step failed (extract, move, directories, env, service) |
+| 7 | The service did not come up, or stopped right after starting |
+
+Every run writes `/var/lib/hostlink/install-status` (key=value lines: `status`
+`running`/`installed`/`failed`, `stage`, `version`, `exit_code`, `updated_at`)
+for recovery tooling. It never holds the token.
+
 ### Install a pinned version, from a mirror, with checksums
 
 By default the installer asks GitHub's API for the latest release (unauthenticated,

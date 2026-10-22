@@ -6,12 +6,26 @@ EXIT_DEPENDENCY=2
 EXIT_VERSION_FETCH=3
 EXIT_DOWNLOAD=4
 EXIT_UNSUPPORTED_ARCH=5
+EXIT_INSTALL=6
+EXIT_SERVICE=7
 
 # Retry configuration
 MAX_RETRIES=5
 INITIAL_DELAY=1
 MAX_DELAY=60
 DOWNLOAD_TIMEOUT=60
+
+# After start, the service must be active within VERIFY_TIMEOUT seconds and
+# still active VERIFY_SETTLE seconds later (a crash loop is briefly active).
+VERIFY_TIMEOUT=20
+VERIFY_SETTLE=3
+
+# The install's outcome, for recovery tooling (hostlink#236): key=value lines
+# status (running|installed|failed), stage, version, exit_code, updated_at.
+# Under /var/lib/hostlink, not cloud-init's directory: servers installed over
+# SSH (Coolify) have no cloud-init. Never holds the token.
+INSTALL_STATUS_FILE=/var/lib/hostlink/install-status
+STAGE="start"
 
 
 check_dependencies() {
@@ -386,33 +400,95 @@ move_bin() {
 
 create_directories() {
   echo "Creating hostlink directories..."
-  sudo mkdir -p /var/lib/hostlink
-  sudo mkdir -p /var/log/hostlink
-  sudo mkdir -p /etc/hostlink
-  sudo chmod 700 /var/lib/hostlink
-  sudo chmod 755 /var/log/hostlink
-  sudo chmod 755 /etc/hostlink
+  sudo mkdir -p /var/lib/hostlink &&
+    sudo mkdir -p /var/log/hostlink &&
+    sudo mkdir -p /etc/hostlink &&
+    sudo chmod 700 /var/lib/hostlink &&
+    sudo chmod 755 /var/log/hostlink &&
+    sudo chmod 755 /etc/hostlink || return 1
   echo "Directories created."
 }
 
 create_env_file() {
   echo "Creating environment configuration..."
-  cat > /etc/hostlink/hostlink.env <<EOF
+  cat > /etc/hostlink/hostlink.env <<EOF || return 1
 SH_CONTROL_PLANE_URL=$SERVER_URL
 HOSTLINK_TOKEN_ID=$TOKEN_ID
 HOSTLINK_TOKEN_KEY=$TOKEN_KEY
 EOF
-  sudo chmod 600 /etc/hostlink/hostlink.env
+  sudo chmod 600 /etc/hostlink/hostlink.env || return 1
   echo "Environment file created at /etc/hostlink/hostlink.env"
 }
 
 install_service() {
   echo "Installing systemd service..."
-  sudo cp "$TEMP_DIR/scripts/hostlink.service" /etc/systemd/system/
-  sudo systemctl daemon-reload
-  sudo systemctl enable hostlink
-  sudo systemctl start hostlink
+  sudo cp "$TEMP_DIR/scripts/hostlink.service" /etc/systemd/system/ &&
+    sudo systemctl daemon-reload &&
+    sudo systemctl enable hostlink &&
+    sudo systemctl start hostlink || return 1
   echo "Service started."
+}
+
+# The service must come up, and stay up past VERIFY_SETTLE: an agent that
+# crashes on start is active for a moment before systemd restarts it.
+verify_service() {
+  echo "Verifying the hostlink service..."
+  local waited=0
+  until systemctl is-active --quiet hostlink; do
+    if [ "$waited" -ge "$VERIFY_TIMEOUT" ]; then
+      echo "ERROR: hostlink service is not active after ${VERIFY_TIMEOUT}s." >&2
+      systemctl status hostlink --no-pager -n 20 >&2 || true
+      exit $EXIT_SERVICE
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  sleep "$VERIFY_SETTLE"
+  if ! systemctl is-active --quiet hostlink; then
+    echo "ERROR: hostlink service stopped right after starting." >&2
+    systemctl status hostlink --no-pager -n 20 >&2 || true
+    exit $EXIT_SERVICE
+  fi
+  echo "hostlink service is running."
+}
+
+# Each step returns non-zero when any of its commands fails, not only its
+# last one; run_step turns that into a non-zero exit naming the step, so a
+# caller retrying the install (selfhost's Hostlink::InstallScript) retries
+# instead of reading a half-done install as success (hostlink#236).
+run_step() {
+  STAGE="$1"
+  shift
+  if ! "$@"; then
+    echo "ERROR: install step '$STAGE' failed." >&2
+    exit $EXIT_INSTALL
+  fi
+}
+
+write_install_status() {
+  local status="$1" exit_code="$2" tmp
+  mkdir -p "$(dirname "$INSTALL_STATUS_FILE")" 2>/dev/null || return 0
+  tmp="$INSTALL_STATUS_FILE.tmp"
+  {
+    echo "status=$status"
+    echo "stage=$STAGE"
+    echo "version=${VERSION:-}"
+    echo "exit_code=$exit_code"
+    echo "updated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$tmp" 2>/dev/null && mv "$tmp" "$INSTALL_STATUS_FILE" 2>/dev/null
+  return 0
+}
+
+# EXIT trap: every way out of main, an explicit exit included, records the
+# outcome. Only a verified install is "installed".
+finish_install() {
+  local code="$1"
+  if [ "$code" -eq 0 ] && [ "$STAGE" = "verify" ]; then
+    write_install_status installed 0
+  else
+    write_install_status failed "$code"
+    echo "hostlink install failed at stage '$STAGE' (exit $code). Status: $INSTALL_STATUS_FILE" >&2
+  fi
 }
 
 main() {
@@ -423,13 +499,19 @@ main() {
     exit $EXIT_GENERAL
   fi
 
+  trap 'finish_install $?' EXIT
+  write_install_status running 0
+
   # Run dependency checks first
+  STAGE="dependencies"
   check_dependencies
   create_temp_dir
 
-  ARCH=$(detect_arch)
+  STAGE="arch"
+  ARCH=$(detect_arch) || exit $EXIT_UNSUPPORTED_ARCH
 
   # resolve_version outputs messages to stderr, version to stdout
+  STAGE="version"
   VERSION=$(resolve_version)
   if [ -z "$VERSION" ]; then
     echo "ERROR: Failed to determine version."
@@ -438,13 +520,17 @@ main() {
 
   HOSTLINK_TAR=hostlink_$VERSION.tar.gz
 
+  STAGE="uninstall"
   uninstall_existing
+  STAGE="download"
   download_tar
-  extract_tar
-  move_bin
-  create_directories
-  create_env_file
-  install_service
+  run_step extract extract_tar
+  run_step move move_bin
+  run_step directories create_directories
+  run_step env create_env_file
+  run_step service install_service
+  STAGE="verify"
+  verify_service
 }
 
 # Run when executed — as a file or piped (`curl … | sudo bash -s -- …`) —
