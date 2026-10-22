@@ -162,18 +162,51 @@ func TestResolveAddress_PrefersCoolifyNetworkThenName(t *testing.T) {
 	assert.Equal(t, "10.8.0.2", host)
 }
 
-// Host networking (or no network data at all) shares the host's stack:
-// localhost at the container port is the right address there.
-func TestResolveAddress_NoNetworkAddressFallsBackToLocalhost(t *testing.T) {
-	info := container.InspectResponse{NetworkSettings: &container.NetworkSettings{
-		Networks: map[string]*network.EndpointSettings{"host": {IPAddress: ""}},
-	}}
+// Host networking shares the host's stack: localhost at the container port.
+func TestResolveAddress_HostNetworkingIsLocalhost(t *testing.T) {
+	info := container.InspectResponse{
+		ContainerJSONBase: &container.ContainerJSONBase{HostConfig: &container.HostConfig{NetworkMode: "host"}},
+		NetworkSettings: &container.NetworkSettings{
+			Networks: map[string]*network.EndpointSettings{"host": {IPAddress: ""}},
+		},
+	}
 	host, port := resolveAddress(info, 5432)
 	assert.Equal(t, "localhost", host)
 	assert.Equal(t, uint16(5432), port)
+}
 
-	host, _ = resolveAddress(container.InspectResponse{}, 5432)
-	assert.Equal(t, "localhost", host)
+// No address known (no network, another container's namespace): "" rather
+// than a localhost guess, which would read as a refused, down database.
+func TestResolveAddress_NoKnownAddressIsEmpty(t *testing.T) {
+	for _, info := range []container.InspectResponse{
+		{},
+		{
+			ContainerJSONBase: &container.ContainerJSONBase{HostConfig: &container.HostConfig{NetworkMode: "container:abc"}},
+			NetworkSettings:   &container.NetworkSettings{Networks: map[string]*network.EndpointSettings{}},
+		},
+	} {
+		host, _ := resolveAddress(info, 5432)
+		assert.Equal(t, "", host)
+	}
+}
+
+func TestResolveAddress_IPv6OnlyNetworkUsesTheGlobalAddress(t *testing.T) {
+	info := container.InspectResponse{NetworkSettings: &container.NetworkSettings{
+		Networks: map[string]*network.EndpointSettings{"v6net": {GlobalIPv6Address: "fd00::7"}},
+	}}
+	host, _ := resolveAddress(info, 5432)
+	assert.Equal(t, "fd00::7", host)
+}
+
+func TestResolveAddress_PortPublishedOnOneAddressIsDialledThere(t *testing.T) {
+	info := container.InspectResponse{NetworkSettings: &container.NetworkSettings{
+		NetworkSettingsBase: container.NetworkSettingsBase{Ports: nat.PortMap{
+			nat.Port("5432/tcp"): []nat.PortBinding{{HostIP: "10.0.0.5", HostPort: "15432"}},
+		}},
+	}}
+	host, port := resolveAddress(info, 5432)
+	assert.Equal(t, "10.0.0.5", host)
+	assert.Equal(t, uint16(15432), port)
 }
 
 func TestDiscoverDatabases_SupabasePostgresContainer(t *testing.T) {

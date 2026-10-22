@@ -31,8 +31,11 @@ const (
 	qCacheHit = `SELECT CASE WHEN COALESCE(sum(blks_hit) + sum(blks_read), 0) = 0 THEN NULL
 	                    ELSE round(sum(blks_hit) * 100.0 / (sum(blks_hit) + sum(blks_read)), 2)::float8 END
 	             FROM pg_stat_database`
+	// max(stats_reset): a reset sets its database's timestamp to now(), so the
+	// newest one moves on any database's reset (min would hide a reset of one
+	// database behind an older timestamp of another).
 	qStats = `SELECT COALESCE(sum(xact_commit), 0)::bigint, COALESCE(sum(xact_rollback), 0)::bigint,
-	                 COALESCE(sum(blks_read), 0)::bigint, min(stats_reset)
+	                 COALESCE(sum(blks_read), 0)::bigint, max(stats_reset)
 	          FROM pg_stat_database`
 	qInRecovery  = `SELECT pg_is_in_recovery()`
 	qWalReceiver = `SELECT status FROM pg_stat_wal_receiver LIMIT 1`
@@ -102,6 +105,15 @@ func (c *ContainerCollector) Collect(cred credential.Credential) (m metrics.Post
 		}
 	}()
 
+	if cred.Host == "" {
+		// Discovery found no address that reaches the container: not a
+		// verdict on the database.
+		m.Health = metrics.HealthUnknown
+		m.CollectionStatus = metrics.CollectionFailed
+		m.CollectionError = "no_address"
+		return m, &Failure{Stage: "connect", Kind: "no_address", Err: errors.New("no address reaches the container")}
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 
@@ -130,13 +142,16 @@ func (c *ContainerCollector) Collect(cred credential.Credential) (m metrics.Post
 	m.Health = metrics.HealthHealthy
 
 	var failures []Failure
+	fail := func(metric string, err error) {
+		kind, _ := classify(err)
+		if kind == "connection_failed" || kind == "connection_refused" {
+			kind = "query_failed"
+		}
+		failures = append(failures, Failure{Stage: "query", Metric: metric, Kind: kind, Err: err})
+	}
 	run := func(metric, query string, dest ...any) bool {
 		if err := sess.QueryRow(ctx, query, dest...); err != nil {
-			kind, _ := classify(err)
-			if kind == "connection_failed" || kind == "connection_refused" {
-				kind = "query_failed"
-			}
-			failures = append(failures, Failure{Stage: "query", Metric: metric, Kind: kind, Err: err})
+			fail(metric, err)
 			return false
 		}
 		return true
@@ -162,7 +177,7 @@ func (c *ContainerCollector) Collect(cred credential.Credential) (m metrics.Post
 		}
 		c.rates(&m, st, c.now())
 	}
-	c.replication(ctx, sess, &m, run)
+	c.replication(ctx, sess, &m, run, fail)
 
 	var ts metrics.PostgreSQLDatabaseMetrics
 	sess.Timescale(ctx, &ts)
@@ -172,13 +187,21 @@ func (c *ContainerCollector) Collect(cred credential.Credential) (m metrics.Post
 	m.TimescaledbCompressionRatio = ts.TimescaledbCompressionRatio
 	m.TimescaledbTotalSizeBytes = ts.TimescaledbTotalSizeBytes
 
-	const coreQueries = 5 // connections, max, cache, stats, replication
+	// failed: none of the core metrics was read; partial: some were, or only
+	// replication/receiver queries failed.
+	coreFailed := 0
+	for _, f := range failures {
+		switch f.Metric {
+		case "connections_total", "max_connections", "cache_hit_ratio", "transactions_per_second":
+			coreFailed++
+		}
+	}
 	switch {
 	case len(failures) == 0:
 		m.CollectionStatus = metrics.CollectionComplete
 		c.lastSuccess = c.now()
 		return m, nil
-	case len(failures) >= coreQueries:
+	case coreFailed == 4:
 		m.CollectionStatus = metrics.CollectionFailed
 	default:
 		m.CollectionStatus = metrics.CollectionPartial
@@ -217,7 +240,7 @@ func (c *ContainerCollector) rates(m *metrics.PostgreSQLContainerMetrics, cur Po
 // streaming replicas, and a lag only when it has any. A standalone database
 // has no replication, so its lag is null, not a reassuring 0.
 func (c *ContainerCollector) replication(ctx context.Context, sess session, m *metrics.PostgreSQLContainerMetrics,
-	run func(string, string, ...any) bool) {
+	run func(string, string, ...any) bool, fail func(string, error)) {
 	var inRecovery bool
 	if !run("replication", qInRecovery, &inRecovery) {
 		return
@@ -232,6 +255,8 @@ func (c *ContainerCollector) replication(ctx context.Context, sess session, m *m
 		case err == nil:
 			connected := status.Valid && status.String == "streaming"
 			m.ReplicationConnected = &connected
+		default:
+			fail("replication_connected", err)
 		}
 		var lag sql.NullInt64
 		if run("replication_lag_seconds", qReplayLag, &lag) && lag.Valid {

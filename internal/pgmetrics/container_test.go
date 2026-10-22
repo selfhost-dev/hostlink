@@ -208,7 +208,7 @@ func TestContainer_PermissionDeniedOnStatisticsIsPartial(t *testing.T) {
 func TestContainer_AllQueriesFailingIsFailedButHealthy(t *testing.T) {
 	boom := errors.New("boom")
 	sess := healthyDB(1000)
-	sess.errs = map[string]error{qConnections: boom, qMaxConn: boom, qCacheHit: boom, qStats: boom, qInRecovery: boom}
+	sess.errs = map[string]error{qConnections: boom, qMaxConn: boom, qCacheHit: boom, qStats: boom}
 	cc := collectorFor(sess, nil, newClock())
 
 	m, _ := cc.Collect(cred())
@@ -216,6 +216,37 @@ func TestContainer_AllQueriesFailingIsFailedButHealthy(t *testing.T) {
 	assert.True(t, *m.Up)
 	assert.Equal(t, metrics.HealthHealthy, m.Health)
 	assert.Equal(t, metrics.CollectionFailed, m.CollectionStatus)
+}
+
+// No address reaches the container: nothing is dialled, and it is not "down".
+func TestContainer_NoAddressIsUnknownWithoutDialling(t *testing.T) {
+	cc := collectorFor(nil, nil, newClock())
+	cc.open = func(string) (session, error) { t.Fatal("dialled with no address"); return nil, nil }
+	noHost := cred()
+	noHost.Host = ""
+
+	m, failure := cc.Collect(noHost)
+
+	assert.Nil(t, m.Up)
+	assert.Equal(t, metrics.HealthUnknown, m.Health)
+	assert.Equal(t, "no_address", m.CollectionError)
+	assert.Equal(t, "connect", failure.Stage)
+}
+
+// A failing receiver query on a replica is a partial collection, not a
+// silently missing field.
+func TestContainer_ReplicaReceiverQueryFailureIsPartial(t *testing.T) {
+	sess := healthyDB(1000)
+	sess.rows[qInRecovery] = []any{true}
+	sess.rows[qReplayLag] = []any{sql.NullInt64{Int64: 1, Valid: true}}
+	sess.errs = map[string]error{qWalReceiver: errors.New("boom")}
+	cc := collectorFor(sess, nil, newClock())
+
+	m, failure := cc.Collect(cred())
+
+	assert.Equal(t, metrics.CollectionPartial, m.CollectionStatus)
+	assert.Equal(t, "replication_connected", failure.Metric)
+	assert.Nil(t, m.ReplicationConnected)
 }
 
 // 6. A genuine zero is 0, not null: an idle database with no other clients.

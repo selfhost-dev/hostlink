@@ -21,10 +21,16 @@ type pgContainerState struct {
 	collector pgContainerCollector
 	lastKind  string
 	lastLog   time.Time
+	missed    int // consecutive pushes the container was not discovered in
 }
 
+// pgPruneAfter: a container missing from this many consecutive discoveries
+// is gone. Discovery skips a container whose list or inspect call failed, so
+// one Docker API hiccup must not drop its baseline.
+const pgPruneAfter = 3
+
 // pgFailureLogEvery: a failure that keeps happening is logged again at most
-// this often (the push runs every few seconds); a change of failure, and the
+// this often (the push runs every 20 seconds); a change of failure, and the
 // recovery, are logged at once.
 const pgFailureLogEvery = 5 * time.Minute
 
@@ -78,11 +84,17 @@ func (mp *metricspusher) pgContainer(containerID string) *pgContainerState {
 	return state
 }
 
-// prunePGContainers drops the collectors of containers that are gone, so a
-// removed database's baseline and failure state do not linger.
+// prunePGContainers drops the collector of a container missing from
+// pgPruneAfter consecutive discoveries, so a removed database's baseline and
+// failure state do not linger, and a transient discovery gap keeps them.
 func (mp *metricspusher) prunePGContainers(seen map[string]bool) {
-	for id := range mp.pgContainers {
-		if !seen[id] {
+	for id, state := range mp.pgContainers {
+		if seen[id] {
+			state.missed = 0
+			continue
+		}
+		state.missed++
+		if state.missed >= pgPruneAfter {
 			delete(mp.pgContainers, id)
 		}
 	}
@@ -121,4 +133,14 @@ func (mp *metricspusher) logPGContainer(state *pgContainerState, d dockerdiscove
 		entry["last_success_at"] = *m.LastSuccessAt
 	}
 	log.Warnj(entry)
+}
+
+// hostOrLocalhost keeps the MySQL and MongoDB containers' behaviour from
+// before discovery could say "no address": they still try localhost. Only
+// the PostgreSQL path reports no_address.
+func hostOrLocalhost(host string) string {
+	if host == "" {
+		return "localhost"
+	}
+	return host
 }

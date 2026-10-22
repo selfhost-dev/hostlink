@@ -348,9 +348,7 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 			mp.collectDockerMongoDBMetrics(ctx, d, &metricSets)
 		}
 	}
-	if err == nil {
-		mp.prunePGContainers(seenPG)
-	}
+	mp.prunePGContainers(seenPG)
 
 	// ── Storage metrics ──────────────────────────────────────────────────────
 
@@ -468,7 +466,7 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 
 func (mp *metricspusher) collectDockerMySQLMetrics(ctx context.Context, d dockerdiscovery.DiscoveredDatabase, metricSets *[]domainmetrics.MetricSet) {
 	dockerCred := credential.Credential{
-		Host:     d.Host,
+		Host:     hostOrLocalhost(d.Host),
 		Port:     int(d.Port),
 		Username: d.Username,
 		Database: d.Database,
@@ -500,7 +498,7 @@ func (mp *metricspusher) collectDockerMySQLMetrics(ctx context.Context, d docker
 
 func (mp *metricspusher) collectDockerMongoDBMetrics(ctx context.Context, d dockerdiscovery.DiscoveredDatabase, metricSets *[]domainmetrics.MetricSet) {
 	dockerCred := credential.Credential{
-		Host:     d.Host,
+		Host:     hostOrLocalhost(d.Host),
 		Port:     int(d.Port),
 		Username: d.Username,
 		Database: d.Database,

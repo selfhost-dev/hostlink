@@ -128,22 +128,36 @@ func TestPush_CoolifyPostgres_UnknownIsNotFlattenedToDown(t *testing.T) {
 }
 
 // One collector per container, kept across pushes (it owns the rate
-// baseline), and dropped when the container goes.
+// baseline). A container missing from fewer than pgPruneAfter discoveries (a
+// Docker API hiccup) keeps its collector; one gone longer gets a fresh one if
+// it ever comes back.
 func TestPush_CoolifyPostgres_OneCollectorPerContainerAcrossPushes(t *testing.T) {
 	dbs := []dockerdiscovery.DiscoveredDatabase{coolifyPG("dbuuid1"), coolifyPG("dbuuid2")}
-	mp, mocks, fakes, _ := setupCoolifyHost(t, dbs)
+	mp, mocks, _, _ := setupCoolifyHost(t, dbs)
+	created := map[string]int{}
+	mp.newPGContainer = func(containerID string) pgContainerCollector {
+		created[containerID]++
+		return &fakePGContainer{}
+	}
+	discover := func(found []dockerdiscovery.DiscoveredDatabase) {
+		mocks.dockerDiscoverer.ExpectedCalls = nil
+		mocks.dockerDiscoverer.On("DiscoverDatabases", mock.Anything).Return(found, nil)
+		assert.NoError(t, mp.Push(credential.Credential{}))
+	}
 
-	assert.NoError(t, mp.Push(credential.Credential{}))
-	assert.NoError(t, mp.Push(credential.Credential{}))
+	discover(dbs)
+	discover(dbs)
+	assert.Equal(t, map[string]int{"dbuuid1000000000000": 1, "dbuuid2000000000000": 1}, created)
 
-	assert.Len(t, fakes, 2)
-	assert.Equal(t, 2, fakes["dbuuid1000000000000"].calls)
-	assert.Equal(t, 2, fakes["dbuuid2000000000000"].calls)
+	for i := 0; i < pgPruneAfter-1; i++ {
+		discover(dbs[:1]) // a transient gap
+	}
+	discover(dbs)
+	assert.Equal(t, 1, created["dbuuid2000000000000"], "a short gap keeps the baseline")
 
-	mocks.dockerDiscoverer.ExpectedCalls = nil
-	mocks.dockerDiscoverer.On("DiscoverDatabases", mock.Anything).Return(dbs[:1], nil)
-	assert.NoError(t, mp.Push(credential.Credential{}))
-
-	assert.Contains(t, mp.pgContainers, "dbuuid1000000000000")
-	assert.NotContains(t, mp.pgContainers, "dbuuid2000000000000", "a removed container's baseline is dropped")
+	for i := 0; i < pgPruneAfter; i++ {
+		discover(dbs[:1]) // gone
+	}
+	discover(dbs) // and back
+	assert.Equal(t, 2, created["dbuuid2000000000000"], "a container gone long enough starts fresh")
 }
