@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hostlink/config/appconf"
 	"hostlink/internal/crypto"
+	"hostlink/internal/httpclient"
 	"net/http"
 	"os"
 	"time"
@@ -67,6 +68,10 @@ func NewWithConfig(cfg *Config) *Registrar {
 	return &Registrar{
 		client: &http.Client{
 			Timeout: cfg.Timeout,
+			// The shared control-plane transport drops a dead connection, so a
+			// stalled registration does not cost every attempt its full
+			// timeout.
+			Transport: httpclient.SharedControlPlaneTransport(),
 		},
 		controlPlaneURL: cfg.ControlPlaneURL,
 		tokenID:         cfg.TokenID,

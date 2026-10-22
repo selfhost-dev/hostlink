@@ -9,6 +9,7 @@ import (
 	"hostlink/app/services/agentstate"
 	"hostlink/app/services/requestsigner"
 	"hostlink/config/appconf"
+	"hostlink/internal/httpclient"
 	"hostlink/internal/slowrequest"
 	"io"
 	"net/http"
@@ -34,9 +35,15 @@ func NewClient(cfg Config) (*client, error) {
 		return nil, fmt.Errorf("failed to create request signer: %w", err)
 	}
 
+	transport := cfg.transport
+	if transport == nil {
+		transport = httpclient.SharedControlPlaneTransport()
+	}
+
 	return &client{
 		httpClient: &http.Client{
-			Timeout: cfg.timeout,
+			Timeout:   cfg.timeout,
+			Transport: transport,
 		},
 		signer:       signer,
 		baseURL:      cfg.baseURL,
@@ -80,7 +87,9 @@ func (c *client) do(ctx context.Context, method, path string, body any, result a
 	}
 
 	url := c.baseURL + path
-	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
+	// The caller may impose its own deadline: the transport needs to know it,
+	// so that a caller that gives up is not read as a dead connection.
+	req, err := http.NewRequestWithContext(httpclient.WithCallerDeadline(ctx), method, url, bodyReader)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}

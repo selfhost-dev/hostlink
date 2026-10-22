@@ -316,3 +316,93 @@ func TestLocalTaskStoreTerminalReserveBytes_InvalidFallsToDefault(t *testing.T) 
 
 	assert.Equal(t, int64(1024*1024), LocalTaskStoreTerminalReserveBytes())
 }
+
+func TestAPIPingInterval_Default15s(t *testing.T) {
+	t.Setenv("HOSTLINK_API_PING_INTERVAL", "")
+
+	assert.Equal(t, 15*time.Second, APIPingInterval())
+}
+
+func TestAPIPingInterval_CustomValue(t *testing.T) {
+	t.Setenv("HOSTLINK_API_PING_INTERVAL", "30s")
+
+	assert.Equal(t, 30*time.Second, APIPingInterval())
+}
+
+func TestAPIPingInterval_ClampedToMin(t *testing.T) {
+	t.Setenv("HOSTLINK_API_PING_INTERVAL", "100ms")
+
+	assert.Equal(t, time.Second, APIPingInterval())
+}
+
+func TestAPIPingInterval_ClampedToMax(t *testing.T) {
+	t.Setenv("HOSTLINK_API_PING_INTERVAL", "10m")
+
+	assert.Equal(t, 5*time.Minute, APIPingInterval())
+}
+
+func TestAPIPingInterval_InvalidFallsToDefault(t *testing.T) {
+	t.Setenv("HOSTLINK_API_PING_INTERVAL", "garbage")
+
+	assert.Equal(t, 15*time.Second, APIPingInterval())
+}
+
+func TestAPIPingTimeout_Default5s(t *testing.T) {
+	t.Setenv("HOSTLINK_API_PING_TIMEOUT", "")
+
+	assert.Equal(t, 5*time.Second, APIPingTimeout())
+}
+
+func TestAPIPingTimeout_CustomValue(t *testing.T) {
+	t.Setenv("HOSTLINK_API_PING_TIMEOUT", "20s")
+
+	assert.Equal(t, 20*time.Second, APIPingTimeout())
+}
+
+func TestAPIPingTimeout_ClampedToMin(t *testing.T) {
+	t.Setenv("HOSTLINK_API_PING_TIMEOUT", "10ms")
+
+	assert.Equal(t, time.Second, APIPingTimeout())
+}
+
+func TestAPIPingTimeout_ClampedToMax(t *testing.T) {
+	t.Setenv("HOSTLINK_API_PING_TIMEOUT", "30m")
+
+	assert.Equal(t, time.Minute, APIPingTimeout())
+}
+
+func TestAPIPingTimeout_InvalidFallsToDefault(t *testing.T) {
+	t.Setenv("HOSTLINK_API_PING_TIMEOUT", "garbage")
+
+	assert.Equal(t, 5*time.Second, APIPingTimeout())
+}
+
+func TestAPIMaxConsecutiveTimeouts_Default1(t *testing.T) {
+	t.Setenv("HOSTLINK_API_MAX_CONSECUTIVE_TIMEOUTS", "")
+
+	assert.Equal(t, 1, APIMaxConsecutiveTimeouts())
+}
+
+func TestAPIMaxConsecutiveTimeouts_CustomValue(t *testing.T) {
+	t.Setenv("HOSTLINK_API_MAX_CONSECUTIVE_TIMEOUTS", "3")
+
+	assert.Equal(t, 3, APIMaxConsecutiveTimeouts())
+}
+
+func TestAPIMaxConsecutiveTimeouts_ClampedToMin(t *testing.T) {
+	t.Setenv("HOSTLINK_API_MAX_CONSECUTIVE_TIMEOUTS", "0")
+
+	assert.Equal(t, 1, APIMaxConsecutiveTimeouts())
+}
+
+func TestAPIMaxConsecutiveTimeouts_ClampedToMax(t *testing.T) {
+	t.Setenv("HOSTLINK_API_MAX_CONSECUTIVE_TIMEOUTS", "99")
+
+	assert.Equal(t, 10, APIMaxConsecutiveTimeouts())
+}
+
+func TestAPIMaxConsecutiveTimeouts_InvalidFallsToDefault(t *testing.T) {
+	t.Setenv("HOSTLINK_API_MAX_CONSECUTIVE_TIMEOUTS", "garbage")
+
+	assert.Equal(t, 1, APIMaxConsecutiveTimeouts())
+}

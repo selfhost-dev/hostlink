@@ -56,6 +56,9 @@ func New(cfg *Config) (*taskfetcher, error) {
 	return &taskfetcher{
 		client: &http.Client{
 			Timeout: cfg.Timeout,
+			// The shared control-plane transport drops a dead connection, so a
+			// stalled task poll does not cost every poll its full timeout.
+			Transport: httpclient.SharedControlPlaneTransport(),
 		},
 		signer:          signer,
 		controlPlaneURL: cfg.ControlPlaneURL,

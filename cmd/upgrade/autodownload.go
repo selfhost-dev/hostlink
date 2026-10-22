@@ -157,7 +157,7 @@ func NewAutoDownloader(cfg NewAutoDownloaderConfig) (*AutoDownloader, error) {
 	}
 
 	// Create HTTP client with agent headers
-	client := httpclient.NewClient(30 * time.Second)
+	client := httpclient.NewControlPlaneClient(30 * time.Second)
 
 	// Create update checker
 	checker, err := updatecheck.New(client, controlPlaneURL, agentID, signer)

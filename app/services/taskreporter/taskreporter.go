@@ -8,6 +8,7 @@ import (
 	"hostlink/app/services/agentstate"
 	"hostlink/app/services/requestsigner"
 	"hostlink/config/appconf"
+	"hostlink/internal/httpclient"
 	"hostlink/internal/slowrequest"
 	"net/http"
 	"time"
@@ -95,6 +96,9 @@ func New(cfg *Config) (*taskreporter, error) {
 	return &taskreporter{
 		client: &http.Client{
 			Timeout: cfg.Timeout,
+			// The shared control-plane transport drops a dead connection, so a
+			// stalled task result does not block every later result.
+			Transport: httpclient.SharedControlPlaneTransport(),
 		},
 		signer:          signer,
 		controlPlaneURL: cfg.ControlPlaneURL,

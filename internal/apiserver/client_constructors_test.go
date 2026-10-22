@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"hostlink/internal/httpclient"
 	"hostlink/internal/testutil"
 
 	"github.com/stretchr/testify/assert"
@@ -30,4 +31,15 @@ func TestNewDefaultClient_KeepsDefaultTimeout(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, 30*time.Second, c.httpClient.Timeout)
+}
+
+// Every control-plane client shares one transport, so one dropped connection
+// recovers all of them.
+func TestNewDefaultClient_UsesTheSharedControlPlaneTransport(t *testing.T) {
+	testutil.SetupAgentIdentity(t)
+
+	c, err := NewDefaultClient()
+	require.NoError(t, err)
+
+	assert.Same(t, httpclient.SharedControlPlaneTransport(), c.httpClient.Transport)
 }

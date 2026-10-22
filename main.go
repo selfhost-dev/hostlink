@@ -476,7 +476,7 @@ func startSelfUpdateJob(ctx context.Context) {
 
 	// Create update checker
 	checker, err := updatecheck.New(
-		httpclient.NewClient(30*time.Second),
+		httpclient.NewControlPlaneClient(30*time.Second),
 		appconf.ControlPlaneURL(),
 		agentID,
 		signer,

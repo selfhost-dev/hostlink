@@ -23,6 +23,10 @@ var appconf config.AppConfiger
 // control-plane request is reported as slow.
 const DefaultAPISlowRequestThreshold = 2 * time.Second
 
+// DefaultAPIPingInterval is the default duration a control-plane connection
+// may stay silent before the transport health-checks it with an HTTP/2 ping.
+const DefaultAPIPingInterval = 15 * time.Second
+
 func Port() string {
 	return appconf.GetPort()
 }
@@ -218,6 +222,28 @@ func APIHeartbeatTimeout() time.Duration {
 	return parseDurationClamped("HOSTLINK_API_HEARTBEAT_TIMEOUT", 10*time.Second, time.Second, 25*time.Second)
 }
 
+// APIPingInterval returns how long a control-plane connection may stay silent
+// before the transport health-checks it with an HTTP/2 ping.
+// Controlled by HOSTLINK_API_PING_INTERVAL (default: 15s, clamped to [1s, 5m]).
+func APIPingInterval() time.Duration {
+	return parseDurationClamped("HOSTLINK_API_PING_INTERVAL", DefaultAPIPingInterval, time.Second, 5*time.Minute)
+}
+
+// APIPingTimeout returns how long the transport waits for the answer to a
+// control-plane connection health check before it closes the connection.
+// Controlled by HOSTLINK_API_PING_TIMEOUT (default: 5s, clamped to [1s, 1m]).
+func APIPingTimeout() time.Duration {
+	return parseDurationClamped("HOSTLINK_API_PING_TIMEOUT", 5*time.Second, time.Second, time.Minute)
+}
+
+// APIMaxConsecutiveTimeouts returns how many consecutive control-plane request
+// timeouts are allowed before the connection is dropped and the next request
+// dials a fresh one.
+// Controlled by HOSTLINK_API_MAX_CONSECUTIVE_TIMEOUTS (default: 1, clamped to [1, 10]).
+func APIMaxConsecutiveTimeouts() int {
+	return parseIntClamped("HOSTLINK_API_MAX_CONSECUTIVE_TIMEOUTS", 1, 1, 10)
+}
+
 // TraefikEndpoint returns the Traefik metrics endpoint.
 // Controlled by HOSTLINK_TRAEFIK_ENDPOINT (default: http://localhost:8080/metrics).
 func TraefikEndpoint() string {
@@ -282,6 +308,29 @@ func parseInt64Positive(envVar string, defaultVal int64) int64 {
 	if err != nil || n <= 0 {
 		log.Warnf("invalid %s value %q, using default %d", envVar, v, defaultVal)
 		return defaultVal
+	}
+	return n
+}
+
+// parseIntClamped reads an integer from an environment variable, clamping it
+// to [min, max]. Returns defaultVal if the env var is empty or unparseable.
+func parseIntClamped(envVar string, defaultVal, min, max int) int {
+	v := strings.TrimSpace(os.Getenv(envVar))
+	if v == "" {
+		return defaultVal
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		log.Warnf("invalid %s value %q, using default %d", envVar, v, defaultVal)
+		return defaultVal
+	}
+	if n < min {
+		log.Warnf("%s value %d below minimum %d, clamping to %d", envVar, n, min, min)
+		return min
+	}
+	if n > max {
+		log.Warnf("%s value %d above maximum %d, clamping to %d", envVar, n, max, max)
+		return max
 	}
 	return n
 }
