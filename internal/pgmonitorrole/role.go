@@ -23,9 +23,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/client"
 )
 
 // Execer runs a command in a container with stdin and returns its exit code
@@ -45,7 +44,7 @@ func New(exec Execer) *Ensurer {
 
 // NewDocker uses the Docker API the agent already uses for discovery.
 func NewDocker() (*Ensurer, error) {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := client.New(client.FromEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -134,13 +133,13 @@ func redact(output string) string {
 type dockerExecer struct{ cli *client.Client }
 
 func (d *dockerExecer) Exec(ctx context.Context, containerID, user string, cmd []string, stdin []byte) (int, string, error) {
-	created, err := d.cli.ContainerExecCreate(ctx, containerID, container.ExecOptions{
+	created, err := d.cli.ExecCreate(ctx, containerID, client.ExecCreateOptions{
 		User: user, Cmd: cmd, AttachStdin: true, AttachStdout: true, AttachStderr: true,
 	})
 	if err != nil {
 		return 0, "", err
 	}
-	attached, err := d.cli.ContainerExecAttach(ctx, created.ID, container.ExecAttachOptions{})
+	attached, err := d.cli.ExecAttach(ctx, created.ID, client.ExecAttachOptions{})
 	if err != nil {
 		return 0, "", err
 	}
@@ -167,7 +166,7 @@ func (d *dockerExecer) Exec(ctx context.Context, containerID, user string, cmd [
 		return 0, out.String(), ctx.Err()
 	}
 
-	inspected, err := d.cli.ContainerExecInspect(ctx, created.ID)
+	inspected, err := d.cli.ExecInspect(ctx, created.ID, client.ExecInspectOptions{})
 	if err != nil {
 		return 0, out.String(), err
 	}

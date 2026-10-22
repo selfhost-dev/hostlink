@@ -12,9 +12,8 @@ import (
 	"sync"
 	"time"
 
-	dockerclient "github.com/docker/docker/client"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
+	"github.com/moby/moby/api/types/container"
+	dockerclient "github.com/moby/moby/client"
 
 	domainmetrics "hostlink/domain/metrics"
 	"hostlink/internal/dockerutil"
@@ -32,10 +31,10 @@ type ContainerMetricSet struct {
 // lastStats tracks cumulative network/block I/O counters between collections
 // so we can compute per-second rates via delta.
 type lastStats struct {
-	rxBytes    uint64
-	txBytes    uint64
-	readBytes  uint64
-	writeBytes uint64
+	rxBytes     uint64
+	txBytes     uint64
+	readBytes   uint64
+	writeBytes  uint64
 	collectedAt time.Time
 }
 
@@ -44,8 +43,8 @@ type lastStats struct {
 type dockerStatsJSON struct {
 	CPUStats struct {
 		CPUUsage struct {
-			TotalUsage    uint64   `json:"total_usage"`
-			PercpuUsage   []uint64 `json:"percpu_usage"`
+			TotalUsage  uint64   `json:"total_usage"`
+			PercpuUsage []uint64 `json:"percpu_usage"`
 		} `json:"cpu_usage"`
 		SystemCPUUsage uint64 `json:"system_cpu_usage"`
 		OnlineCPUs     int    `json:"online_cpus"`
@@ -83,10 +82,7 @@ type containerCollector struct {
 }
 
 func New() Collector {
-	cli, err := dockerclient.NewClientWithOpts(
-		dockerclient.FromEnv,
-		dockerclient.WithAPIVersionNegotiation(),
-	)
+	cli, err := dockerclient.New(dockerclient.FromEnv)
 	if err != nil {
 		// Docker unavailable — return a collector that reports nothing
 		return &containerCollector{lastStats: make(map[string]lastStats)}
@@ -122,23 +118,21 @@ func (cc *containerCollector) Collect(ctx context.Context) ([]ContainerMetricSet
 // listCoolifyContainers returns Coolify-managed running containers.
 // Falls back to all running containers if no Coolify containers are found.
 func (cc *containerCollector) listCoolifyContainers(ctx context.Context) ([]container.Summary, error) {
-	f := filters.NewArgs()
-	f.Add("label", "coolify.managed=true")
-	f.Add("status", "running")
+	f := make(dockerclient.Filters).Add("label", "coolify.managed=true").Add("status", "running")
 
-	coolify, err := cc.client.ContainerList(ctx, container.ListOptions{Filters: f})
+	coolify, err := cc.client.ContainerList(ctx, dockerclient.ContainerListOptions{Filters: f})
 	if err != nil {
 		return nil, err
 	}
-	if len(coolify) > 0 {
-		return coolify, nil
+	if len(coolify.Items) > 0 {
+		return coolify.Items, nil
 	}
 
 	// Fallback: all running containers (host without Coolify)
-	all, err := cc.client.ContainerList(ctx, container.ListOptions{
-		Filters: filters.NewArgs(filters.Arg("status", "running")),
+	all, err := cc.client.ContainerList(ctx, dockerclient.ContainerListOptions{
+		Filters: make(dockerclient.Filters).Add("status", "running"),
 	})
-	return all, err
+	return all.Items, err
 }
 
 func (cc *containerCollector) collectOne(
@@ -149,7 +143,9 @@ func (cc *containerCollector) collectOne(
 	labels map[string]string,
 ) (ContainerMetricSet, error) {
 	// Stats (CPU, memory, network, block I/O)
-	statsReader, err := cc.client.ContainerStats(ctx, id, false)
+	// IncludePreviousSample: the CPU percentage below is the delta against
+	// precpu_stats, which a single (one-shot) sample leaves empty.
+	statsReader, err := cc.client.ContainerStats(ctx, id, dockerclient.ContainerStatsOptions{IncludePreviousSample: true})
 	if err != nil {
 		return ContainerMetricSet{}, fmt.Errorf("stats %s: %w", id[:12], err)
 	}
@@ -161,17 +157,18 @@ func (cc *containerCollector) collectOne(
 	}
 
 	// Inspect (restart count, exit code, status, uptime)
-	inspect, err := cc.client.ContainerInspect(ctx, id)
+	inspected, err := cc.client.ContainerInspect(ctx, id, dockerclient.ContainerInspectOptions{})
 	if err != nil {
 		return ContainerMetricSet{}, fmt.Errorf("inspect %s: %w", id[:12], err)
 	}
+	inspect := inspected.Container
 
 	m := domainmetrics.ContainerMetrics{
 		Up:           inspect.State.Running,
 		PIDs:         int(raw.PidsStats.Current),
 		RestartCount: inspect.RestartCount,
 		ExitCode:     inspect.State.ExitCode,
-		Status:       inspect.State.Status,
+		Status:       string(inspect.State.Status),
 	}
 
 	// CPU %
@@ -243,8 +240,8 @@ func (cc *containerCollector) collectOne(
 		}
 	}
 
-	// Resolve a human-readable name for the container. We prioritize Coolify's 
-	// internal name label, followed by Docker Compose service names, before 
+	// Resolve a human-readable name for the container. We prioritize Coolify's
+	// internal name label, followed by Docker Compose service names, before
 	// falling back to the raw Docker container name or truncated ID.
 	name := dockerutil.ResolveContainerName(id, names, labels)
 

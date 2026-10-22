@@ -61,7 +61,7 @@ func setupPostgresContainer(t *testing.T) (*postgres.PostgresContainer, credenti
 	testPasswordPtr := testPassword
 	cred := credential.Credential{
 		Host:     host,
-		Port:     port.Int(),
+		Port:     int(port.Num()),
 		Username: testUser,
 		Password: &testPasswordPtr,
 		Database: testDatabase,
@@ -290,7 +290,7 @@ exec postgres -D /var/lib/postgresql/replica
 	pw := testPassword
 	primaryCred = credential.Credential{
 		Host:     primaryHost,
-		Port:     primaryPort.Int(),
+		Port:     int(primaryPort.Num()),
 		Username: testUser,
 		Password: &pw,
 		Database: testDatabase,
@@ -299,7 +299,7 @@ exec postgres -D /var/lib/postgresql/replica
 	pw2 := testPassword
 	replicaCred = credential.Credential{
 		Host:     replicaHost,
-		Port:     replicaPort.Int(),
+		Port:     int(replicaPort.Num()),
 		Username: testUser,
 		Password: &pw2,
 		Database: testDatabase,

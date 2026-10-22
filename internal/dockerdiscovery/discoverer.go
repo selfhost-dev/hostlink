@@ -3,19 +3,20 @@ package dockerdiscovery
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"sort"
 	"strings"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 
 	"hostlink/internal/dockerutil"
 )
 
 type dockerClient interface {
-	ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error)
-	ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error)
+	ContainerList(ctx context.Context, options client.ContainerListOptions) (client.ContainerListResult, error)
+	ContainerInspect(ctx context.Context, containerID string, options client.ContainerInspectOptions) (client.ContainerInspectResult, error)
 }
 
 type DatabaseType string
@@ -190,10 +191,7 @@ type dockerDiscoverer struct {
 var _ Discoverer = (*dockerDiscoverer)(nil)
 
 func New() Discoverer {
-	cli, err := client.NewClientWithOpts(
-		client.FromEnv,
-		client.WithAPIVersionNegotiation(),
-	)
+	cli, err := client.New(client.FromEnv)
 	if err != nil {
 		return &noopDiscoverer{}
 	}
@@ -211,13 +209,13 @@ func NewWithClient(cli dockerClient) Discoverer {
 // Coolify default), mysql:8.4, mongo:7 ... never matched, and the Docker path
 // found nothing (selfhost-dev/hostlink#263). Docker unreachable: no databases.
 func (d *dockerDiscoverer) DiscoverDatabases(ctx context.Context) ([]DiscoveredDatabase, error) {
-	containers, err := d.client.ContainerList(ctx, container.ListOptions{})
+	listed, err := d.client.ContainerList(ctx, client.ContainerListOptions{})
 	if err != nil {
 		return nil, nil
 	}
 
 	var result []DiscoveredDatabase
-	for _, c := range containers {
+	for _, c := range listed.Items {
 		db, ok := d.discover(ctx, c)
 		if ok {
 			result = append(result, db)
@@ -232,11 +230,11 @@ func (d *dockerDiscoverer) discover(ctx context.Context, c container.Summary) (D
 	if isImageID(ref) {
 		// A tag that moved after a re-pull: Docker lists the image by ID, and
 		// the name the container was created from is in its config.
-		inspected, err := d.client.ContainerInspect(ctx, c.ID)
-		if err != nil || inspected.Config == nil {
+		inspected, err := d.client.ContainerInspect(ctx, c.ID, client.ContainerInspectOptions{})
+		if err != nil || inspected.Container.Config == nil {
 			return DiscoveredDatabase{}, false
 		}
-		info, ref = &inspected, inspected.Config.Image
+		info, ref = &inspected.Container, inspected.Container.Config.Image
 	}
 
 	rule, ok := ruleFor(imageRepository(ref))
@@ -244,11 +242,11 @@ func (d *dockerDiscoverer) discover(ctx context.Context, c container.Summary) (D
 		return DiscoveredDatabase{}, false
 	}
 	if info == nil {
-		inspected, err := d.client.ContainerInspect(ctx, c.ID)
+		inspected, err := d.client.ContainerInspect(ctx, c.ID, client.ContainerInspectOptions{})
 		if err != nil {
 			return DiscoveredDatabase{}, false
 		}
-		info = &inspected
+		info = &inspected.Container
 	}
 	return describe(c, *info, rule.dbType), true
 }
@@ -354,7 +352,7 @@ func describe(c container.Summary, info container.InspectResponse, dbType Databa
 func resolveAddress(info container.InspectResponse, containerPort uint16) (string, uint16) {
 	if info.NetworkSettings != nil {
 		for cp, bindings := range info.NetworkSettings.Ports {
-			if !strings.HasPrefix(string(cp), fmt.Sprintf("%d/", containerPort)) || len(bindings) == 0 {
+			if cp.Num() != containerPort || len(bindings) == 0 {
 				continue
 			}
 			if p := bindings[0].HostPort; p != "" {
@@ -370,7 +368,7 @@ func resolveAddress(info container.InspectResponse, containerPort uint16) (strin
 		}
 	}
 
-	if info.ContainerJSONBase != nil && info.HostConfig != nil && info.HostConfig.NetworkMode.IsHost() {
+	if info.HostConfig != nil && info.HostConfig.NetworkMode.IsHost() {
 		return "localhost", containerPort
 	}
 	return "", containerPort
@@ -378,13 +376,11 @@ func resolveAddress(info container.InspectResponse, containerPort uint16) (strin
 
 // publishedHost: a port bound to every interface is reached on localhost; one
 // bound to a specific address only there.
-func publishedHost(hostIP string) string {
-	switch hostIP {
-	case "", "0.0.0.0", "::":
+func publishedHost(hostIP netip.Addr) string {
+	if !hostIP.IsValid() || hostIP.IsUnspecified() {
 		return "localhost"
-	default:
-		return hostIP
 	}
+	return hostIP.String()
 }
 
 const preferredNetwork = "coolify"
@@ -401,13 +397,13 @@ func networkIP(networks map[string]*network.EndpointSettings) string {
 		names = append([]string{preferredNetwork}, names...)
 	}
 
-	for _, pick := range []func(*network.EndpointSettings) string{
-		func(ep *network.EndpointSettings) string { return ep.IPAddress },
-		func(ep *network.EndpointSettings) string { return ep.GlobalIPv6Address },
+	for _, pick := range []func(*network.EndpointSettings) netip.Addr{
+		func(ep *network.EndpointSettings) netip.Addr { return ep.IPAddress },
+		func(ep *network.EndpointSettings) netip.Addr { return ep.GlobalIPv6Address },
 	} {
 		for _, name := range names {
-			if ep := networks[name]; ep != nil && pick(ep) != "" {
-				return pick(ep)
+			if ep := networks[name]; ep != nil && pick(ep).IsValid() {
+				return pick(ep).String()
 			}
 		}
 	}
