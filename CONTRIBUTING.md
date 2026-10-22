@@ -97,6 +97,11 @@ Key variables for development:
 - `SH_APP_PORT` - Server port (default: 8080)
 - `SH_DB_URL` - Database URL (default: `file:hostlink-dev.db`)
 
+## Releases
+
+Release and release-candidate tags follow [docs/releases.md](docs/releases.md).
+Do not create, move, or force-push a published tag.
+
 ## Working on hlctl
 
 The `hlctl` CLI tool is located in `cmd/hlctl/`.
