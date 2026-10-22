@@ -479,3 +479,28 @@ func TestRegister_ContextCancellation(t *testing.T) {
 
 	// Should complete without hanging
 }
+
+// A Coolify PostgreSQL credential (it names its container) is collected per
+// container by the Docker path. It must not also drive the single-database
+// path, which dials localhost and reported a second, false up:false.
+func TestRegister_CoolifyContainerPostgresIsNotTheSingleDatabaseCredential(t *testing.T) {
+	pusher := &mockPusher{}
+	authGetter := &mockAuthGetter{
+		creds: []credential.Credential{
+			{Dialect: "postgresql", Host: "localhost", ContainerName: "dbuuid1"},
+			{Dialect: "redis", Host: "localhost"},
+		},
+	}
+
+	job := NewJobWithConf(MetricsJobConfig{Trigger: syncTrigger, CredFetchInterval: 2})
+	cancel := job.Register(context.Background(), pusher, authGetter)
+	defer cancel()
+	job.Shutdown()
+
+	if len(pusher.pushCalls) != 1 {
+		t.Fatalf("expected 1 Push call, got %d", len(pusher.pushCalls))
+	}
+	if pusher.pushCalls[0].Dialect != "" {
+		t.Errorf("expected no single-database credential, got %q", pusher.pushCalls[0].Dialect)
+	}
+}

@@ -75,7 +75,13 @@ func (mj *MetricsJob) Register(ctx context.Context, mp metrics.Pusher, mcred met
 							}
 						}
 					}
-					if next.Dialect != "" {
+					switch {
+					case next.Dialect == "postgresql" && next.ContainerName != "":
+						// A Coolify database: collected per container by the
+						// Docker path, at the container's own address. Here it
+						// dialled localhost and sent a second, false up:false.
+						lastDbCred = credential.Credential{}
+					case next.Dialect != "":
 						lastDbCred = next
 					}
 				}
