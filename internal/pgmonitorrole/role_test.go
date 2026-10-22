@@ -31,6 +31,8 @@ func TestEnsureSQL_SendsOnlyTheVerifierAndAMinimalRole(t *testing.T) {
 	assert.Contains(t, sql, "PASSWORD 'SCRAM-SHA-256$4096:c2FsdA==$a2V5:a2V5'")
 	assert.Contains(t, sql, "GRANT pg_monitor TO selfhost_monitor")
 	assert.Contains(t, sql, `\gexec`, "created only when missing, without a DO block")
+	assert.Contains(t, sql, "SET lock_timeout = '5s'", "a role locked by an open transaction fails fast")
+	assert.Contains(t, sql, "GRANT CONNECT ON DATABASE %I TO selfhost_monitor", "survives REVOKE CONNECT ... FROM PUBLIC")
 }
 
 type fakeExec struct {

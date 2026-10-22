@@ -62,27 +62,15 @@ func (mj *MetricsJob) Register(ctx context.Context, mp metrics.Pusher, mcred met
 				}
 
 				if len(creds) > 0 {
-					var next credential.Credential
-					for _, cred := range creds {
-						if cred.Dialect == "postgresql" {
-							next = cred
-							break
-						}
-						if next.Dialect == "" {
-							switch cred.Dialect {
-							case "mysql", "mariadb", "mongodb", "redis", "clickhouse", "opensearch", "kafka":
-								next = cred
-							}
-						}
-					}
+					next, coolifyPostgres := singleDatabaseCred(creds)
 					switch {
-					case next.Dialect == "postgresql" && next.ContainerName != "":
-						// A Coolify database: collected per container by the
-						// Docker path, at the container's own address. Here it
-						// dialled localhost and sent a second, false up:false.
-						lastDbCred = credential.Credential{}
 					case next.Dialect != "":
 						lastDbCred = next
+					case coolifyPostgres:
+						// Only Coolify PostgreSQL: collected per container by
+						// the Docker path, matched by uuid. This path dialled
+						// localhost and sent a second, false up:false.
+						lastDbCred = credential.Credential{}
 					}
 				}
 			}
@@ -98,4 +86,32 @@ func (mj *MetricsJob) Shutdown() {
 		mj.cancel()
 	}
 	mj.wg.Wait()
+}
+
+// singleDatabaseCred picks the credential for the single-database path: the
+// first PostgreSQL one that is not a Coolify database (a managed instance),
+// else the first other supported engine. When the list holds a Coolify
+// PostgreSQL database, that engine fallback is not taken, as before, when the
+// Coolify entry itself was picked: wherever it sits in the list.
+func singleDatabaseCred(creds []credential.Credential) (credential.Credential, bool) {
+	var other credential.Credential
+	coolifyPostgres := false
+	for _, cred := range creds {
+		switch cred.Dialect {
+		case "postgresql":
+			if cred.IsCoolify() {
+				coolifyPostgres = true
+				continue
+			}
+			return cred, coolifyPostgres
+		case "mysql", "mariadb", "mongodb", "redis", "clickhouse", "opensearch", "kafka":
+			if other.Dialect == "" {
+				other = cred
+			}
+		}
+	}
+	if coolifyPostgres {
+		return credential.Credential{}, true
+	}
+	return other, false
 }

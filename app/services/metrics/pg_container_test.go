@@ -305,13 +305,13 @@ func TestGetCreds_DecryptsTheMonitoringPasswordAndKeepsContainerCreds(t *testing
 	assert.Equal(t, "selfhost_monitor", got.MonitorUsername)
 }
 
-// A monitoring password that cannot be decrypted never fails the fetch: that
-// container stays on its env credentials.
-func TestGetCreds_AnUndecryptableMonitoringPasswordIsSkipped(t *testing.T) {
+// A monitoring password that cannot be decrypted never fails the fetch: the
+// container is still the platform's, on the customer login it supplies.
+func TestGetCreds_AnUndecryptableMonitoringPasswordFallsBackToThePlatformLogin(t *testing.T) {
 	mp, mocks := setupTestMetricsPusher()
 	mocks.agentstate.On("GetAgentID").Return("agent-123")
 	mocks.apiserver.On("GetMetricsCreds", mock.Anything, "agent-123").Return([]credential.Credential{
-		{Dialect: "postgresql", PasswdEnc: "enc-customer", ContainerName: "dbuuid1", MonitorUsername: "selfhost_monitor", MonitorPasswdEnc: "garbage"},
+		{Dialect: "postgresql", Source: "coolify", PasswdEnc: "enc-customer", ContainerName: "dbuuid1", MonitorUsername: "selfhost_monitor", MonitorPasswdEnc: "garbage"},
 	}, nil)
 	mocks.crypto.On("LoadPrivateKey", "/test/key/path").Return(testPrivateKey, nil)
 	mocks.crypto.On("DecryptWithPrivateKey", "enc-customer", testPrivateKey).Return("customer-pw", nil)
@@ -321,6 +321,27 @@ func TestGetCreds_AnUndecryptableMonitoringPasswordIsSkipped(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Nil(t, creds[0].MonitorPassword)
-	_, ok := mp.containerCred("dbuuid1")
-	assert.False(t, ok)
+	got, ok := mp.containerCred("dbuuid1")
+	require.True(t, ok)
+	assert.Equal(t, "customer-pw", *got.Password)
+}
+
+// One Coolify database's undecryptable credential never stops the others,
+// nor the fetch.
+func TestGetCreds_AnUndecryptableCoolifyCredentialIsSkippedNotFatal(t *testing.T) {
+	mp, mocks := setupTestMetricsPusher()
+	mocks.agentstate.On("GetAgentID").Return("agent-123")
+	mocks.apiserver.On("GetMetricsCreds", mock.Anything, "agent-123").Return([]credential.Credential{
+		{ID: "db1", Dialect: "postgresql", Source: "coolify", ContainerName: "dbuuid1", PasswdEnc: "garbage"},
+		{ID: "db2", Dialect: "postgresql", Source: "coolify", ContainerName: "dbuuid2", PasswdEnc: "enc-2"},
+	}, nil)
+	mocks.crypto.On("LoadPrivateKey", "/test/key/path").Return(testPrivateKey, nil)
+	mocks.crypto.On("DecryptWithPrivateKey", "garbage", testPrivateKey).Return("", errors.New("bad ciphertext"))
+	mocks.crypto.On("DecryptWithPrivateKey", "enc-2", testPrivateKey).Return("pw-2", nil)
+
+	creds, err := mp.GetCreds()
+
+	require.NoError(t, err)
+	assert.Nil(t, creds[0].Password)
+	assert.Equal(t, "pw-2", *creds[1].Password)
 }

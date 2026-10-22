@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 	"crypto/rsa"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -21,12 +22,35 @@ type pgContainerCollector interface {
 }
 
 type pgContainerState struct {
-	collector  pgContainerCollector
-	lastKind   string
-	lastLog    time.Time
-	missed     int // consecutive pushes the container was not discovered in
-	lastRepair time.Time
+	collector    pgContainerCollector
+	lastKind     string
+	lastLog      time.Time
+	missed       int // consecutive pushes the container was not discovered in
+	lastRepair   time.Time
+	repairedWith string // the monitoring password the last repair set
 }
+
+// repairDue: at most every pgRepairEvery, unless the platform's monitoring
+// password changed since the last repair (another writer replaced it), which
+// is repaired at once instead of leaving monitoring blind for the window.
+func (s *pgContainerState) repairDue(password string) bool {
+	if password != s.repairedWith || time.Since(s.lastRepair) >= pgRepairEvery {
+		s.lastRepair, s.repairedWith = time.Now(), password
+		return true
+	}
+	return false
+}
+
+// needsRepair: the role's login was refused, for its password (auth_failed)
+// or for a missing CONNECT privilege (permission_denied at connect, e.g. after
+// REVOKE CONNECT ... FROM PUBLIC).
+func needsRepair(f *pgmetrics.Failure) bool {
+	return f != nil && f.Stage == "connect" && (f.Kind == "auth_failed" || f.Kind == "permission_denied")
+}
+
+// pgRepairTimeout bounds a repair: a role locked by a customer's open
+// transaction must never stall the metrics loop.
+const pgRepairTimeout = 30 * time.Second
 
 // roleEnsurer creates or repairs the monitoring role inside a container
 // (pgmonitorrole.Ensurer).
@@ -65,23 +89,39 @@ func (mp *metricspusher) collectDockerPGMetrics(ctx context.Context, d dockerdis
 		dockerCred.Password = &d.Password
 	}
 
-	// A database the platform names is monitored as the agent's own role,
-	// never as the customer, whose password can change.
-	platform, monitored := mp.containerCred(d.ContainerName)
-	if monitored {
+	// A database the platform names (matched by its uuid, wherever it sits in
+	// the credential list) is logged in to with what the platform supplies,
+	// never the container's env, which goes stale once the password changes:
+	// the agent's own role when it has that login, else the platform's record
+	// of the customer's password. The container's own address and port are
+	// used either way; the credential's localhost/public port are not.
+	platform, named := mp.containerCred(d.ContainerName)
+	monitored := named && platform.MonitorUsername != "" && platform.MonitorPassword != nil
+	switch {
+	case monitored:
 		dockerCred.Username = platform.MonitorUsername
 		dockerCred.Password = platform.MonitorPassword
-		if platform.Database != "" {
-			dockerCred.Database = platform.Database
-		}
+	case named && platform.Password != nil:
+		dockerCred.Username = platform.Username
+		dockerCred.Password = platform.Password
+	}
+	if named && platform.Database != "" {
+		dockerCred.Database = platform.Database
 	}
 
 	state := mp.pgContainer(d.ContainerID)
-	dbMetrics, failure := state.collector.Collect(dockerCred)
-	if monitored && failure != nil && failure.Kind == "auth_failed" && time.Since(state.lastRepair) >= pgRepairEvery {
-		state.lastRepair = time.Now()
-		if mp.repairMonitorRole(ctx, d, platform) {
-			dbMetrics, failure = state.collector.Collect(dockerCred)
+	var dbMetrics domainmetrics.PostgreSQLContainerMetrics
+	var failure *pgmetrics.Failure
+	if named && dockerCred.Password == nil {
+		// A platform database with no usable password anywhere (undecryptable,
+		// and none in the env): say so, never a login that reads as zeros.
+		dbMetrics, failure = pgmetrics.Unavailable("missing_credentials", errors.New("no usable credential for the container"))
+	} else {
+		dbMetrics, failure = state.collector.Collect(dockerCred)
+		if monitored && needsRepair(failure) && state.repairDue(*platform.MonitorPassword) {
+			if mp.repairMonitorRole(ctx, d, platform) {
+				dbMetrics, failure = state.collector.Collect(dockerCred)
+			}
 		}
 	}
 	mp.logPGContainer(state, d, dbMetrics, failure)
@@ -197,6 +237,8 @@ func (mp *metricspusher) repairMonitorRole(ctx context.Context, d dockerdiscover
 		database = d.Database
 	}
 
+	ctx, cancel := context.WithTimeout(ctx, pgRepairTimeout)
+	defer cancel()
 	if err := mp.roleEnsurer.Ensure(ctx, d.ContainerID, superuser, database, platform.MonitorUsername, *platform.MonitorPassword); err != nil {
 		log.Warnj(log.JSON{
 			"event": "pg_monitor_role_failed", "container": d.ContainerName, "database": database,
@@ -209,11 +251,11 @@ func (mp *metricspusher) repairMonitorRole(ctx context.Context, d dockerdiscover
 }
 
 // setContainerCreds keeps the platform's credentials for Coolify PostgreSQL
-// containers (those naming a container and carrying a monitoring login).
+// containers, by container name (the database uuid).
 func (mp *metricspusher) setContainerCreds(creds []credential.Credential) {
 	byName := map[string]credential.Credential{}
 	for _, c := range creds {
-		if c.Dialect == "postgresql" && c.ContainerName != "" && c.MonitorUsername != "" && c.MonitorPassword != nil {
+		if c.Dialect == "postgresql" && c.ContainerName != "" {
 			byName[c.ContainerName] = c
 		}
 	}
@@ -235,7 +277,8 @@ func (mp *metricspusher) containerCred(containerName string) (credential.Credent
 }
 
 // decryptMonitorPasswords: a monitoring password that cannot be decrypted
-// leaves that container on its env credentials; it never fails the fetch.
+// leaves that container on the platform's customer login; it never fails the
+// fetch.
 func (mp *metricspusher) decryptMonitorPasswords(creds []credential.Credential, privateKey *rsa.PrivateKey) {
 	for i := range creds {
 		if creds[i].MonitorPasswdEnc == "" {

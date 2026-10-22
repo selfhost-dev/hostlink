@@ -210,6 +210,14 @@ func (c *ContainerCollector) Collect(cred credential.Credential) (m metrics.Post
 	return m, &failures[0]
 }
 
+// Unavailable is the payload for a container the agent did not try to log in
+// to (kind: missing_credentials, ...): unknown, failed, every metric null.
+func Unavailable(kind string, err error) (metrics.PostgreSQLContainerMetrics, *Failure) {
+	return metrics.PostgreSQLContainerMetrics{
+		Health: metrics.HealthUnknown, CollectionStatus: metrics.CollectionFailed, CollectionError: kind,
+	}, &Failure{Stage: "connect", Kind: kind, Err: err}
+}
+
 // rates turns two consecutive samples of PostgreSQL's cumulative counters
 // into per-second rates. No rate (nil) for the first sample, across a reset
 // (stats_reset moved or a counter went backwards), or across a gap longer

@@ -175,6 +175,13 @@ func (mp *metricspusher) GetCreds() ([]credential.Credential, error) {
 
 		decPasswd, err := mp.crypto.DecryptWithPrivateKey(encPasswd, privateKey)
 		if err != nil {
+			// One Coolify database's credential must not stop every metric:
+			// that container keeps its other logins, or reports
+			// missing_credentials (see collectDockerPGMetrics).
+			if creds[i].IsCoolify() {
+				log.Warnj(log.JSON{"event": "credential_undecryptable", "credential": creds[i].ID, "error": err.Error()})
+				continue
+			}
 			return nil, fmt.Errorf("failed to decrypt password for credential %d: %w", i, err)
 		}
 		creds[i].Password = &decPasswd
