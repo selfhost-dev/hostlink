@@ -24,6 +24,7 @@ const (
 	DatabaseTypePostgreSQL DatabaseType = "postgresql"
 	DatabaseTypeMySQL      DatabaseType = "mysql"
 	DatabaseTypeMongoDB    DatabaseType = "mongodb"
+	DatabaseTypeRedis      DatabaseType = "redis"
 )
 
 type DiscoveredDatabase struct {
@@ -70,6 +71,13 @@ var discoveryRules = []imageRule{
 		dbType:       DatabaseTypeMongoDB,
 		images:       []string{"mongo"},
 		excludeNames: nil,
+	},
+	{
+		// selfhost creates a Coolify Redis on redis:<major> (RedisStrategy).
+		// coolify-redis is Coolify's own queue, never a customer database.
+		dbType:       DatabaseTypeRedis,
+		images:       []string{"redis", "bitnami/redis"},
+		excludeNames: []string{"coolify-redis"},
 	},
 }
 
@@ -142,22 +150,37 @@ func extractMongoEnv(envs []string) (string, string, string) {
 	return username, password, database
 }
 
+// extractRedisEnv: Redis has no user (requirepass); Coolify and bitnami pass
+// the password as REDIS_PASSWORD.
+func extractRedisEnv(envs []string) (string, string, string) {
+	password := ""
+	for _, env := range envs {
+		if k, v, ok := strings.Cut(env, "="); ok && k == "REDIS_PASSWORD" {
+			password = v
+		}
+	}
+	return "", password, ""
+}
+
 var envExtractors = map[DatabaseType]envExtractor{
 	DatabaseTypePostgreSQL: extractPostgresEnv,
 	DatabaseTypeMySQL:      extractMySQLEnv,
 	DatabaseTypeMongoDB:    extractMongoEnv,
+	DatabaseTypeRedis:      extractRedisEnv,
 }
 
 var defaultDBName = map[DatabaseType]string{
 	DatabaseTypePostgreSQL: "postgres",
 	DatabaseTypeMySQL:      "",
 	DatabaseTypeMongoDB:    "",
+	DatabaseTypeRedis:      "",
 }
 
 var defaultPorts = map[DatabaseType]uint16{
 	DatabaseTypePostgreSQL: 5432,
 	DatabaseTypeMySQL:      3306,
 	DatabaseTypeMongoDB:    27017,
+	DatabaseTypeRedis:      6379,
 }
 
 type dockerDiscoverer struct {

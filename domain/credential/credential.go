@@ -21,14 +21,20 @@ type Credential struct {
 	// PostgreSQL, carries the agent's own monitoring login (selfhost_monitor),
 	// so the agent never monitors as the customer, whose password can change.
 	// Empty for every other credential.
-	Source           string     `json:"source,omitempty"`
-	ContainerName    string     `json:"container_name,omitempty"`
-	MonitorUsername  string     `json:"monitor_username,omitempty"`
-	MonitorPasswdEnc string     `json:"monitor_passwd_enc,omitempty"`
-	MonitorPassword  *string    `json:"-"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
-	DeletedAt        *time.Time `json:"deleted_at,omitempty"`
+	Source           string  `json:"source,omitempty"`
+	ContainerName    string  `json:"container_name,omitempty"`
+	MonitorUsername  string  `json:"monitor_username,omitempty"`
+	MonitorPasswdEnc string  `json:"monitor_passwd_enc,omitempty"`
+	MonitorPassword  *string `json:"-"`
+	// The database's admin (MySQL root, MongoDB root), which the agent
+	// creates the monitoring user with: these images have no passwordless
+	// local socket. Empty when the platform sends none.
+	AdminUsername  string     `json:"admin_username,omitempty"`
+	AdminPasswdEnc string     `json:"admin_passwd_enc,omitempty"`
+	AdminPassword  *string    `json:"-"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	DeletedAt      *time.Time `json:"deleted_at,omitempty"`
 }
 
 // IsCoolify: a Coolify database, collected per container by the Docker path,
