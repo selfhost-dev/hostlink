@@ -111,12 +111,12 @@ do not create releases.
 
 The installer is the deployment mechanism; there is no separate updater command
 for a pinned RC. It stops the existing service, verifies the tarball, replaces
-`/usr/bin/hostlink`, rewrites `/etc/hostlink/hostlink.env`, and starts the
+`/usr/bin/hostlink`, updates `/etc/hostlink/hostlink.env`, and starts the
 service again.
 
 Run this on the server with root access. Reuse the control-plane URL and token
-already configured for that server: the installer overwrites
-`/etc/hostlink/hostlink.env` with the values passed here.
+already configured for that server: the installer replaces those three keys
+with the values passed here. Other keys and comments in the file are preserved.
 
 1. Choose the tag and release URL.
 
@@ -153,7 +153,10 @@ already configured for that server: the installer overwrites
    ```
 
    `--version` bypasses `/releases/latest`. The installer picks the checksum
-   for the server's architecture; passing both is safe.
+   for the server's architecture; passing both is safe. Reinstalling replaces
+   only `SH_CONTROL_PLANE_URL`, `HOSTLINK_TOKEN_ID`, and `HOSTLINK_TOKEN_KEY`;
+   rollout flags such as `HOSTLINK_WS_*` and other operator settings stay in
+   place.
 
 4. Verify the binary and service.
 
