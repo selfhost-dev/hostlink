@@ -396,14 +396,31 @@ create_directories() {
 }
 
 create_env_file() {
+  local env_file="${1:-/etc/hostlink/hostlink.env}"
+  local tmp_file
   echo "Creating environment configuration..."
-  cat > /etc/hostlink/hostlink.env <<EOF
+
+  # Keep operator-managed keys (rollout flags, tuning, comments) across
+  # reinstalls. Only the three keys this installer owns are replaced.
+  if ! tmp_file=$(mktemp); then
+    echo "ERROR: Failed to create a temporary file." >&2
+    exit $EXIT_GENERAL
+  fi
+  if [ -f "$env_file" ]; then
+    grep -vE '^[[:space:]]*(SH_CONTROL_PLANE_URL|HOSTLINK_TOKEN_ID|HOSTLINK_TOKEN_KEY)[[:space:]]*=' \
+      "$env_file" > "$tmp_file" || true
+  fi
+
+  cat >> "$tmp_file" <<EOF
 SH_CONTROL_PLANE_URL=$SERVER_URL
 HOSTLINK_TOKEN_ID=$TOKEN_ID
 HOSTLINK_TOKEN_KEY=$TOKEN_KEY
 EOF
-  sudo chmod 600 /etc/hostlink/hostlink.env
-  echo "Environment file created at /etc/hostlink/hostlink.env"
+
+  cat "$tmp_file" > "$env_file"
+  rm -f "$tmp_file"
+  sudo chmod 600 "$env_file"
+  echo "Environment file created at $env_file"
 }
 
 install_service() {

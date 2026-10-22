@@ -81,5 +81,46 @@ assert_eq "$(sort -u "$TEMP_DIR/dl_urls")" "https://mirror.example/hostlink/v1.2
 grep -q "from https://mirror.example/hostlink/v1.2.3/hostlink_Linux_arm64.tar.gz" "$TEMP_DIR/dl.out" && pass || fail "download_tar must log its source url"
 unset -f curl
 
+# ── create_env_file: update managed keys, preserve operator keys ─────────────
+# A reinstall must not silently drop rollout flags or other operator settings.
+sudo() { "$@"; }   # create_env_file calls sudo chmod; tests may not run as root
+ENV_FILE="$TEMP_DIR/hostlink.env"
+cat > "$ENV_FILE" <<'EOF'
+SH_CONTROL_PLANE_URL=https://old.example
+HOSTLINK_TOKEN_ID=old-id
+HOSTLINK_TOKEN_ID=old-id-duplicate
+HOSTLINK_TOKEN_KEY=old-key
+HOSTLINK_WS_ENABLED=true
+HOSTLINK_WS_RESULTS_ENABLED=true
+HOSTLINK_WS_DELIVERY_ENABLED=true
+HOSTLINK_SELF_UPDATE_ENABLED=false
+# operator comment
+EOF
+SERVER_URL="https://new.example"
+TOKEN_ID="new-id"
+TOKEN_KEY="new-key"
+create_env_file "$ENV_FILE" >/dev/null
+for key in SH_CONTROL_PLANE_URL HOSTLINK_TOKEN_ID HOSTLINK_TOKEN_KEY; do
+  assert_eq "$(grep -c "^$key=" "$ENV_FILE")" "1" "$key must appear exactly once"
+done
+assert_eq "$(grep '^SH_CONTROL_PLANE_URL=' "$ENV_FILE")" "SH_CONTROL_PLANE_URL=https://new.example" "control plane URL updated"
+assert_eq "$(grep '^HOSTLINK_TOKEN_ID=' "$ENV_FILE")" "HOSTLINK_TOKEN_ID=new-id" "token id updated"
+assert_eq "$(grep '^HOSTLINK_TOKEN_KEY=' "$ENV_FILE")" "HOSTLINK_TOKEN_KEY=new-key" "token key updated"
+for key in HOSTLINK_WS_ENABLED HOSTLINK_WS_RESULTS_ENABLED HOSTLINK_WS_DELIVERY_ENABLED HOSTLINK_SELF_UPDATE_ENABLED; do
+  assert_eq "$(grep -c "^$key=" "$ENV_FILE")" "1" "$key must be preserved"
+done
+assert_eq "$(grep '^HOSTLINK_WS_ENABLED=' "$ENV_FILE")" "HOSTLINK_WS_ENABLED=true" "websocket rollout flag value preserved"
+assert_eq "$(grep '^HOSTLINK_WS_RESULTS_ENABLED=' "$ENV_FILE")" "HOSTLINK_WS_RESULTS_ENABLED=true" "websocket results flag value preserved"
+assert_eq "$(grep '^HOSTLINK_WS_DELIVERY_ENABLED=' "$ENV_FILE")" "HOSTLINK_WS_DELIVERY_ENABLED=true" "websocket delivery flag value preserved"
+grep -q '^# operator comment$' "$ENV_FILE" && pass || fail "operator comments must be preserved"
+env_mode=$(stat -c %a "$ENV_FILE" 2>/dev/null || stat -f %Lp "$ENV_FILE")
+assert_eq "$env_mode" "600" "environment file must be mode 600"
+
+FRESH_ENV="$TEMP_DIR/fresh/hostlink.env"
+mkdir -p "$(dirname "$FRESH_ENV")"
+create_env_file "$FRESH_ENV" >/dev/null
+assert_eq "$(cat "$FRESH_ENV")" "$(printf 'SH_CONTROL_PLANE_URL=https://new.example\nHOSTLINK_TOKEN_ID=new-id\nHOSTLINK_TOKEN_KEY=new-key')" "fresh env file contains managed keys"
+unset -f sudo
+
 echo "install_test.sh: $PASSES passed, $FAILS failed"
 [ "$FAILS" -eq 0 ]

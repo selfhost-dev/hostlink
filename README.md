@@ -73,6 +73,9 @@ After modifying the configuration, restart the service:
 sudo systemctl restart hostlink
 ```
 
+Reinstalling hostlink replaces only `SH_CONTROL_PLANE_URL`, `HOSTLINK_TOKEN_ID`,
+and `HOSTLINK_TOKEN_KEY`; other keys in this file are preserved.
+
 ## Authentication Architecture
 
 Hostlink uses **one-way authentication** for secure agent-to-server communication:
