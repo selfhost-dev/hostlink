@@ -37,7 +37,7 @@ instead of reading a half-done install as success:
 
 | Exit | Meaning |
 |---|---|
-| 0 | Installed, and the `hostlink` service is running (verified: active within 20s and still active 3s later) |
+| 0 | Installed, and the `hostlink` service is running (verified: active within 20s and still active 3s later), or started unverified (below) |
 | 1 | General error (not root, unknown option) |
 | 2 | Missing dependency (curl, or a gzip check tool: xxd, od or file) |
 | 3 | The release version could not be determined (GitHub API, after retries) |
@@ -47,8 +47,14 @@ instead of reading a half-done install as success:
 | 7 | The service did not come up, or stopped right after starting |
 
 Every run writes `/var/lib/hostlink/install-status` (key=value lines: `status`
-`running`/`installed`/`failed`, `stage`, `version`, `exit_code`, `updated_at`)
-for recovery tooling. It never holds the token.
+`running`/`installed`/`unverified`/`failed`, `stage`, `version`, `exit_code`,
+`updated_at`) for recovery tooling. It never holds the token.
+
+The agent listens on `SH_APP_PORT` (default 8080). `--app-port PORT` writes it
+before the first start. When the agent's port is already taken before start
+(a Coolify server installed without `--app-port`: its proxy holds 8080, and
+the caller sets the port and restarts the agent afterwards), the installer
+starts the service but skips the check, and records `status=unverified`.
 
 ### Install a pinned version, from a mirror, with checksums
 
