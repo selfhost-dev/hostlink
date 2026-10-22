@@ -62,6 +62,10 @@ type metricspusher struct {
 	// keyed by container id: each owns that database's rate baseline.
 	pgContainers   map[string]*pgContainerState
 	newPGContainer func(containerID string) pgContainerCollector
+	// The platform's credentials for Coolify PostgreSQL containers, by
+	// container name, refreshed with every credential fetch.
+	containerCreds map[string]credential.Credential
+	roleEnsurer    roleEnsurer
 }
 
 func NewWithConf() (*metricspusher, error) {
@@ -175,6 +179,8 @@ func (mp *metricspusher) GetCreds() ([]credential.Credential, error) {
 		}
 		creds[i].Password = &decPasswd
 	}
+	mp.decryptMonitorPasswords(creds, privateKey)
+	mp.setContainerCreds(creds)
 
 	return creds, nil
 }

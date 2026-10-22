@@ -2,7 +2,9 @@ package metrics
 
 import (
 	"context"
+	"crypto/rsa"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/labstack/gommon/log"
@@ -11,6 +13,7 @@ import (
 	domainmetrics "hostlink/domain/metrics"
 	"hostlink/internal/dockerdiscovery"
 	"hostlink/internal/pgmetrics"
+	"hostlink/internal/pgmonitorrole"
 )
 
 type pgContainerCollector interface {
@@ -18,11 +21,22 @@ type pgContainerCollector interface {
 }
 
 type pgContainerState struct {
-	collector pgContainerCollector
-	lastKind  string
-	lastLog   time.Time
-	missed    int // consecutive pushes the container was not discovered in
+	collector  pgContainerCollector
+	lastKind   string
+	lastLog    time.Time
+	missed     int // consecutive pushes the container was not discovered in
+	lastRepair time.Time
 }
+
+// roleEnsurer creates or repairs the monitoring role inside a container
+// (pgmonitorrole.Ensurer).
+type roleEnsurer interface {
+	Ensure(ctx context.Context, containerID, superuser, database, role, password string) error
+}
+
+// pgRepairEvery: a failed monitoring login triggers a role repair at most this
+// often per container, so a repair that cannot succeed is not run every push.
+const pgRepairEvery = 10 * time.Minute
 
 // pgPruneAfter: a container missing from this many consecutive discoveries
 // is gone. Discovery skips a container whose list or inspect call failed, so
@@ -51,8 +65,25 @@ func (mp *metricspusher) collectDockerPGMetrics(ctx context.Context, d dockerdis
 		dockerCred.Password = &d.Password
 	}
 
+	// A database the platform names is monitored as the agent's own role,
+	// never as the customer, whose password can change.
+	platform, monitored := mp.containerCred(d.ContainerName)
+	if monitored {
+		dockerCred.Username = platform.MonitorUsername
+		dockerCred.Password = platform.MonitorPassword
+		if platform.Database != "" {
+			dockerCred.Database = platform.Database
+		}
+	}
+
 	state := mp.pgContainer(d.ContainerID)
 	dbMetrics, failure := state.collector.Collect(dockerCred)
+	if monitored && failure != nil && failure.Kind == "auth_failed" && time.Since(state.lastRepair) >= pgRepairEvery {
+		state.lastRepair = time.Now()
+		if mp.repairMonitorRole(ctx, d, platform) {
+			dbMetrics, failure = state.collector.Collect(dockerCred)
+		}
+	}
 	mp.logPGContainer(state, d, dbMetrics, failure)
 
 	*metricSets = append(*metricSets, domainmetrics.MetricSet{
@@ -143,4 +174,78 @@ func hostOrLocalhost(host string) string {
 		return "localhost"
 	}
 	return host
+}
+
+// repairMonitorRole creates the monitoring role, or restores it (a database
+// provisioned before it existed, or a customer who changed it), through the
+// container's local socket as the container's bootstrap superuser.
+func (mp *metricspusher) repairMonitorRole(ctx context.Context, d dockerdiscovery.DiscoveredDatabase, platform credential.Credential) bool {
+	if mp.roleEnsurer == nil {
+		ensurer, err := pgmonitorrole.NewDocker()
+		if err != nil {
+			log.Warnj(log.JSON{"event": "pg_monitor_role_failed", "container": d.ContainerName, "error": err.Error()})
+			return false
+		}
+		mp.roleEnsurer = ensurer
+	}
+	superuser := d.Username
+	if superuser == "" {
+		superuser = "postgres"
+	}
+	database := platform.Database
+	if database == "" {
+		database = d.Database
+	}
+
+	if err := mp.roleEnsurer.Ensure(ctx, d.ContainerID, superuser, database, platform.MonitorUsername, *platform.MonitorPassword); err != nil {
+		log.Warnj(log.JSON{
+			"event": "pg_monitor_role_failed", "container": d.ContainerName, "database": database,
+			"role": platform.MonitorUsername, "error": pgmetrics.SanitizeError(err),
+		})
+		return false
+	}
+	log.Infoj(log.JSON{"event": "pg_monitor_role_ensured", "container": d.ContainerName, "database": database, "role": platform.MonitorUsername})
+	return true
+}
+
+// setContainerCreds keeps the platform's credentials for Coolify PostgreSQL
+// containers (those naming a container and carrying a monitoring login).
+func (mp *metricspusher) setContainerCreds(creds []credential.Credential) {
+	byName := map[string]credential.Credential{}
+	for _, c := range creds {
+		if c.Dialect == "postgresql" && c.ContainerName != "" && c.MonitorUsername != "" && c.MonitorPassword != nil {
+			byName[c.ContainerName] = c
+		}
+	}
+	mp.containerCreds = byName
+}
+
+// containerCred: Coolify names a standalone database's container after its
+// uuid (a suffixed name, uuid-<n>, is the same database).
+func (mp *metricspusher) containerCred(containerName string) (credential.Credential, bool) {
+	if c, ok := mp.containerCreds[containerName]; ok {
+		return c, true
+	}
+	for name, c := range mp.containerCreds {
+		if strings.HasPrefix(containerName, name+"-") {
+			return c, true
+		}
+	}
+	return credential.Credential{}, false
+}
+
+// decryptMonitorPasswords: a monitoring password that cannot be decrypted
+// leaves that container on its env credentials; it never fails the fetch.
+func (mp *metricspusher) decryptMonitorPasswords(creds []credential.Credential, privateKey *rsa.PrivateKey) {
+	for i := range creds {
+		if creds[i].MonitorPasswdEnc == "" {
+			continue
+		}
+		password, err := mp.crypto.DecryptWithPrivateKey(creds[i].MonitorPasswdEnc, privateKey)
+		if err != nil {
+			log.Warnj(log.JSON{"event": "pg_monitor_password_undecryptable", "credential": creds[i].ID, "error": err.Error()})
+			continue
+		}
+		creds[i].MonitorPassword = &password
+	}
 }
