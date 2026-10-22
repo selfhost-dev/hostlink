@@ -3,9 +3,10 @@ name: goreleaser
 
 on:
   push:
-    # run only against tags
+    # Only release tags: final vX.Y.Z or release candidate vX.Y.Z-rc.N.
     tags:
-      - "*"
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+"
 
 permissions:
   contents: write
@@ -42,32 +43,43 @@ jobs:
           # Your GoReleaser Pro key, if you are using the 'goreleaser-pro' distribution
           # GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
 
+      # Check the state GitHub actually has, not just that GoReleaser exited 0:
+      # an RC must be a prerelease that did not move latest, and every release
+      # carries the 9 expected assets.
+      - name: Assert release invariants
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: scripts/release/assert_release_invariants.sh --repo "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME"
+
       # Mirror the Linux agent to S3 so servers install hostlink without GitHub
       # (scripts/release/mirror_to_s3.sh). Skipped until the mirror exists: set
       # the repository variables HOSTLINK_MIRROR_BUCKET, HOSTLINK_MIRROR_ROLE_ARN
       # (an IAM role trusting this repo's tag workflows via GitHub OIDC) and,
       # optionally, HOSTLINK_MIRROR_REGION.
+      # RCs are not written to the production mirror: only the UAT control
+      # plane needs them, and it mirrors the tag into its own bucket.
       - name: Configure AWS credentials for the S3 mirror
-        if: ${{ vars.HOSTLINK_MIRROR_BUCKET != '' && vars.HOSTLINK_MIRROR_ROLE_ARN != '' }}
+        if: ${{ vars.HOSTLINK_MIRROR_BUCKET != '' && vars.HOSTLINK_MIRROR_ROLE_ARN != '' && !contains(github.ref_name, '-rc.') }}
         uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.HOSTLINK_MIRROR_ROLE_ARN }}
           aws-region: ${{ vars.HOSTLINK_MIRROR_REGION || 'ap-south-1' }}
       - name: Mirror release to S3
-        if: ${{ vars.HOSTLINK_MIRROR_BUCKET != '' && vars.HOSTLINK_MIRROR_ROLE_ARN != '' }}
+        if: ${{ vars.HOSTLINK_MIRROR_BUCKET != '' && vars.HOSTLINK_MIRROR_ROLE_ARN != '' && !contains(github.ref_name, '-rc.') }}
         run: scripts/release/mirror_to_s3.sh "$GITHUB_REF_NAME" dist "s3://${{ vars.HOSTLINK_MIRROR_BUCKET }}/hostlink"
       # Repo policy (AGENTS.md): a release becomes latest only after the
       # pipeline succeeds. GoReleaser publishes with make_latest=false; this
-      # step promotes once artifacts are verified present.
+      # step promotes a final release once its assets are verified. An RC must
+      # never reach /releases/latest.
       - name: Promote release to latest
+        if: ${{ !contains(github.ref_name, '-rc.') }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # Expect hostlink x2 + hlctl x6 + checksums = 9 assets.
-          count=$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length')
-          if [ "$count" -lt 9 ]; then
-            echo "expected at least 9 assets, found $count; refusing to promote" >&2
+          prerelease=$(gh release view "$GITHUB_REF_NAME" --json isPrerelease --jq '.isPrerelease')
+          if [ "$prerelease" != "false" ]; then
+            echo "$GITHUB_REF_NAME is a prerelease; refusing to promote" >&2
             exit 1
           fi
           gh release edit "$GITHUB_REF_NAME" --latest
