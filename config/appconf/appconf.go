@@ -218,6 +218,14 @@ func APIHeartbeatTimeout() time.Duration {
 	return parseDurationClamped("HOSTLINK_API_HEARTBEAT_TIMEOUT", 10*time.Second, time.Second, 25*time.Second)
 }
 
+// APICredentialsTimeout bounds the metrics job's credential fetch, so a
+// stalled fetch cannot hold a metrics beat for the client's full 30s
+// (selfhost#3963).
+// Controlled by HOSTLINK_API_CREDENTIALS_TIMEOUT (default: 10s, clamped to [1s, 25s]).
+func APICredentialsTimeout() time.Duration {
+	return parseDurationClamped("HOSTLINK_API_CREDENTIALS_TIMEOUT", 10*time.Second, time.Second, 25*time.Second)
+}
+
 // TraefikEndpoint returns the Traefik metrics endpoint.
 // Controlled by HOSTLINK_TRAEFIK_ENDPOINT (default: http://localhost:8080/metrics).
 func TraefikEndpoint() string {
