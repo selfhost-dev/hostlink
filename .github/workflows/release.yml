@@ -40,6 +40,10 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # vX.Y.Z and vX.Y.Z-rc.N can point at the same commit (the tested
+          # RC commit). Force the pushed tag: otherwise GoReleaser's git
+          # describe can select the RC tag and upload stable assets there.
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
           # Your GoReleaser Pro key, if you are using the 'goreleaser-pro' distribution
           # GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
 
