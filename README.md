@@ -46,9 +46,13 @@ sudo bash install.sh --server-url "https://your-server.com" --token-id "your-tok
 - `--download-base-url` downloads `hostlink_Linux_<arch>.tar.gz` from there instead of the GitHub release.
 - `--sha256-x86_64` / `--sha256-arm64`: a download whose sha256 does not match the one for the machine's arch is rejected and retried.
 
-Every tagged release is mirrored to S3 by the release workflow
+Every stable tagged release is mirrored to S3 by the release workflow
 (`scripts/release/mirror_to_s3.sh`) once the repository variables
 `HOSTLINK_MIRROR_BUCKET` and `HOSTLINK_MIRROR_ROLE_ARN` are set.
+
+Release candidates and stable releases are documented in
+[docs/releases.md](docs/releases.md). An RC is a GitHub prerelease and never
+becomes `latest`; install one by pinning its exact tag.
 
 Just running this above script will make the server up and running on your
 machine. You can access it on port :1232 of your machine.

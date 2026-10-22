@@ -9,13 +9,15 @@
 
 ## Release Strategy
 
-When asked to create release follow these steps:
-
+- Stable releases use `vMAJOR.MINOR.PATCH`; release candidates use
+  `vMAJOR.MINOR.PATCH-rc.N`.
 - Merge the PR if not already merged using squash merge.
-- Create a release from `main` branch. Follow semver.
-- DO NOT make the new release latest
-- Wait for the release pipeline to complete
-- Once release is complete, make the release latest
+- Create releases from `main`, following semver.
+- RCs are GitHub prereleases and must never become `latest`.
+- The release workflow promotes a stable release to `latest` automatically
+  after its assets and invariants pass.
+- Cut the stable tag on the tested RC commit when possible.
+- See `docs/releases.md` for the runbook and consumer contract.
 
 ## Agent skills
 

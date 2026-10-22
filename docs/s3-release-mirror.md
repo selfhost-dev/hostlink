@@ -2,8 +2,9 @@
 
 Servers install hostlink from an S3 mirror instead of GitHub, so a first boot
 never depends on GitHub's unauthenticated API (60 requests/hour per IP; AWS
-reuses public IPs) or on GitHub being reachable. Every tagged release is copied
-there by `.github/workflows/release.yml` → `scripts/release/mirror_to_s3.sh`:
+reuses public IPs) or on GitHub being reachable. Every stable tagged release is
+copied there by `.github/workflows/release.yml` →
+`scripts/release/mirror_to_s3.sh`:
 
 ```
 s3://<bucket>/hostlink/<tag>/hostlink_Linux_x86_64.tar.gz
@@ -11,6 +12,11 @@ s3://<bucket>/hostlink/<tag>/hostlink_Linux_arm64.tar.gz
 s3://<bucket>/hostlink/<tag>/hostlink_<version>_checksums.txt
 s3://<bucket>/hostlink/<tag>/install.sh
 ```
+
+Release candidates (`vX.Y.Z-rc.N`) are not copied to the production bucket by
+the release workflow; they remain GitHub prereleases. A test environment that
+needs an S3 copy must mirror the same tag separately and pin that exact tag.
+There is no mutable `latest` key: every install names a tag.
 
 A server then runs:
 
@@ -128,5 +134,5 @@ curl -sI https://selfhost-hostlink-releases.s3.ap-south-1.amazonaws.com/hostlink
 curl -sI https://selfhost-hostlink-releases.s3.ap-south-1.amazonaws.com/other-key | head -1                                      # 403: only hostlink/ is public
 ```
 
-Then tag the next release and check the workflow's "Mirror release to S3" step
-ran and printed `Mirrored hostlink <tag> to s3://selfhost-hostlink-releases/hostlink/<tag>/`.
+Then tag the next stable release and check the workflow's "Mirror release to S3"
+step ran and printed `Mirrored hostlink <tag> to s3://selfhost-hostlink-releases/hostlink/<tag>/`.
