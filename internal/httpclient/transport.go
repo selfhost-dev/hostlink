@@ -39,10 +39,11 @@ func (t *AgentTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return base.RoundTrip(clone)
 }
 
-// NewClient returns an *http.Client configured with AgentTransport and the specified timeout.
+// NewClient returns an *http.Client configured with AgentTransport over the
+// shared control-plane transport and the specified timeout.
 func NewClient(timeout time.Duration) *http.Client {
 	return &http.Client{
-		Transport: &AgentTransport{},
+		Transport: &AgentTransport{Base: ControlPlaneTransport()},
 		Timeout:   timeout,
 	}
 }

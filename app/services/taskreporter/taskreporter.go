@@ -8,6 +8,7 @@ import (
 	"hostlink/app/services/agentstate"
 	"hostlink/app/services/requestsigner"
 	"hostlink/config/appconf"
+	"hostlink/internal/httpclient"
 	"hostlink/internal/slowrequest"
 	"net/http"
 	"time"
@@ -93,9 +94,7 @@ func New(cfg *Config) (*taskreporter, error) {
 	}
 
 	return &taskreporter{
-		client: &http.Client{
-			Timeout: cfg.Timeout,
-		},
+		client:          httpclient.NewControlPlaneClient(cfg.Timeout),
 		signer:          signer,
 		controlPlaneURL: cfg.ControlPlaneURL,
 		retryConfig:     retryConfig,

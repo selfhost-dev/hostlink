@@ -250,6 +250,43 @@ func UpdateLockTimeout() time.Duration {
 	return parseDurationClamped("HOSTLINK_UPDATE_LOCK_TIMEOUT", defaultTimeout, minTimeout, maxTimeout)
 }
 
+// APIPingIdleTimeout is how long the control-plane connection may stay silent
+// before the agent pings it (HTTP/2), to find a dead connection in seconds
+// instead of waiting out every request's timeout on it (selfhost#3963).
+// Controlled by HOSTLINK_API_PING_IDLE_TIMEOUT (default: 15s, clamped to [2s, 2m]).
+func APIPingIdleTimeout() time.Duration {
+	return parseDurationClamped("HOSTLINK_API_PING_IDLE_TIMEOUT", 15*time.Second, 2*time.Second, 2*time.Minute)
+}
+
+// APIPingTimeout is how long an unanswered ping takes to close the connection.
+// Controlled by HOSTLINK_API_PING_TIMEOUT (default: 5s, clamped to [1s, 30s]).
+func APIPingTimeout() time.Duration {
+	return parseDurationClamped("HOSTLINK_API_PING_TIMEOUT", 5*time.Second, time.Second, 30*time.Second)
+}
+
+// APIRedialAfterTimeouts is how many consecutive control-plane timeouts close
+// the idle connections, so the next request dials fresh.
+// Controlled by HOSTLINK_API_REDIAL_AFTER_TIMEOUTS (default: 2, clamped to [1, 10]).
+func APIRedialAfterTimeouts() int {
+	return parseIntClamped("HOSTLINK_API_REDIAL_AFTER_TIMEOUTS", 2, 1, 10)
+}
+
+// parseIntClamped reads an integer from an environment variable, clamping it
+// to [min, max]. Returns defaultVal if the env var is empty or unparseable.
+func parseIntClamped(envVar string, defaultVal, min, max int) int {
+	n, err := strconv.Atoi(strings.TrimSpace(os.Getenv(envVar)))
+	if err != nil {
+		return defaultVal
+	}
+	if n < min {
+		return min
+	}
+	if n > max {
+		return max
+	}
+	return n
+}
+
 // parseDurationClamped reads a duration from an environment variable, clamping
 // it to [min, max]. Returns defaultVal if the env var is empty or unparseable.
 func parseDurationClamped(envVar string, defaultVal, min, max time.Duration) time.Duration {
