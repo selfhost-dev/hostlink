@@ -274,6 +274,7 @@ func TestCollect_KeeperDisconnected_ZKQueryErrors(t *testing.T) {
 	m, err := c.Collect(credForServer(srv))
 	require.NoError(t, err)
 	assert.False(t, m.KeeperConnected, "unreadable system.zookeeper → no quorum (zk_count=ERR)")
+	assert.Equal(t, "unknown", m.KeeperStatus, "an error with no ClickHouse code proves neither configured nor absent")
 }
 
 func TestToInt64(t *testing.T) {

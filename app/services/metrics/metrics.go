@@ -290,7 +290,13 @@ func (mp *metricspusher) Push(cred credential.Credential) error {
 			m, err := mp.clickhousecollector.Collect(cred)
 			if err != nil {
 				log.Warnf("clickhouse metrics collection failed: %v", err)
-				m = domainmetrics.ClickHouseDatabaseMetrics{Up: false}
+				// Topology is not known for a node the agent could not query.
+				m = domainmetrics.ClickHouseDatabaseMetrics{
+					Up:                false,
+					Mode:              domainmetrics.ClickHouseModeUnknown,
+					KeeperStatus:      domainmetrics.ClickHouseKeeperUnknown,
+					ReplicationStatus: domainmetrics.ClickHouseReplicationUnknown,
+				}
 			} else {
 				m.Up = true
 			}

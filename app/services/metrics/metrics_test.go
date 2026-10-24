@@ -413,3 +413,39 @@ func TestPush_DatabaseDown_SendsUpFalseWithZeroMetrics(t *testing.T) {
 }
 
 // Verifies storage metrics are included in the payload
+
+// A ClickHouse node the agent could not query says nothing about its topology:
+// the verdict fields read "unknown", never an empty string or not_applicable.
+func TestPush_ClickHouseDown_TopologyUnknown(t *testing.T) {
+	mp, mocks := setupTestMetricsPusher()
+	testCred := credential.Credential{Host: "localhost", Port: 9000, Dialect: "clickhouse"}
+
+	mocks.agentstate.On("GetAgentID").Return("agent-123")
+	setupSysCollectorMocks(mocks.syscollector)
+	setupNetCollectorMocks(mocks.netcollector)
+	setupStorageCollectorMocks(mocks.storagecollector)
+	mocks.clickhousecollector.On("Collect", testCred).
+		Return(domainmetrics.ClickHouseDatabaseMetrics{}, errors.New("ping: connection refused"))
+
+	var got domainmetrics.ClickHouseDatabaseMetrics
+	found := false
+	mocks.apiserver.On("PushMetrics", mock.Anything, mock.MatchedBy(func(p domainmetrics.MetricPayload) bool {
+		for _, ms := range p.MetricSets {
+			if ms.Type == domainmetrics.MetricTypeClickHouseDatabase {
+				got = ms.Metrics.(domainmetrics.ClickHouseDatabaseMetrics)
+				found = true
+			}
+		}
+		return found
+	})).Return(nil)
+
+	assert.NoError(t, mp.Push(testCred))
+	assert.True(t, found, "clickhouse.database metric set must be present")
+	assert.False(t, got.Up)
+	assert.False(t, got.KeeperConnected, "legacy keeper_connected keeps today's value")
+	assert.Equal(t, domainmetrics.ClickHouseModeUnknown, got.Mode)
+	assert.Equal(t, domainmetrics.ClickHouseKeeperUnknown, got.KeeperStatus)
+	assert.Equal(t, domainmetrics.ClickHouseReplicationUnknown, got.ReplicationStatus)
+	assert.Nil(t, got.ReplicatedTablesCount)
+	assert.Nil(t, got.BrokenDetachedPartsCount)
+}
