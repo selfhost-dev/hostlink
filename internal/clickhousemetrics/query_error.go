@@ -24,6 +24,9 @@ const (
 	// session expired, operation timeout. The client only exists when Keeper
 	// is configured, so this code means configured but not serving.
 	codeKeeperException = 999
+	// codeUnknownTable (UNKNOWN_TABLE) is what 26.8.34 raises for system.zookeeper on a node
+	// without a Keeper section (#285): the table is attached only when Keeper is configured.
+	codeUnknownTable = 60
 )
 
 // queryError is a non-200 answer from the ClickHouse HTTP interface.

@@ -79,6 +79,9 @@ const (
 	keeperUnreachableBody = "Code: 999. Coordination::Exception: All connection tries failed while connecting to ZooKeeper. nodes: 10.0.1.5:9181 (KEEPER_EXCEPTION) (version 26.8.9.10 (official build))"
 	accessDeniedBody      = "Code: 497. DB::Exception: monitor: Not enough privileges. To execute this query, it's necessary to have the grant SELECT ON system.zookeeper. (ACCESS_DENIED)"
 	noZooKeeperBody       = "Code: 225. DB::Exception: No ZooKeeper defined. (NO_ZOOKEEPER)"
+	// What ClickHouse 26.8.34.13 answers on a node with no Keeper section, seen live on QA (#285): the
+	// system.zookeeper table is not attached at all.
+	noZooKeeperTableBody = "Code: 60. DB::Exception: Unknown table expression identifier 'system.zookeeper' in scope SELECT count() AS value FROM system.zookeeper WHERE path = '/'. (UNKNOWN_TABLE) (version 26.8.34.13 (official build))"
 )
 
 func zkRoot(n string) route { return okRoute("system.zookeeper", `{"value":"`+n+`"}`) }
@@ -110,6 +113,33 @@ func TestCollect_Topology(t *testing.T) {
 			name:     "standalone: no Keeper configured (26.8 NO_ELEMENTS_IN_CONFIG) and no replicated tables",
 			routes:   []route{zkNotConfig, noReplicas},
 			wantMode: "standalone", wantKeeper: "not_applicable", wantReplication: "not_applicable",
+			wantTables: intp(0),
+		},
+		{
+			name:     "standalone: no Keeper configured, 26.8.34 has no system.zookeeper table (UNKNOWN_TABLE)",
+			routes:   []route{chErr("system.zookeeper", 404, 60, noZooKeeperTableBody), noReplicas},
+			wantMode: "standalone", wantKeeper: "not_applicable", wantReplication: "not_applicable",
+			wantTables: intp(0),
+		},
+		{
+			name:     "standalone: an older 'Table system.zookeeper does not exist' (code in the body only)",
+			routes:   []route{chErr("system.zookeeper", 404, 0, "Code: 60. DB::Exception: Table system.zookeeper does not exist. (UNKNOWN_TABLE)"), noReplicas},
+			wantMode: "standalone", wantKeeper: "not_applicable", wantReplication: "not_applicable",
+			wantTables: intp(0),
+		},
+		{
+			name:     "no system.zookeeper table but replicated tables exist: Keeper is missing, not not-applicable",
+			routes:   []route{chErr("system.zookeeper", 404, 60, noZooKeeperTableBody), replicas("2", "0")},
+			wantMode: "replicated", wantKeeper: "disconnected", wantReplication: "unknown",
+			wantTables: intp(2),
+		},
+		{
+			name: "UNKNOWN_TABLE naming another table is unknown",
+			routes: []route{
+				chErr("system.zookeeper", 404, 60, "Code: 60. DB::Exception: Unknown table expression identifier 'system.zookeeper_connection' in scope SELECT 1. (UNKNOWN_TABLE)"),
+				noReplicas,
+			},
+			wantMode: "standalone", wantKeeper: "unknown", wantReplication: "not_applicable",
 			wantTables: intp(0),
 		},
 		{
