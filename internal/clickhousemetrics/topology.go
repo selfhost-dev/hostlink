@@ -2,6 +2,7 @@ package clickhousemetrics
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 
 	"hostlink/domain/metrics"
@@ -38,10 +39,13 @@ const (
 // Keeper is "not configured" only on a definite server signal:
 //   - NO_ZOOKEEPER (225), or
 //   - NO_ELEMENTS_IN_CONFIG (139) with the "no Zookeeper configuration"
-//     message, which is what 26.8 actually raises for system.zookeeper on a
-//     node without a Keeper section. 139 is a generic code, so the message is
-//     required too; if a future release rewords it, the verdict degrades to
-//     unknown, never to a false not_applicable.
+//     message. 139 is a generic code, so the message is required too; if a
+//     future release rewords it, the verdict degrades to unknown, never to a
+//     false not_applicable.
+//   - UNKNOWN_TABLE (60) naming system.zookeeper: what 26.8.34 raises live on
+//     a node without a Keeper section (#285), where the table is not attached
+//     at all. A Keeper-configured node always has it, so its absence is
+//     definite; 60 for any other table stays unknown.
 //
 // system.zookeeper_connection is not queried: on 26.8 it calls the same
 // Context::getZooKeeper and fails the same way, so it adds no signal.
@@ -80,9 +84,15 @@ func keeperNotConfigured(qe *queryError) bool {
 		return true
 	case codeNoElementsInConfig:
 		return strings.Contains(strings.ToLower(qe.Message), "no zookeeper configuration")
+	case codeUnknownTable:
+		return zookeeperTableNamed.MatchString(strings.ToLower(qe.Message))
 	}
 	return false
 }
+
+// zookeeperTableNamed matches system.zookeeper itself in an UNKNOWN_TABLE message, never
+// system.zookeeper_connection or another table that merely starts with the name.
+var zookeeperTableNamed = regexp.MustCompile(`system\.zookeeper([^a-z0-9_]|$)`)
 
 // applyReplication fills the legacy lag fields (same values as before #283)
 // and the replication verdict from replicasQuery's result.
