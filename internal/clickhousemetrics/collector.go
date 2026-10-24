@@ -56,17 +56,17 @@ func (c *collector) Collect(cred credential.Credential) (metrics.ClickHouseDatab
 
 	var m metrics.ClickHouseDatabaseMetrics
 
-	// Keeper raf t quorum: system.zookeeper root is readable only after this
+	// Keeper raft quorum: system.zookeeper root is readable only after this
 	// node's embedded Keeper connects to a quorum of its peers (same check #1
 	// as the server's clickhouse_keeper_readiness_check probe). An error or
-	// an empty root = no quorum. Keeper-permissioned errors (e.g. before
-	// keeper_config runs) also read as "not connected" — the server-side
-	// monitor applies its own cluster-setup gate on top of this metric.
-	keeperRows, zkErr := c.query(baseURL, cred.Username, password,
-		"SELECT count() AS value FROM system.zookeeper WHERE path='/' FORMAT JSONEachRow")
+	// an empty root = no quorum. keeper_connected keeps exactly that meaning,
+	// so it is also false on a node with no Keeper configured at all;
+	// keeper_status tells the cases apart (see keeperStatus).
+	keeperRows, zkErr := c.query(baseURL, cred.Username, password, keeperProbeQuery)
 	if zkErr == nil && len(keeperRows) > 0 {
 		m.KeeperConnected = toInt64(keeperRows[0]["value"]) > 0
 	}
+	m.KeeperStatus = keeperStatus(keeperRows, zkErr)
 
 	// Point-in-time metrics from system.metrics
 	sysRows, err := c.query(baseURL, cred.Username, password,
@@ -117,30 +117,29 @@ func (c *collector) Collect(cred credential.Credential) (metrics.ClickHouseDatab
 		m.DiskUsedBytes = toInt64(diskRows[0]["value"])
 	}
 
-	// Detached/broken parts count
+	// Every detached part, deliberate or broken (broken_parts_count, kept as is).
 	detachedRows, err := c.query(baseURL, cred.Username, password,
 		"SELECT count() AS value FROM system.detached_parts FORMAT JSONEachRow")
 	if err == nil && len(detachedRows) > 0 {
 		m.BrokenPartsCount = int(toInt64(detachedRows[0]["value"]))
 	}
 
-	// Replication delay from system.replicas (0 if standalone or no delay)
-	replicaRows, err := c.query(baseURL, cred.Username, password,
-		"SELECT max(absolute_delay) AS value FROM system.replicas FORMAT JSONEachRow")
-	if err == nil && len(replicaRows) > 0 {
-		delay := int(toInt64(replicaRows[0]["value"]))
-		m.ReplicationDelay = delay
-		m.ReplicationLagSeconds = delay
+	// Only the parts ClickHouse detached as broken. A separate query, so a
+	// failure here can never change broken_parts_count.
+	brokenRows, err := c.query(baseURL, cred.Username, password, brokenDetachedPartsQuery)
+	if err == nil && len(brokenRows) > 0 {
+		broken := int(toInt64(brokenRows[0]["value"]))
+		m.BrokenDetachedPartsCount = &broken
 	}
 
-	// Active replica count: distinct replica hosts participating in
-	// replication. Omitted for standalone nodes (system.replicas is empty).
-	replicaCountRows, err := c.query(baseURL, cred.Username, password,
-		"SELECT uniqExact(hostname) AS value FROM system.replicas WHERE is_readonly = 0 FORMAT JSONEachRow")
-	if err == nil && len(replicaCountRows) > 0 {
-		count := int(toInt64(replicaCountRows[0]["value"]))
-		m.ActiveReplicaCount = &count
-	}
+	// Replication: table count decides mode and whether lag applies. The lag
+	// fields carry max(absolute_delay), 0 on a node with no replicated table.
+	// active_replica_count is not collected (see ClickHouseDatabaseMetrics):
+	// system.replicas has no hostname column, and hostName() over this
+	// node-local table could only ever say 0 or 1.
+	replicaRows, replicaErr := c.query(baseURL, cred.Username, password, replicasQuery)
+	applyReplication(&m, replicaRows, replicaErr)
+	reconcileKeeper(&m)
 
 	// Mark cache: ratio of hits to total lookups.
 	// Zero lookups (idle or insert-only node — inserts and system.* queries never
@@ -213,7 +212,11 @@ func (c *collector) query(baseURL, user, password, q string) ([]map[string]any, 
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return nil, fmt.Errorf("clickhouse http %d: %s", resp.StatusCode, body)
+		return nil, &queryError{
+			HTTPStatus: resp.StatusCode,
+			Code:       parseExceptionCode(resp.Header.Get("X-ClickHouse-Exception-Code"), string(body)),
+			Message:    string(body),
+		}
 	}
 
 	body, err := io.ReadAll(resp.Body)
