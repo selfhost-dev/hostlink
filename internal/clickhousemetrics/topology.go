@@ -10,7 +10,8 @@ import (
 // replicationLagThresholdSeconds splits replication_status "ok" from
 // "lagging": max(absolute_delay) above it is lagging. 60s is the platform's
 // existing in-sync threshold (selfhost CloudProvider::Aws::ReplicationStatusService
-// REPLICATION_LAG_THRESHOLD_SECONDS, used by WaitReplicationSyncJob). absolute_delay
+// REPLICATION_LAG_THRESHOLD_SECONDS, used by WaitReplicationSyncJob and by
+// Clickhouse::TopologyHealth when it judges an older agent's lag). absolute_delay
 // is coarse (seconds behind the oldest unprocessed queue entry), so a few
 // seconds during a large fetch or merge is normal and must not read as lagging.
 const replicationLagThresholdSeconds = 60
@@ -124,8 +125,17 @@ func applyReplication(m *metrics.ClickHouseDatabaseMetrics, rows []map[string]an
 // reconcileKeeper: replicated tables need Keeper. A node that has them but no
 // Keeper configuration has every one of them read-only, the same outcome as a
 // lost Keeper, so it reads disconnected rather than not_applicable.
+//
+// And with Keeper disconnected, lag says nothing yet: absolute_delay only
+// grows past the threshold a minute after the queue stops moving, so "ok"
+// would sit beside read-only tables. Replication then reads unknown. An
+// unknown Keeper (a permission error on the probe, say) leaves the lag
+// verdict alone: that can persist, and the lag is still a real reading.
 func reconcileKeeper(m *metrics.ClickHouseDatabaseMetrics) {
 	if m.KeeperStatus == metrics.ClickHouseKeeperNotApplicable && m.Mode == metrics.ClickHouseModeReplicated {
 		m.KeeperStatus = metrics.ClickHouseKeeperDisconnected
+	}
+	if m.KeeperStatus == metrics.ClickHouseKeeperDisconnected && m.Mode == metrics.ClickHouseModeReplicated {
+		m.ReplicationStatus = metrics.ClickHouseReplicationUnknown
 	}
 }

@@ -1,11 +1,13 @@
 package clickhousemetrics
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -137,13 +139,13 @@ func TestCollect_Topology(t *testing.T) {
 		{
 			name:     "Keeper configured but unreachable (KEEPER_EXCEPTION)",
 			routes:   []route{zkUnreachable, replicas("2", "0")},
-			wantMode: "replicated", wantKeeper: "disconnected", wantReplication: "ok",
+			wantMode: "replicated", wantKeeper: "disconnected", wantReplication: "unknown",
 			wantTables: intp(2),
 		},
 		{
 			name:     "Keeper reachable but its root is empty: no quorum",
 			routes:   []route{zkRoot("0"), replicas("2", "0")},
-			wantMode: "replicated", wantKeeper: "disconnected", wantReplication: "ok",
+			wantMode: "replicated", wantKeeper: "disconnected", wantReplication: "unknown",
 			wantTables: intp(2),
 		},
 		{
@@ -155,7 +157,7 @@ func TestCollect_Topology(t *testing.T) {
 		{
 			name:     "no Keeper config but replicated tables exist: they need Keeper, so it is missing, not not-applicable",
 			routes:   []route{zkNotConfig, replicas("2", "0")},
-			wantMode: "replicated", wantKeeper: "disconnected", wantReplication: "ok",
+			wantMode: "replicated", wantKeeper: "disconnected", wantReplication: "unknown",
 			wantTables: intp(2),
 		},
 		{
@@ -286,4 +288,13 @@ func TestCollect_Standalone_JSONCompatibility(t *testing.T) {
 	assert.Equal(t, "not_applicable", got["replication_status"])
 	assert.Equal(t, float64(0), got["replicated_tables_count"])
 	assert.Equal(t, float64(0), got["broken_detached_parts_count"])
+}
+
+// A Keeper connection attempt that outlasts the HTTP timeout surfaces as a Go
+// transport error, not a ClickHouse error code: it reads unknown, the
+// conservative verdict (keeper_connected stays false either way).
+func TestKeeperStatus_TransportErrorIsUnknown(t *testing.T) {
+	timeout := &url.Error{Op: "Post", URL: "http://127.0.0.1:8123", Err: context.DeadlineExceeded}
+
+	assert.Equal(t, "unknown", keeperStatus(nil, timeout))
 }
