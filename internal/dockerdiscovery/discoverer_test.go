@@ -2,11 +2,12 @@ package dockerdiscovery
 
 import (
 	"context"
+	"net/netip"
 	"testing"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -15,14 +16,14 @@ type mockDockerClient struct {
 	mock.Mock
 }
 
-func (m *mockDockerClient) ContainerList(ctx context.Context, opts container.ListOptions) ([]container.Summary, error) {
+func (m *mockDockerClient) ContainerList(ctx context.Context, opts client.ContainerListOptions) (client.ContainerListResult, error) {
 	args := m.Called(ctx, opts)
-	return args.Get(0).([]container.Summary), args.Error(1)
+	return client.ContainerListResult{Items: args.Get(0).([]container.Summary)}, args.Error(1)
 }
 
-func (m *mockDockerClient) ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error) {
+func (m *mockDockerClient) ContainerInspect(ctx context.Context, containerID string, _ client.ContainerInspectOptions) (client.ContainerInspectResult, error) {
 	args := m.Called(ctx, containerID)
-	return args.Get(0).(container.InspectResponse), args.Error(1)
+	return client.ContainerInspectResult{Container: args.Get(0).(container.InspectResponse)}, args.Error(1)
 }
 
 func (m *mockDockerClient) Close() error {
@@ -63,10 +64,8 @@ func TestDiscoverDatabases_PostgresContainer(t *testing.T) {
 
 	cli.On("ContainerInspect", mock.Anything, containerID).Return(container.InspectResponse{
 		NetworkSettings: &container.NetworkSettings{
-			NetworkSettingsBase: container.NetworkSettingsBase{
-				Ports: nat.PortMap{
-					nat.Port("5432/tcp"): []nat.PortBinding{{HostPort: "15432"}},
-				},
+			Ports: network.PortMap{
+				network.MustParsePort("5432/tcp"): []network.PortBinding{{HostPort: "15432"}},
 			},
 		},
 		Config: &container.Config{
@@ -111,11 +110,9 @@ func TestDiscoverDatabases_UnpublishedContainerUsesItsNetworkAddress(t *testing.
 
 	cli.On("ContainerInspect", mock.Anything, containerID).Return(container.InspectResponse{
 		NetworkSettings: &container.NetworkSettings{
-			NetworkSettingsBase: container.NetworkSettingsBase{
-				Ports: nat.PortMap{nat.Port("5432/tcp"): nil},
-			},
+			Ports: network.PortMap{network.MustParsePort("5432/tcp"): nil},
 			Networks: map[string]*network.EndpointSettings{
-				"coolify": {IPAddress: "10.0.1.7"},
+				"coolify": {IPAddress: netip.MustParseAddr("10.0.1.7")},
 			},
 		},
 		Config: &container.Config{Env: []string{"POSTGRES_USER=app", "POSTGRES_DB=appdb", "POSTGRES_PASSWORD=pw"}},
@@ -135,9 +132,9 @@ func TestDiscoverDatabases_UnpublishedContainerUsesItsNetworkAddress(t *testing.
 func TestResolveAddress_PrefersCoolifyNetworkThenName(t *testing.T) {
 	info := container.InspectResponse{NetworkSettings: &container.NetworkSettings{
 		Networks: map[string]*network.EndpointSettings{
-			"zeta":    {IPAddress: "10.9.0.2"},
-			"coolify": {IPAddress: "10.0.1.7"},
-			"alpha":   {IPAddress: "10.8.0.2"},
+			"zeta":    {IPAddress: netip.MustParseAddr("10.9.0.2")},
+			"coolify": {IPAddress: netip.MustParseAddr("10.0.1.7")},
+			"alpha":   {IPAddress: netip.MustParseAddr("10.8.0.2")},
 		},
 	}}
 	host, port := resolveAddress(info, 5432)
@@ -152,9 +149,9 @@ func TestResolveAddress_PrefersCoolifyNetworkThenName(t *testing.T) {
 // Host networking shares the host's stack: localhost at the container port.
 func TestResolveAddress_HostNetworkingIsLocalhost(t *testing.T) {
 	info := container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{HostConfig: &container.HostConfig{NetworkMode: "host"}},
+		HostConfig: &container.HostConfig{NetworkMode: "host"},
 		NetworkSettings: &container.NetworkSettings{
-			Networks: map[string]*network.EndpointSettings{"host": {IPAddress: ""}},
+			Networks: map[string]*network.EndpointSettings{"host": {IPAddress: netip.Addr{}}},
 		},
 	}
 	host, port := resolveAddress(info, 5432)
@@ -168,8 +165,8 @@ func TestResolveAddress_NoKnownAddressIsEmpty(t *testing.T) {
 	for _, info := range []container.InspectResponse{
 		{},
 		{
-			ContainerJSONBase: &container.ContainerJSONBase{HostConfig: &container.HostConfig{NetworkMode: "container:abc"}},
-			NetworkSettings:   &container.NetworkSettings{Networks: map[string]*network.EndpointSettings{}},
+			HostConfig:      &container.HostConfig{NetworkMode: "container:abc"},
+			NetworkSettings: &container.NetworkSettings{Networks: map[string]*network.EndpointSettings{}},
 		},
 	} {
 		host, _ := resolveAddress(info, 5432)
@@ -179,7 +176,7 @@ func TestResolveAddress_NoKnownAddressIsEmpty(t *testing.T) {
 
 func TestResolveAddress_IPv6OnlyNetworkUsesTheGlobalAddress(t *testing.T) {
 	info := container.InspectResponse{NetworkSettings: &container.NetworkSettings{
-		Networks: map[string]*network.EndpointSettings{"v6net": {GlobalIPv6Address: "fd00::7"}},
+		Networks: map[string]*network.EndpointSettings{"v6net": {GlobalIPv6Address: netip.MustParseAddr("fd00::7")}},
 	}}
 	host, _ := resolveAddress(info, 5432)
 	assert.Equal(t, "fd00::7", host)
@@ -187,9 +184,9 @@ func TestResolveAddress_IPv6OnlyNetworkUsesTheGlobalAddress(t *testing.T) {
 
 func TestResolveAddress_PortPublishedOnOneAddressIsDialledThere(t *testing.T) {
 	info := container.InspectResponse{NetworkSettings: &container.NetworkSettings{
-		NetworkSettingsBase: container.NetworkSettingsBase{Ports: nat.PortMap{
-			nat.Port("5432/tcp"): []nat.PortBinding{{HostIP: "10.0.0.5", HostPort: "15432"}},
-		}},
+		Ports: network.PortMap{
+			network.MustParsePort("5432/tcp"): []network.PortBinding{{HostIP: netip.MustParseAddr("10.0.0.5"), HostPort: "15432"}},
+		},
 	}}
 	host, port := resolveAddress(info, 5432)
 	assert.Equal(t, "10.0.0.5", host)
@@ -209,10 +206,8 @@ func TestDiscoverDatabases_SupabasePostgresContainer(t *testing.T) {
 
 	cli.On("ContainerInspect", mock.Anything, containerID).Return(container.InspectResponse{
 		NetworkSettings: &container.NetworkSettings{
-			NetworkSettingsBase: container.NetworkSettingsBase{
-				Ports: nat.PortMap{
-					nat.Port("5432/tcp"): []nat.PortBinding{{HostPort: "5432"}},
-				},
+			Ports: network.PortMap{
+				network.MustParsePort("5432/tcp"): []network.PortBinding{{HostPort: "5432"}},
 			},
 		},
 		Config: &container.Config{
@@ -247,10 +242,8 @@ func TestDiscoverDatabases_MySQLContainer(t *testing.T) {
 
 	cli.On("ContainerInspect", mock.Anything, containerID).Return(container.InspectResponse{
 		NetworkSettings: &container.NetworkSettings{
-			NetworkSettingsBase: container.NetworkSettingsBase{
-				Ports: nat.PortMap{
-					nat.Port("3306/tcp"): []nat.PortBinding{{HostPort: "3307"}},
-				},
+			Ports: network.PortMap{
+				network.MustParsePort("3306/tcp"): []network.PortBinding{{HostPort: "3307"}},
 			},
 		},
 		Config: &container.Config{
@@ -286,10 +279,8 @@ func TestDiscoverDatabases_MongoDBContainer(t *testing.T) {
 
 	cli.On("ContainerInspect", mock.Anything, containerID).Return(container.InspectResponse{
 		NetworkSettings: &container.NetworkSettings{
-			NetworkSettingsBase: container.NetworkSettingsBase{
-				Ports: nat.PortMap{
-					nat.Port("27017/tcp"): []nat.PortBinding{{HostPort: "27018"}},
-				},
+			Ports: network.PortMap{
+				network.MustParsePort("27017/tcp"): []network.PortBinding{{HostPort: "27018"}},
 			},
 		},
 		Config: &container.Config{
@@ -325,20 +316,16 @@ func TestDiscoverDatabases_MultipleTypes(t *testing.T) {
 
 	cli.On("ContainerInspect", mock.Anything, "pg1").Return(container.InspectResponse{
 		NetworkSettings: &container.NetworkSettings{
-			NetworkSettingsBase: container.NetworkSettingsBase{
-				Ports: nat.PortMap{
-					nat.Port("5432/tcp"): []nat.PortBinding{{HostPort: "5432"}},
-				},
+			Ports: network.PortMap{
+				network.MustParsePort("5432/tcp"): []network.PortBinding{{HostPort: "5432"}},
 			},
 		},
 		Config: &container.Config{Env: []string{"POSTGRES_PASSWORD=pgpass"}},
 	}, nil)
 	cli.On("ContainerInspect", mock.Anything, "mysql1").Return(container.InspectResponse{
 		NetworkSettings: &container.NetworkSettings{
-			NetworkSettingsBase: container.NetworkSettingsBase{
-				Ports: nat.PortMap{
-					nat.Port("3306/tcp"): []nat.PortBinding{{HostPort: "3306"}},
-				},
+			Ports: network.PortMap{
+				network.MustParsePort("3306/tcp"): []network.PortBinding{{HostPort: "3306"}},
 			},
 		},
 		Config: &container.Config{Env: []string{"MYSQL_ROOT_PASSWORD=mysqlpass"}},
