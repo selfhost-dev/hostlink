@@ -9,6 +9,7 @@ import (
 	"hostlink/internal/telemetry"
 	"math/rand/v2"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -185,7 +186,13 @@ func (c *Client) LastAck() *wsprotocol.AckPayload {
 }
 
 func (c *Client) runOnce(ctx context.Context) error {
-	headers, err := c.signer.SignHeaders()
+	// The upgrade is a GET with no body; sign the request line the control
+	// plane will verify (#4113).
+	path := "/"
+	if parsed, err := url.Parse(c.url); err == nil && parsed.Path != "" {
+		path = parsed.Path
+	}
+	headers, err := c.signer.SignHeaders(http.MethodGet, path)
 	if err != nil {
 		return err
 	}
