@@ -243,7 +243,7 @@ func TestClientDialUsesSignedUpgradeHeaders(t *testing.T) {
 		t.Fatalf("Start returned error: %v", err)
 	}
 
-	for _, header := range []string{"X-Agent-ID", "X-Timestamp", "X-Nonce", "X-Signature"} {
+	for _, header := range []string{"X-Agent-ID", "X-Timestamp", "X-Nonce", "X-Signature", "X-Agent-Signature-Version"} {
 		if dialer.headers.Get(header) == "" {
 			t.Fatalf("expected signed upgrade header %s", header)
 		}

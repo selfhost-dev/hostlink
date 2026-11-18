@@ -1,18 +1,22 @@
 package requestsigner
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -98,7 +102,7 @@ func TestRequestSigner_SignRequest(t *testing.T) {
 			t.Fatalf("expected no error, got %v", err)
 		}
 
-		requiredHeaders := []string{"X-Agent-ID", "X-Timestamp", "X-Nonce", "X-Signature"}
+		requiredHeaders := []string{"X-Agent-ID", "X-Timestamp", "X-Nonce", "X-Signature", "X-Agent-Signature-Version"}
 		for _, header := range requiredHeaders {
 			if req.Header.Get(header) == "" {
 				t.Errorf("expected header %s to be set", header)
@@ -213,13 +217,13 @@ func TestRequestSigner_SignHeaders(t *testing.T) {
 	t.Run("should return required headers for websocket upgrade", func(t *testing.T) {
 		signer := setupTestSigner(t)
 
-		headers, err := signer.SignHeaders()
+		headers, err := signer.SignHeaders("GET", "/agents/socket")
 
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
 
-		requiredHeaders := []string{"X-Agent-ID", "X-Timestamp", "X-Nonce", "X-Signature"}
+		requiredHeaders := []string{"X-Agent-ID", "X-Timestamp", "X-Nonce", "X-Signature", "X-Agent-Signature-Version"}
 		for _, header := range requiredHeaders {
 			if headers.Get(header) == "" {
 				t.Errorf("expected header %s to be set", header)
@@ -233,7 +237,7 @@ func TestRequestSigner_SignHeaders(t *testing.T) {
 	t.Run("should produce signature verifiable from returned headers", func(t *testing.T) {
 		signer := setupTestSigner(t)
 
-		headers, err := signer.SignHeaders()
+		headers, err := signer.SignHeaders("GET", "/agents/socket")
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -243,7 +247,13 @@ func TestRequestSigner_SignHeaders(t *testing.T) {
 			t.Fatalf("expected base64 signature, got %v", err)
 		}
 
-		message := fmt.Sprintf("%s|%s|%s", headers.Get("X-Agent-ID"), headers.Get("X-Timestamp"), headers.Get("X-Nonce"))
+		if headers.Get("X-Agent-Signature-Version") != "2" {
+			t.Fatalf("expected version 2, got %q", headers.Get("X-Agent-Signature-Version"))
+		}
+		empty := sha256.Sum256(nil)
+		message := fmt.Sprintf("%s|%s|%s|GET|/agents/socket|%s",
+			headers.Get("X-Agent-ID"), headers.Get("X-Timestamp"), headers.Get("X-Nonce"),
+			hex.EncodeToString(empty[:]))
 		hashed := sha256.Sum256([]byte(message))
 		if err := rsa.VerifyPSS(&signer.privateKey.PublicKey, crypto.SHA256, hashed[:], signatureBytes, nil); err != nil {
 			t.Errorf("signature verification failed: %v", err)
@@ -251,11 +261,57 @@ func TestRequestSigner_SignHeaders(t *testing.T) {
 	})
 }
 
+// #4113: the signature covers the method, path and body, so it cannot be
+// replayed against another endpoint of the same agent.
+func TestRequestSigner_SignRequestBindsTheRequest(t *testing.T) {
+	signer := setupTestSigner(t)
+	body := `{"task_id":"tsk_1"}`
+
+	req, err := http.NewRequest("POST", "https://example.com/agents/v1/tasks/tsk_1/result", bytes.NewBufferString(body))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if err := signer.SignRequest(req); err != nil {
+		t.Fatalf("sign request: %v", err)
+	}
+
+	// The body is not consumed by signing.
+	sent, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if string(sent) != body {
+		t.Fatalf("body changed while signing: %q", string(sent))
+	}
+
+	digest := sha256.Sum256([]byte(body))
+	message := fmt.Sprintf("%s|%s|%s|POST|/agents/v1/tasks/tsk_1/result|%s",
+		req.Header.Get("X-Agent-ID"), req.Header.Get("X-Timestamp"), req.Header.Get("X-Nonce"),
+		hex.EncodeToString(digest[:]))
+	hashed := sha256.Sum256([]byte(message))
+	signature, err := base64.StdEncoding.DecodeString(req.Header.Get("X-Signature"))
+	if err != nil {
+		t.Fatalf("decode signature: %v", err)
+	}
+	if err := rsa.VerifyPSS(&signer.privateKey.PublicKey, crypto.SHA256, hashed[:], signature, nil); err != nil {
+		t.Fatalf("signature verification failed: %v", err)
+	}
+
+	// The same signature does not verify for a different path.
+	other := strings.Replace(message, "/agents/v1/tasks/tsk_1/result", "/agents/v1/heartbeats/tsk_1", 1)
+	otherHash := sha256.Sum256([]byte(other))
+	if err := rsa.VerifyPSS(&signer.privateKey.PublicKey, crypto.SHA256, otherHash[:], signature, nil); err == nil {
+		t.Fatal("the signature must not verify on another path")
+	}
+}
+
+const emptyBodyDigest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
 func TestRequestSigner_GenerateSignature(t *testing.T) {
 	t.Run("should generate valid RSA-PSS signature", func(t *testing.T) {
 		signer := setupTestSigner(t)
 
-		signature, err := signer.generateSignature("test-agent-123", "1234567890", "test-nonce")
+		signature, err := signer.generateSignature("test-agent-123", "1234567890", "test-nonce", "POST", "/agents/v1/tasks", emptyBodyDigest)
 
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
@@ -277,13 +333,13 @@ func TestRequestSigner_GenerateSignature(t *testing.T) {
 		timestamp := "1234567890"
 		nonce := "test-nonce"
 
-		signatureBase64, err := signer.generateSignature(agentID, timestamp, nonce)
+		signatureBase64, err := signer.generateSignature(agentID, timestamp, nonce, "POST", "/agents/v1/tasks", emptyBodyDigest)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
 
 		signatureBytes, _ := base64.StdEncoding.DecodeString(signatureBase64)
-		message := fmt.Sprintf("%s|%s|%s", agentID, timestamp, nonce)
+		message := fmt.Sprintf("%s|%s|%s|POST|/agents/v1/tasks|%s", agentID, timestamp, nonce, emptyBodyDigest)
 		hashed := sha256.Sum256([]byte(message))
 
 		err = rsa.VerifyPSS(&signer.privateKey.PublicKey, crypto.SHA256, hashed[:], signatureBytes, nil)
@@ -292,20 +348,20 @@ func TestRequestSigner_GenerateSignature(t *testing.T) {
 		}
 	})
 
-	t.Run("should create correct message format AID|timestamp|nonce", func(t *testing.T) {
+	t.Run("should sign the version 2 message AID|timestamp|nonce|method|path|body", func(t *testing.T) {
 		signer := setupTestSigner(t)
 
 		agentID := "agent-456"
 		timestamp := "9876543210"
 		nonce := "unique-nonce"
 
-		signatureBase64, err := signer.generateSignature(agentID, timestamp, nonce)
+		signatureBase64, err := signer.generateSignature(agentID, timestamp, nonce, "POST", "/agents/v1/tasks", emptyBodyDigest)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
 
 		signatureBytes, _ := base64.StdEncoding.DecodeString(signatureBase64)
-		expectedMessage := "agent-456|9876543210|unique-nonce"
+		expectedMessage := "agent-456|9876543210|unique-nonce|POST|/agents/v1/tasks|" + emptyBodyDigest
 		hashed := sha256.Sum256([]byte(expectedMessage))
 
 		err = rsa.VerifyPSS(&signer.privateKey.PublicKey, crypto.SHA256, hashed[:], signatureBytes, nil)
@@ -321,7 +377,7 @@ func TestRequestSigner_GenerateSignature(t *testing.T) {
 		timestamp := "1234567890"
 		nonce := "test-nonce"
 
-		signatureBase64, err := signer.generateSignature(agentID, timestamp, nonce)
+		signatureBase64, err := signer.generateSignature(agentID, timestamp, nonce, "POST", "/agents/v1/tasks", emptyBodyDigest)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -331,7 +387,7 @@ func TestRequestSigner_GenerateSignature(t *testing.T) {
 			t.Fatalf("failed to decode signature: %v", err)
 		}
 
-		message := fmt.Sprintf("%s|%s|%s", agentID, timestamp, nonce)
+		message := fmt.Sprintf("%s|%s|%s|POST|/agents/v1/tasks|%s", agentID, timestamp, nonce, emptyBodyDigest)
 		hashed := sha256.Sum256([]byte(message))
 
 		err = rsa.VerifyPSS(&signer.privateKey.PublicKey, crypto.SHA256, hashed[:], signatureBytes, nil)
@@ -343,12 +399,12 @@ func TestRequestSigner_GenerateSignature(t *testing.T) {
 	t.Run("should produce different signatures for different inputs", func(t *testing.T) {
 		signer := setupTestSigner(t)
 
-		sig1, err := signer.generateSignature("agent-1", "1111111111", "nonce-1")
+		sig1, err := signer.generateSignature("agent-1", "1111111111", "nonce-1", "POST", "/a", emptyBodyDigest)
 		if err != nil {
 			t.Fatalf("expected no error for sig1, got %v", err)
 		}
 
-		sig2, err := signer.generateSignature("agent-2", "2222222222", "nonce-2")
+		sig2, err := signer.generateSignature("agent-2", "2222222222", "nonce-2", "POST", "/b", emptyBodyDigest)
 		if err != nil {
 			t.Fatalf("expected no error for sig2, got %v", err)
 		}
