@@ -46,6 +46,9 @@ const (
 		"max(queue_size) AS queue_size, max(future_parts) AS future_parts, " +
 		"countIf(is_session_expired != 0) AS is_session_expired FROM system.replicas FORMAT JSONEachRow"
 
+	// The oldest unfinished mutation's age; 0 when every mutation is done.
+	oldestMutationQuery = "SELECT ifNull(max(dateDiff('second', create_time, now())), 0) AS value FROM system.mutations WHERE is_done = 0 FORMAT JSONEachRow"
+
 	noquorumPartsQuery = "SELECT count() AS value FROM system.detached_parts WHERE ifNull(reason, '') = 'noquorum' FORMAT JSONEachRow"
 
 	// Replicas whose {zookeeper_path}/replicas/<name>/is_lost is "1". is_lost is
@@ -142,7 +145,13 @@ func (c *collector) collectPressureReads(baseURL, user, password string, m *metr
 	if rows, err := c.query(baseURL, user, password, memoryLimitQuery); err == nil && len(rows) > 0 {
 		if limit := toInt64(rows[0]["value"]); limit > 0 {
 			m.MemoryLimitBytes = &limit
+			pct := float64(m.MemoryUsage) / float64(limit) * 100
+			m.MemoryUsagePercent = &pct
 		}
+	}
+
+	if rows, err := c.query(baseURL, user, password, oldestMutationQuery); err == nil && len(rows) > 0 {
+		m.OldestMutationAgeSeconds = intPtr(rows[0]["value"])
 	}
 
 	c.collectMergeMemoryFailures(baseURL, user, password, m, now)

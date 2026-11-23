@@ -146,7 +146,9 @@ var pressureClickHouseKeys = []string{
 var optionalPressureClickHouseKeys = []string{
 	"max_parts_in_partition",
 	"memory_limit_bytes",
+	"memory_usage_percent",
 	"merges_memory_limit_failures",
+	"oldest_mutation_age_seconds",
 	"io_wait_percent",
 	"total_replicas",
 	"active_replicas",
@@ -169,7 +171,8 @@ func TestClickHouseDatabaseMetrics_JSON_PressureKeys(t *testing.T) {
 
 	n, f, big := 7, 12.5, int64(6_010_753_514)
 	set := marshalToMap(t, ClickHouseDatabaseMetrics{
-		MaxPartsInPartition: &n, MemoryLimitBytes: &big, MergesMemoryLimitFailures: &n, IOWaitPercent: &f,
+		MaxPartsInPartition: &n, MemoryLimitBytes: &big, MemoryUsagePercent: &f, MergesMemoryLimitFailures: &n,
+		OldestMutationAgeSeconds: &n, IOWaitPercent: &f,
 		TotalReplicas: &n, ActiveReplicas: &n, QueueSize: &n, FutureParts: &n, SessionExpiredTables: &n,
 		LostReplicas: &n, NoquorumDetachedParts: &n,
 	})

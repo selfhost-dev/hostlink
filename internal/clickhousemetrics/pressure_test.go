@@ -91,6 +91,7 @@ func pressureRoutes(events map[string]int64) []route {
 		okRoute("system.asynchronous_metrics", `{"metric":"MaxPartCountForPartition","value":812}`+"\n"+
 			`{"metric":"OSIOWaitTimeNormalized","value":0.125}`),
 		okRoute("system.server_settings", `{"value":"6010753514"}`),
+		okRoute("system.mutations", `{"value":"4200"}`),
 		okRoute("system.part_log", `{"value":"2"}`),
 		okRoute("absolute_delay", `{"tables":"0","max_delay":0}`),
 		okRoute("system.parts", `{"value":"42"}`),
@@ -122,6 +123,10 @@ func TestPressure_FirstCollection_GaugesNowRatesZeroMergeFailuresOmitted(t *test
 	assert.Equal(t, 12.5, *m.IOWaitPercent)
 	require.NotNil(t, m.MemoryLimitBytes)
 	assert.Equal(t, int64(6010753514), *m.MemoryLimitBytes)
+	require.NotNil(t, m.MemoryUsagePercent, "memory_usage over the effective limit")
+	assert.InDelta(t, 0.0, *m.MemoryUsagePercent, 0.001, "the fixture tracks no memory")
+	require.NotNil(t, m.OldestMutationAgeSeconds)
+	assert.Equal(t, 4200, *m.OldestMutationAgeSeconds)
 	assert.Nil(t, m.MergesMemoryLimitFailures, "the first collection only opens the window")
 	assert.Empty(t, srv.queriesWith("system.part_log"))
 	assert.Equal(t, int64(3), m.ReplicatedDataLossEvents)
@@ -210,6 +215,34 @@ func TestPressure_OptionalReadsFail_KeysOmittedCollectionSucceeds(t *testing.T) 
 	assert.Nil(t, m.MaxPartsInPartition)
 	assert.Nil(t, m.IOWaitPercent)
 	assert.Nil(t, m.MemoryLimitBytes)
+	assert.Nil(t, m.MemoryUsagePercent, "no limit, no percent")
+}
+
+func TestPressure_MemoryUsagePercent_IsTrackedOverTheLimit(t *testing.T) {
+	routes := append([]route{}, pressureRoutes(map[string]int64{"Query": 10})...)
+	routes[2] = okRoute("FROM system.metrics", `{"metric":"MemoryTracking","value":"5409678162"}`)
+	srv := newRecordingServer(t, routes...)
+
+	m, err := New().Collect(credForServer(srv.Server))
+
+	require.NoError(t, err)
+	require.NotNil(t, m.MemoryUsagePercent)
+	assert.InDelta(t, 90.0, *m.MemoryUsagePercent, 0.01, "5409678162 / 6010753514")
+}
+
+func TestPressure_NoUnfinishedMutation_IsAgeZero_AFailedReadIsOmitted(t *testing.T) {
+	srv := newRecordingServer(t, append([]route{okRoute("system.mutations", `{"value":"0"}`)},
+		pressureRoutes(map[string]int64{"Query": 10})...)...)
+	m, err := New().Collect(credForServer(srv.Server))
+	require.NoError(t, err)
+	require.NotNil(t, m.OldestMutationAgeSeconds)
+	assert.Equal(t, 0, *m.OldestMutationAgeSeconds)
+
+	srv = newRecordingServer(t, append([]route{chErr("system.mutations", http.StatusInternalServerError, 0, "boom")},
+		pressureRoutes(map[string]int64{"Query": 10})...)...)
+	m, err = New().Collect(credForServer(srv.Server))
+	require.NoError(t, err)
+	assert.Nil(t, m.OldestMutationAgeSeconds)
 }
 
 func TestPressure_PartLogNotCreatedYet_CountsZeroFailures(t *testing.T) {

@@ -118,6 +118,13 @@ type ClickHouseDatabaseMetrics struct {
 	// since the previous collection; omitted on the first.
 	MemoryLimitBytes          *int64 `json:"memory_limit_bytes,omitempty"`
 	MergesMemoryLimitFailures *int   `json:"merges_memory_limit_failures,omitempty"`
+	// MemoryUsagePercent is memory_usage over memory_limit_bytes, for a rule that
+	// warns before the server refuses queries and merges; omitted without a limit.
+	MemoryUsagePercent *float64 `json:"memory_usage_percent,omitempty"`
+
+	// OldestMutationAgeSeconds is the age of the oldest unfinished mutation
+	// (system.mutations, is_done = 0), 0 when none; omitted if unread.
+	OldestMutationAgeSeconds *int `json:"oldest_mutation_age_seconds,omitempty"`
 
 	// Wait: the host's I/O wait (OS, percent of all cores, a ~1 s sample), and
 	// the time ClickHouse threads spent ready to run but not scheduled, per second
