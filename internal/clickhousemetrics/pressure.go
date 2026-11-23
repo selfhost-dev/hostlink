@@ -42,6 +42,10 @@ const (
 	// configured 0 (26.8: 6010753514 on an 8 GiB host at ratio 0.9).
 	memoryLimitQuery = "SELECT value FROM system.server_settings WHERE name = 'max_server_memory_usage' FORMAT JSONEachRow"
 
+	// The server-wide MergeTree default (selfhost#6012: 1000 on new nodes, 150 on
+	// nodes whose config predates it); a table may override it.
+	partsDelayQuery = "SELECT value FROM system.merge_tree_settings WHERE name = 'parts_to_delay_insert' FORMAT JSONEachRow"
+
 	replicationBlockQuery = "SELECT max(total_replicas) AS total_replicas, max(active_replicas) AS active_replicas, " +
 		"max(queue_size) AS queue_size, max(future_parts) AS future_parts, " +
 		"countIf(is_session_expired != 0) AS is_session_expired FROM system.replicas FORMAT JSONEachRow"
@@ -72,7 +76,15 @@ const (
 	// flushed more than this late (a server starved of memory) is missed: the count
 	// can be low, never double.
 	partLogLag = 60 * time.Second
+
+	rejectedWindow = 15 * time.Minute
 )
+
+// countAt is a counter's step since the previous collection, at a collection.
+type countAt struct {
+	at time.Time
+	n  int64
+}
 
 // The same failures over the 15 minutes ending a minute ago (part_log's late flush).
 const mergeMemoryFailures15mQuery = "SELECT count() AS value FROM system.part_log WHERE event_type = 'MergeParts' AND error = 241 " +
@@ -125,6 +137,20 @@ func (c *collector) applyPressureRates(m *metrics.ClickHouseDatabaseMetrics, eve
 
 	m.ReplicatedDataLossEvents = events[dataLossEvent]
 
+	if prev != nil {
+		c.rejectedSteps = append(c.rejectedSteps, countAt{at: now, n: int64(delta(rejectedInsertsEvent))})
+		kept, total := c.rejectedSteps[:0], int64(0)
+		for _, step := range c.rejectedSteps {
+			if step.at.After(now.Add(-rejectedWindow)) {
+				kept = append(kept, step)
+				total += step.n
+			}
+		}
+		c.rejectedSteps = kept
+		n := int(total)
+		m.RejectedInserts15m = &n
+	}
+
 	// Collect builds a fresh map each time and nothing else keeps it.
 	c.lastEvents = events
 }
@@ -146,11 +172,17 @@ func (c *collector) collectPressureReads(baseURL, user, password string, m *metr
 		}
 	}
 
-	if rows, err := c.query(baseURL, user, password, memoryLimitQuery); err == nil && len(rows) > 0 {
-		if limit := toInt64(rows[0]["value"]); limit > 0 {
-			m.MemoryLimitBytes = &limit
-			pct := float64(m.MemoryUsage) / float64(limit) * 100
-			m.MemoryUsagePercent = &pct
+	if limit := c.readLimit(baseURL, user, password, memoryLimitQuery, &c.memoryLimit); limit > 0 {
+		m.MemoryLimitBytes = &limit
+		pct := float64(m.MemoryUsage) / float64(limit) * 100
+		m.MemoryUsagePercent = &pct
+	}
+
+	if limit := c.readLimit(baseURL, user, password, partsDelayQuery, &c.partsDelay); limit > 0 {
+		m.PartsToDelayInsert = &limit
+		if m.MaxPartsInPartition != nil {
+			pct := float64(*m.MaxPartsInPartition) / float64(limit) * 100
+			m.MaxPartsInPartitionPercent = &pct
 		}
 	}
 
@@ -168,6 +200,18 @@ func (c *collector) collectPressureReads(baseURL, user, password string, m *metr
 	case errors.As(err, &qErr) && qErr.Code == codeUnknownTable:
 		m.MergesMemoryLimitFailures15m = intPtr(0) // part_log not created yet: none logged
 	}
+}
+
+// readLimit reads a server limit, keeping the last one read (into *last) for a
+// collection whose read fails: the percent a rule watches must not drop out when
+// the server is short of memory. 0 when it was never read.
+func (c *collector) readLimit(baseURL, user, password, query string, last *int64) int64 {
+	if rows, err := c.query(baseURL, user, password, query); err == nil && len(rows) > 0 {
+		if limit := toInt64(rows[0]["value"]); limit > 0 {
+			*last = limit
+		}
+	}
+	return *last
 }
 
 // collectMergeMemoryFailures counts the merges that failed on the memory limit in

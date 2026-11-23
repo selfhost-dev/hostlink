@@ -39,6 +39,12 @@ type collector struct {
 	partLogFrom      time.Time
 	lostReplicasSkip int
 	lostReplicasLast *int
+
+	// The last limits read (they change only on a config reload), kept for a
+	// collection whose read fails, and the refused-insert steps of the last 15 minutes.
+	memoryLimit   int64
+	partsDelay    int64
+	rejectedSteps []countAt
 }
 
 // baseEvents are the counters the collector has always read.

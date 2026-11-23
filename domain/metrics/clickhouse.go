@@ -112,6 +112,17 @@ type ClickHouseDatabaseMetrics struct {
 	MaxPartsInPartition      *int    `json:"max_parts_in_partition,omitempty"`
 	DelayedInsertsPerSecond  float64 `json:"delayed_inserts_per_second"`
 	RejectedInsertsPerSecond float64 `json:"rejected_inserts_per_second"`
+	// PartsToDelayInsert is the node's live parts_to_delay_insert, and
+	// MaxPartsInPartitionPercent max_parts_in_partition as a percent of it, for a
+	// rule that warns before inserts slow down whatever the node's limit; both
+	// omitted when the limit was never read.
+	PartsToDelayInsert         *int64   `json:"parts_to_delay_insert,omitempty"`
+	MaxPartsInPartitionPercent *float64 `json:"max_parts_in_partition_percent,omitempty"`
+	// RejectedInserts15m counts the inserted blocks refused over the last 15
+	// minutes, from the counter's steps between collections (a rule compares one
+	// value; a per-second rate reads 0 between a retrying writer's attempts);
+	// omitted on the first collection.
+	RejectedInserts15m *int `json:"rejected_inserts_15m,omitempty"`
 
 	// Memory: the server's effective limit (memory_usage is what it tracks), and
 	// merges that failed on the memory limit (part_log MergeParts, error 241)

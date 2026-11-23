@@ -386,3 +386,83 @@ func TestPressure_MergeMemoryFailuresOver15Minutes_ReadEveryCollection(t *testin
 	require.Len(t, reads, 1)
 	assert.Contains(t, reads[0], "event_time <= now() - INTERVAL 60 SECOND")
 }
+
+// selfhost#6024: the parts rule compares against the node's live
+// parts_to_delay_insert (selfhost#6012 moved it from 150 to 1000; older nodes
+// keep 150 until their config is rewritten).
+func TestPressure_MaxPartsInPartition_AsAPercentOfTheLiveDelayLimit(t *testing.T) {
+	srv := newRecordingServer(t, append([]route{okRoute("system.merge_tree_settings", `{"value":"1000"}`)},
+		pressureRoutes(map[string]int64{"Query": 10})...)...)
+
+	m, err := New().Collect(credForServer(srv.Server))
+
+	require.NoError(t, err)
+	require.NotNil(t, m.PartsToDelayInsert)
+	assert.Equal(t, int64(1000), *m.PartsToDelayInsert)
+	require.NotNil(t, m.MaxPartsInPartitionPercent)
+	assert.InDelta(t, 81.2, *m.MaxPartsInPartitionPercent, 0.01, "812 of 1000")
+
+	srv.setRoutes(append([]route{okRoute("system.merge_tree_settings", `{"value":"150"}`)},
+		pressureRoutes(map[string]int64{"Query": 10})...)...)
+	m, err = New().Collect(credForServer(srv.Server))
+	require.NoError(t, err)
+	assert.InDelta(t, 541.33, *m.MaxPartsInPartitionPercent, 0.01, "an older node is far past its limit")
+}
+
+// A limit read that fails under pressure keeps the last one read: the percent a
+// rule watches must not drop out when the server is short of memory.
+func TestPressure_LimitReadFails_TheLastLimitReadIsKept(t *testing.T) {
+	routes := append([]route{okRoute("system.merge_tree_settings", `{"value":"1000"}`)},
+		pressureRoutes(map[string]int64{"Query": 10})...)
+	routes[3] = okRoute("FROM system.metrics", `{"metric":"MemoryTracking","value":"5409678162"}`)
+	srv := newRecordingServer(t, routes...)
+	c := New().(*collector)
+	cred := credForServer(srv.Server)
+	_, err := c.Collect(cred)
+	require.NoError(t, err)
+
+	rewind(c)
+	failing := []route{
+		chErr("system.server_settings", http.StatusInternalServerError, 241, "Code: 241. MEMORY_LIMIT_EXCEEDED"),
+		chErr("system.merge_tree_settings", http.StatusInternalServerError, 241, "Code: 241. MEMORY_LIMIT_EXCEEDED"),
+	}
+	srv.setRoutes(append(failing, routes...)...)
+	m, err := c.Collect(cred)
+
+	require.NoError(t, err)
+	require.NotNil(t, m.MemoryUsagePercent)
+	assert.InDelta(t, 90.0, *m.MemoryUsagePercent, 0.01)
+	require.NotNil(t, m.MaxPartsInPartitionPercent)
+	assert.InDelta(t, 81.2, *m.MaxPartsInPartitionPercent, 0.01)
+}
+
+// selfhost#6024: refused inserts over the last 15 minutes, from the counter's
+// steps, so a writer that retries now and then still reads as refused.
+func TestPressure_RejectedInsertsOver15Minutes(t *testing.T) {
+	srv := newRecordingServer(t, pressureRoutes(map[string]int64{"Query": 10})...)
+	c := New().(*collector)
+	cred := credForServer(srv.Server)
+	m, err := c.Collect(cred)
+	require.NoError(t, err)
+	assert.Nil(t, m.RejectedInserts15m, "omitted on the first collection")
+
+	rewind(c)
+	srv.setRoutes(pressureRoutes(map[string]int64{"Query": 10, "RejectedInserts": 5})...)
+	m, err = c.Collect(cred)
+	require.NoError(t, err)
+	require.NotNil(t, m.RejectedInserts15m)
+	assert.Equal(t, 5, *m.RejectedInserts15m)
+
+	rewind(c)
+	m, err = c.Collect(cred) // no new refusal: the 5 are still in the window
+	require.NoError(t, err)
+	assert.Equal(t, 5, *m.RejectedInserts15m)
+
+	for i := range c.rejectedSteps {
+		c.rejectedSteps[i].at = c.rejectedSteps[i].at.Add(-16 * time.Minute)
+	}
+	rewind(c)
+	m, err = c.Collect(cred)
+	require.NoError(t, err)
+	assert.Equal(t, 0, *m.RejectedInserts15m, "older than 15 minutes")
+}
