@@ -11,10 +11,26 @@ import (
 	"hostlink/internal/httpclient"
 	"hostlink/internal/slowrequest"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/labstack/gommon/log"
 )
+
+// maxResultFieldBytes mirrors the control plane's
+// Tasks::TaskResultCaps::MAX_FIELD_BYTES (1 MiB). The server stores at most this
+// per field and refuses a whole body past MAX_REQUEST_BYTES (4 MiB) BEFORE it is
+// parsed. So a field past the cap is both unstored and — once output + error +
+// the JSON envelope cross 4 MiB — undeliverable: the server answers 413 and the
+// agent would retry a body the API can never accept. Capping here, at the one
+// chokepoint every result flows through, is what stops that loop (a chatty
+// ClickHouse log_stream looped a 413 for 1h43m on a paying box, #6016).
+const maxResultFieldBytes = 1 << 20
+
+// resultTruncationMarker matches the server's marker so a truncated result reads
+// the same whichever side made the cut, and whoever is watching the logs sees
+// that output was dropped rather than silently lost.
+const resultTruncationMarker = "\n[selfhost] output truncated at 1024 KiB"
 
 type TaskReporter interface {
 	Report(taskID string, result *TaskResult) error
@@ -117,7 +133,7 @@ func NewDefault() (*taskreporter, error) {
 }
 
 func (tr *taskreporter) Report(taskID string, result *TaskResult) error {
-	jsonData, err := json.Marshal(result)
+	jsonData, err := json.Marshal(capResult(result))
 	if err != nil {
 		return fmt.Errorf("failed to marshal task result: %w", err)
 	}
@@ -175,6 +191,34 @@ func (tr *taskreporter) Report(taskID string, result *TaskResult) error {
 		tr.sleepFunc(backoff)
 		backoff = min(backoff*time.Duration(tr.retryConfig.BackoffMultiplier), tr.retryConfig.MaxWaitTime)
 	}
+}
+
+// capResult returns a copy of result whose Output and Error are each bounded to
+// maxResultFieldBytes, so no result body can exceed what the API accepts. The
+// original is left untouched — the caller still owns the full output for its own
+// use (local store, logs).
+func capResult(result *TaskResult) *TaskResult {
+	capped := *result
+	capped.Output = capField(capped.Output)
+	capped.Error = capField(capped.Error)
+	return &capped
+}
+
+// capField bounds one field to maxResultFieldBytes, keeping the head (as the
+// server's TaskResultCaps does) and appending the marker when it cuts. The field
+// tasks that emit bulk output already bound it at the source (log_tail/log_stream
+// ship <= 1 MiB), so this almost never fires; it is the backstop that keeps a
+// runaway output from ever becoming a body the API refuses. ToValidUTF8 drops the
+// partial rune a byte-boundary cut can leave, so the JSON stays valid.
+func capField(s string) string {
+	if len(s) <= maxResultFieldBytes {
+		return s
+	}
+	keep := maxResultFieldBytes - len(resultTruncationMarker)
+	if keep < 0 {
+		keep = 0
+	}
+	return strings.ToValidUTF8(s[:keep], "") + resultTruncationMarker
 }
 
 func min(a, b time.Duration) time.Duration {
