@@ -26,6 +26,7 @@ const (
 	codeKeeperException = 999
 	// codeUnknownTable (UNKNOWN_TABLE) is what 26.8.34 raises for system.zookeeper on a node
 	// without a Keeper section (#285): the table is attached only when Keeper is configured.
+	// Also for system.part_log before its first row: the log table is created lazily.
 	codeUnknownTable = 60
 )
 
