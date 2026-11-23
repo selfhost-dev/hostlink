@@ -118,6 +118,10 @@ type ClickHouseDatabaseMetrics struct {
 	// since the previous collection; omitted on the first.
 	MemoryLimitBytes          *int64 `json:"memory_limit_bytes,omitempty"`
 	MergesMemoryLimitFailures *int   `json:"merges_memory_limit_failures,omitempty"`
+	// MergesMemoryLimitFailures15m counts the same failures over the 15 minutes that
+	// end a minute ago, read on every collection, for a rule like "3 in 15 minutes"
+	// (a rule compares one value); omitted if unread.
+	MergesMemoryLimitFailures15m *int `json:"merges_memory_limit_failures_15m,omitempty"`
 	// MemoryUsagePercent is memory_usage over memory_limit_bytes, for a rule that
 	// warns before the server refuses queries and merges; omitted without a limit.
 	MemoryUsagePercent *float64 `json:"memory_usage_percent,omitempty"`

@@ -74,6 +74,10 @@ const (
 	partLogLag = 60 * time.Second
 )
 
+// The same failures over the 15 minutes ending a minute ago (part_log's late flush).
+const mergeMemoryFailures15mQuery = "SELECT count() AS value FROM system.part_log WHERE event_type = 'MergeParts' AND error = 241 " +
+	"AND event_time > now() - INTERVAL 15 MINUTE - INTERVAL 60 SECOND AND event_time <= now() - INTERVAL 60 SECOND FORMAT JSONEachRow"
+
 func mergeMemoryFailuresQuery(from, to time.Time) string {
 	return fmt.Sprintf("SELECT count() AS value FROM system.part_log WHERE event_type = 'MergeParts' AND error = 241 "+
 		"AND event_time > toDateTime(%d) AND event_time <= toDateTime(%d) FORMAT JSONEachRow", from.Unix(), to.Unix())
@@ -155,6 +159,15 @@ func (c *collector) collectPressureReads(baseURL, user, password string, m *metr
 	}
 
 	c.collectMergeMemoryFailures(baseURL, user, password, m, now)
+
+	rows, err := c.query(baseURL, user, password, mergeMemoryFailures15mQuery)
+	var qErr *queryError
+	switch {
+	case err == nil && len(rows) > 0:
+		m.MergesMemoryLimitFailures15m = intPtr(rows[0]["value"])
+	case errors.As(err, &qErr) && qErr.Code == codeUnknownTable:
+		m.MergesMemoryLimitFailures15m = intPtr(0) // part_log not created yet: none logged
+	}
 }
 
 // collectMergeMemoryFailures counts the merges that failed on the memory limit in

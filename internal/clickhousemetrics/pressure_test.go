@@ -128,7 +128,7 @@ func TestPressure_FirstCollection_GaugesNowRatesZeroMergeFailuresOmitted(t *test
 	require.NotNil(t, m.OldestMutationAgeSeconds)
 	assert.Equal(t, 4200, *m.OldestMutationAgeSeconds)
 	assert.Nil(t, m.MergesMemoryLimitFailures, "the first collection only opens the window")
-	assert.Empty(t, srv.queriesWith("system.part_log"))
+	assert.Empty(t, srv.queriesWith("event_time > toDateTime("), "the first collection only opens the window")
 	assert.Equal(t, int64(3), m.ReplicatedDataLossEvents)
 	assert.Nil(t, m.TotalReplicas, "a standalone node sends no replication block")
 	assert.Empty(t, srv.queriesWith("total_replicas"))
@@ -285,7 +285,7 @@ func TestPressure_PartLogReadFails_KeyOmittedAndTheWindowIsKept(t *testing.T) {
 	m, err = c.Collect(cred)
 	require.NoError(t, err)
 	require.NotNil(t, m.MergesMemoryLimitFailures)
-	reads := srv.queriesWith("system.part_log")
+	reads := srv.queriesWith("event_time > toDateTime(") // the per-collection window reads
 	require.Len(t, reads, 2)
 	assert.Contains(t, reads[1], fmt.Sprintf("event_time > toDateTime(%d)", windowStart.Add(-10*time.Second).Unix()),
 		"the read after a failure starts where the failed one did")
@@ -368,4 +368,21 @@ func TestToFloat64(t *testing.T) {
 	assert.Equal(t, 6010753514.0, toFloat64("6010753514"))
 	assert.Equal(t, 0.0, toFloat64("not a number"))
 	assert.Equal(t, 0.0, toFloat64(nil))
+}
+
+// A rule compares one value to a threshold, so "at least 3 in 15 minutes" needs the
+// count over 15 minutes, read on every collection (ending a minute ago, like the
+// per-collection window, for part_log's late flush).
+func TestPressure_MergeMemoryFailuresOver15Minutes_ReadEveryCollection(t *testing.T) {
+	srv := newRecordingServer(t, append([]route{okRoute("INTERVAL 15 MINUTE", `{"value":"4"}`)},
+		pressureRoutes(map[string]int64{"Query": 10})...)...)
+
+	m, err := New().Collect(credForServer(srv.Server))
+
+	require.NoError(t, err)
+	require.NotNil(t, m.MergesMemoryLimitFailures15m, "read from the first collection on")
+	assert.Equal(t, 4, *m.MergesMemoryLimitFailures15m)
+	reads := srv.queriesWith("INTERVAL 15 MINUTE")
+	require.Len(t, reads, 1)
+	assert.Contains(t, reads[0], "event_time <= now() - INTERVAL 60 SECOND")
 }
