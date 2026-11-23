@@ -37,6 +37,10 @@ type collector struct {
 	lastEvents       map[string]int64
 	cpus             int
 	partLogFrom      time.Time
+	// activity.go: the newest customer query seen in query_log, and where the next
+	// incremental read starts (zero: read the last day).
+	customerQueryAt time.Time
+	queryLogFrom    time.Time
 	lostReplicasSkip int
 	lostReplicasLast *int
 
@@ -130,7 +134,7 @@ func (c *collector) Collect(cred credential.Credential) (metrics.ClickHouseDatab
 		}
 	}
 	m.ConnectionsCount = m.ConnectionsTotal
-	m.NativeConnections = &native
+	m.CustomerConnections = &native
 
 	// Cumulative event counters used for delta rate calculation
 	eventRows, err := c.query(baseURL, cred.Username, password, eventsQuery)
@@ -225,7 +229,7 @@ func (c *collector) Collect(cred credential.Credential) (metrics.ClickHouseDatab
 
 	c.applyPressureRates(&m, events, now)
 	c.collectPressureReads(baseURL, cred.Username, password, &m, now)
-	c.collectCustomerActivity(baseURL, cred.Username, password, &m)
+	c.collectCustomerActivity(baseURL, cred.Username, password, &m, now)
 
 	c.lastQueries = &curQueries
 	c.lastSelects = &curSelects
