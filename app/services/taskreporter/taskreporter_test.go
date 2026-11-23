@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestTaskReporter_New(t *testing.T) {
@@ -679,4 +680,68 @@ func setupTestReporterWithRetry(t *testing.T, serverURL string, keys *testKeys, 
 	}
 
 	return reporter
+}
+
+// #6016: the agent must never PUT a result body the API refuses. A field past the
+// server's 1 MiB cap is truncated (head-kept, marker appended) before it is sent,
+// so no task's output can loop a 413.
+func TestTaskReporter_CapsOversizedResult(t *testing.T) {
+	t.Run("capField leaves a field within the cap untouched", func(t *testing.T) {
+		s := strings.Repeat("a", 1024)
+		if got := capField(s); got != s {
+			t.Errorf("expected field unchanged, got %d bytes", len(got))
+		}
+	})
+
+	t.Run("capField bounds an oversized field and marks it", func(t *testing.T) {
+		got := capField(strings.Repeat("a", maxResultFieldBytes+5000))
+		if len(got) > maxResultFieldBytes {
+			t.Errorf("capped field is %d bytes, over the %d cap", len(got), maxResultFieldBytes)
+		}
+		if !strings.HasSuffix(got, resultTruncationMarker) {
+			t.Error("expected the truncation marker at the end")
+		}
+	})
+
+	t.Run("capField keeps the result valid UTF-8 across a multibyte boundary", func(t *testing.T) {
+		// '€' is 3 bytes; a cut landing mid-rune must not leave a partial rune.
+		got := capField(strings.Repeat("€", maxResultFieldBytes))
+		if !utf8.ValidString(got) {
+			t.Error("capped field is not valid UTF-8")
+		}
+	})
+
+	t.Run("Report sends a capped body and leaves the caller's result untouched", func(t *testing.T) {
+		keys := setupTestKeys(t)
+		var capturedBody []byte
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			capturedBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+
+		reporter := setupTestReporter(t, server.URL, keys)
+		original := &TaskResult{Status: "completed", Output: strings.Repeat("x", 5*1024*1024), ExitCode: 0}
+
+		if err := reporter.Report("task-123", original); err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		if len(capturedBody) > maxResultFieldBytes+4096 {
+			t.Errorf("sent body is %d bytes, not bounded to the field cap", len(capturedBody))
+		}
+		var sent TaskResult
+		if err := json.Unmarshal(capturedBody, &sent); err != nil {
+			t.Fatalf("failed to decode sent body: %v", err)
+		}
+		if len(sent.Output) > maxResultFieldBytes {
+			t.Errorf("sent output is %d bytes, over the %d cap", len(sent.Output), maxResultFieldBytes)
+		}
+		if !strings.HasSuffix(sent.Output, resultTruncationMarker) {
+			t.Error("expected the truncation marker on the sent output")
+		}
+		if len(original.Output) != 5*1024*1024 {
+			t.Error("Report mutated the caller's result")
+		}
+	})
 }
