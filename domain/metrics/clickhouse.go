@@ -82,4 +82,61 @@ type ClickHouseDatabaseMetrics struct {
 	// "broken" (broken, broken-on-start, broken-from-backup); omitted when
 	// system.detached_parts could not be read.
 	BrokenDetachedPartsCount *int `json:"broken_detached_parts_count,omitempty"`
+
+	// Pressure (selfhost#6023), additive: why a node is under pressure, for the
+	// console's S3, cache, insert and memory charts. Rates are per-second deltas
+	// between collections (0 on the first, like the rates above).
+
+	// S3 requests, all of them: ClickHouse counts every request under S3* and a
+	// disk's again under DiskS3*, so S3* alone is the total. Errors exclude
+	// throttling but include every other status >= 300, so the routine 404s of
+	// existence checks keep them above 0; throttled counts the 429/503
+	// (SlowDown) answers.
+	S3ReadRequestsPerSecond  float64 `json:"s3_read_requests_per_second"`
+	S3WriteRequestsPerSecond float64 `json:"s3_write_requests_per_second"`
+	S3ErrorsPerSecond        float64 `json:"s3_errors_per_second"`
+	S3ThrottledPerSecond     float64 `json:"s3_throttled_per_second"`
+
+	// Filesystem (read) cache: percent of bytes read from the cache rather than
+	// the source (100 when nothing was read) over the interval, or since the
+	// server started on the first collection; its size and size limit; and the
+	// bytes read from S3 (misses, uncached reads, table functions).
+	FsCacheHitRatio          float64 `json:"fs_cache_hit_ratio"`
+	FsCacheSizeBytes         int64   `json:"fs_cache_size_bytes"`
+	FsCacheSizeLimitBytes    int64   `json:"fs_cache_size_limit_bytes"`
+	ReadFromS3BytesPerSecond float64 `json:"read_from_s3_bytes_per_second"`
+
+	// Insert pressure: the largest active part count in any one partition (what
+	// parts_to_delay_insert / parts_to_throw_insert compare), and the inserted
+	// blocks delayed or refused (TOO_MANY_PARTS) for it.
+	MaxPartsInPartition      *int    `json:"max_parts_in_partition,omitempty"`
+	DelayedInsertsPerSecond  float64 `json:"delayed_inserts_per_second"`
+	RejectedInsertsPerSecond float64 `json:"rejected_inserts_per_second"`
+
+	// Memory: the server's effective limit (memory_usage is what it tracks), and
+	// merges that failed on the memory limit (part_log MergeParts, error 241)
+	// since the previous collection; omitted on the first.
+	MemoryLimitBytes          *int64 `json:"memory_limit_bytes,omitempty"`
+	MergesMemoryLimitFailures *int   `json:"merges_memory_limit_failures,omitempty"`
+
+	// Wait: the host's I/O wait (OS, percent of all cores, a ~1 s sample), and
+	// the time ClickHouse threads spent ready to run but not scheduled, per second
+	// per host core, as a percent: 100 is on average one waiting thread per core,
+	// and above 100 the host is oversubscribed (not capped).
+	IOWaitPercent  *float64 `json:"io_wait_percent,omitempty"`
+	CPUWaitPercent float64  `json:"cpu_wait_percent"`
+
+	// Replication block, sent only on a node with replicated tables (absent is
+	// "not applicable"). Semantics per selfhost docs/clickhouse-fe-integration.md §4.
+	TotalReplicas         *int `json:"total_replicas,omitempty"`
+	ActiveReplicas        *int `json:"active_replicas,omitempty"`
+	QueueSize             *int `json:"queue_size,omitempty"`
+	FutureParts           *int `json:"future_parts,omitempty"`
+	SessionExpiredTables  *int `json:"is_session_expired,omitempty"` // a count of tables
+	LostReplicas          *int `json:"lost_replicas,omitempty"`
+	NoquorumDetachedParts *int `json:"noquorum_detached_parts,omitempty"`
+	// ReplicatedDataLossEvents is system.events ReplicatedDataLoss, cumulative
+	// since the server started: parts replaced with an EMPTY part because no
+	// replica could serve them.
+	ReplicatedDataLossEvents int64 `json:"replicated_data_loss_events"`
 }

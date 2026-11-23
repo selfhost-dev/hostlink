@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -29,10 +30,36 @@ type collector struct {
 	lastInsertRows *int64
 	lastSelectRows *int64
 	lastTime       time.Time
+
+	// Pressure (pressure.go): the previous counters, the host's cores (the agent
+	// runs on the database host), where the next part_log window starts, and the
+	// lost-replica count reused between its reads.
+	lastEvents       map[string]int64
+	cpus             int
+	partLogFrom      time.Time
+	lostReplicasSkip int
+	lostReplicasLast *int
 }
 
+// baseEvents are the counters the collector has always read.
+var baseEvents = []string{
+	"Query", "SelectQuery", "InsertQuery", "FailedQuery", "InsertedRows", "SelectedRows",
+	"MarkCacheHits", "MarkCacheMisses",
+}
+
+// eventsQuery reads every counter in one snapshot. system.events lists only
+// counters that are non-zero, so an absent one reads as 0.
+var eventsQuery = func() string {
+	names := append(append([]string{}, baseEvents...), pressureEvents...)
+	quoted := make([]string, len(names))
+	for i, n := range names {
+		quoted[i] = "'" + n + "'"
+	}
+	return "SELECT event, value FROM system.events WHERE event IN (" + strings.Join(quoted, ",") + ") FORMAT JSONEachRow"
+}()
+
 func New() Collector {
-	return &collector{client: &http.Client{Timeout: 10 * time.Second}}
+	return &collector{client: &http.Client{Timeout: 10 * time.Second}, cpus: runtime.NumCPU()}
 }
 
 func (c *collector) Collect(cred credential.Credential) (metrics.ClickHouseDatabaseMetrics, error) {
@@ -70,7 +97,7 @@ func (c *collector) Collect(cred credential.Credential) (metrics.ClickHouseDatab
 
 	// Point-in-time metrics from system.metrics
 	sysRows, err := c.query(baseURL, cred.Username, password,
-		"SELECT metric, value FROM system.metrics WHERE metric IN ('TCPConnection','HTTPConnection','MemoryTracking','BackgroundMergesAndMutationsPoolTask','BackgroundPoolTask') FORMAT JSONEachRow")
+		"SELECT metric, value FROM system.metrics WHERE metric IN ('TCPConnection','HTTPConnection','MemoryTracking','BackgroundMergesAndMutationsPoolTask','BackgroundPoolTask','FilesystemCacheSize','FilesystemCacheSizeLimit') FORMAT JSONEachRow")
 	if err != nil {
 		return m, fmt.Errorf("system.metrics: %w", err)
 	}
@@ -84,13 +111,16 @@ func (c *collector) Collect(cred credential.Credential) (metrics.ClickHouseDatab
 			m.MemoryUsage = val
 		case "BackgroundMergesAndMutationsPoolTask", "BackgroundPoolTask":
 			m.BackgroundMergesCount += int(val)
+		case "FilesystemCacheSize":
+			m.FsCacheSizeBytes = val
+		case "FilesystemCacheSizeLimit":
+			m.FsCacheSizeLimitBytes = val
 		}
 	}
 	m.ConnectionsCount = m.ConnectionsTotal
 
 	// Cumulative event counters used for delta rate calculation
-	eventRows, err := c.query(baseURL, cred.Username, password,
-		"SELECT event, value FROM system.events WHERE event IN ('Query','SelectQuery','InsertQuery','FailedQuery','InsertedRows','SelectedRows','MarkCacheHits','MarkCacheMisses') FORMAT JSONEachRow")
+	eventRows, err := c.query(baseURL, cred.Username, password, eventsQuery)
 	if err != nil {
 		return m, fmt.Errorf("system.events: %w", err)
 	}
@@ -140,6 +170,7 @@ func (c *collector) Collect(cred credential.Credential) (metrics.ClickHouseDatab
 	replicaRows, replicaErr := c.query(baseURL, cred.Username, password, replicasQuery)
 	applyReplication(&m, replicaRows, replicaErr)
 	reconcileKeeper(&m)
+	c.collectReplicationBlock(baseURL, cred.Username, password, &m)
 
 	// Mark cache: ratio of hits to total lookups.
 	// Zero lookups (idle or insert-only node — inserts and system.* queries never
@@ -178,6 +209,9 @@ func (c *collector) Collect(cred credential.Credential) (metrics.ClickHouseDatab
 			}
 		}
 	}
+
+	c.applyPressureRates(&m, events, now)
+	c.collectPressureReads(baseURL, cred.Username, password, &m, now)
 
 	c.lastQueries = &curQueries
 	c.lastSelects = &curSelects
@@ -249,6 +283,21 @@ func toInt64(v any) int64 {
 	case string:
 		n, _ := strconv.ParseInt(x, 10, 64)
 		return n
+	}
+	return 0
+}
+
+func toFloat64(v any) float64 {
+	switch x := v.(type) {
+	case float64:
+		return x
+	case int64:
+		return float64(x)
+	case int:
+		return float64(x)
+	case string:
+		f, _ := strconv.ParseFloat(x, 64)
+		return f
 	}
 	return 0
 }

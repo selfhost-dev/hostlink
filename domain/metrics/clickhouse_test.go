@@ -123,3 +123,61 @@ func TestClickHouseStatusVocabulary(t *testing.T) {
 	assert.Equal(t, "not_applicable", ClickHouseReplicationNotApplicable)
 	assert.Equal(t, "unknown", ClickHouseReplicationUnknown)
 }
+
+// selfhost#6023: the pressure keys a clickhouse.database payload carries for the
+// console's S3, cache, insert-pressure, memory and wait charts. Always sent, as numbers.
+var pressureClickHouseKeys = []string{
+	"s3_read_requests_per_second",
+	"s3_write_requests_per_second",
+	"s3_errors_per_second",
+	"s3_throttled_per_second",
+	"fs_cache_hit_ratio",
+	"fs_cache_size_bytes",
+	"fs_cache_size_limit_bytes",
+	"read_from_s3_bytes_per_second",
+	"delayed_inserts_per_second",
+	"rejected_inserts_per_second",
+	"cpu_wait_percent",
+	"replicated_data_loss_events",
+}
+
+// Sent only when read: absent means "not read" (or, for the replication block, "not
+// a replicated node"), never 0.
+var optionalPressureClickHouseKeys = []string{
+	"max_parts_in_partition",
+	"memory_limit_bytes",
+	"merges_memory_limit_failures",
+	"io_wait_percent",
+	"total_replicas",
+	"active_replicas",
+	"queue_size",
+	"future_parts",
+	"is_session_expired",
+	"lost_replicas",
+	"noquorum_detached_parts",
+}
+
+func TestClickHouseDatabaseMetrics_JSON_PressureKeys(t *testing.T) {
+	out := marshalToMap(t, ClickHouseDatabaseMetrics{})
+	for _, key := range pressureClickHouseKeys {
+		require.Contains(t, out, key)
+		assert.Equal(t, "number", jsonKind(out[key]), key)
+	}
+	for _, key := range optionalPressureClickHouseKeys {
+		assert.NotContains(t, out, key, "unset %s must be omitted, not sent as 0", key)
+	}
+
+	n, f, big := 7, 12.5, int64(6_010_753_514)
+	set := marshalToMap(t, ClickHouseDatabaseMetrics{
+		MaxPartsInPartition: &n, MemoryLimitBytes: &big, MergesMemoryLimitFailures: &n, IOWaitPercent: &f,
+		TotalReplicas: &n, ActiveReplicas: &n, QueueSize: &n, FutureParts: &n, SessionExpiredTables: &n,
+		LostReplicas: &n, NoquorumDetachedParts: &n,
+	})
+	for _, key := range optionalPressureClickHouseKeys {
+		require.Contains(t, set, key)
+		assert.Equal(t, "number", jsonKind(set[key]), key)
+	}
+	for key, kind := range legacyClickHouseKeys {
+		assert.Equal(t, kind, jsonKind(set[key]), "legacy %s keeps its type", key)
+	}
+}
