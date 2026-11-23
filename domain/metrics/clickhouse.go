@@ -46,6 +46,18 @@ type ClickHouseDatabaseMetrics struct {
 	InsertedRowsPerSecond  float64 `json:"inserted_rows_per_second"`
 	MemoryUsage            int64   `json:"memory_usage"`
 	BackgroundMergesCount  int     `json:"background_merges_count"`
+
+	// Customer activity, for a "stop when idle" policy (selfhost#6038). The agent
+	// and the platform query as the platform user, which never counts.
+	// CustomerQueryIdleSeconds is the time since the last query any other user
+	// started (query_log, the last day), capped at the server's uptime so a start
+	// restarts the clock; CustomerRunningQueries counts their running queries
+	// (system.processes); both omitted if unread. NativeConnections counts the
+	// native, MySQL and PostgreSQL protocol connections, which only customers
+	// open: the platform connects over HTTP.
+	CustomerQueryIdleSeconds *int `json:"customer_query_idle_seconds,omitempty"`
+	CustomerRunningQueries   *int `json:"customer_running_queries,omitempty"`
+	NativeConnections        *int `json:"native_connections,omitempty"`
 	// ReplicationDelay and ReplicationLagSeconds are max(absolute_delay) over
 	// system.replicas. On a node with no replicated table that is 0, which is
 	// "not applicable", not a measurement: read ReplicationStatus to tell.
