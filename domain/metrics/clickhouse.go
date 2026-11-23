@@ -46,6 +46,22 @@ type ClickHouseDatabaseMetrics struct {
 	InsertedRowsPerSecond  float64 `json:"inserted_rows_per_second"`
 	MemoryUsage            int64   `json:"memory_usage"`
 	BackgroundMergesCount  int     `json:"background_merges_count"`
+
+	// Customer activity, for a "stop when idle" policy (selfhost#6038). The agent
+	// and the platform query as the platform user, which never counts.
+	// CustomerIdleSeconds is the time since the last customer activity: a query
+	// another user started (query_log) or a write to a table outside system (the
+	// newest active part, which a Kafka-engine table or a refreshable view writes
+	// with no query), capped at the server's uptime so a start restarts the clock
+	// and at a day. CustomerRunningQueries counts their running queries
+	// (system.processes), CustomerMerges the merges and mutations running on
+	// tables outside system. All omitted if unread. CustomerConnections counts the
+	// native, MySQL and PostgreSQL protocol connections; the platform's own
+	// connections are HTTP, except a native backup or a write probe while it runs.
+	CustomerIdleSeconds    *int `json:"customer_idle_seconds,omitempty"`
+	CustomerRunningQueries *int `json:"customer_running_queries,omitempty"`
+	CustomerMerges         *int `json:"customer_merges,omitempty"`
+	CustomerConnections    *int `json:"customer_connections,omitempty"`
 	// ReplicationDelay and ReplicationLagSeconds are max(absolute_delay) over
 	// system.replicas. On a node with no replicated table that is 0, which is
 	// "not applicable", not a measurement: read ReplicationStatus to tell.

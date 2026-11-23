@@ -37,6 +37,10 @@ type collector struct {
 	lastEvents       map[string]int64
 	cpus             int
 	partLogFrom      time.Time
+	// activity.go: the newest customer query seen in query_log, and where the next
+	// incremental read starts (zero: read the last day).
+	customerQueryAt time.Time
+	queryLogFrom    time.Time
 	lostReplicasSkip int
 	lostReplicasLast *int
 
@@ -103,16 +107,22 @@ func (c *collector) Collect(cred credential.Credential) (metrics.ClickHouseDatab
 
 	// Point-in-time metrics from system.metrics
 	sysRows, err := c.query(baseURL, cred.Username, password,
-		"SELECT metric, value FROM system.metrics WHERE metric IN ('TCPConnection','HTTPConnection','MemoryTracking','BackgroundMergesAndMutationsPoolTask','BackgroundPoolTask','FilesystemCacheSize','FilesystemCacheSizeLimit') FORMAT JSONEachRow")
+		"SELECT metric, value FROM system.metrics WHERE metric IN ('TCPConnection','HTTPConnection','MySQLConnection','PostgreSQLConnection','MemoryTracking','BackgroundMergesAndMutationsPoolTask','BackgroundPoolTask','FilesystemCacheSize','FilesystemCacheSizeLimit') FORMAT JSONEachRow")
 	if err != nil {
 		return m, fmt.Errorf("system.metrics: %w", err)
 	}
+	native := 0
 	for _, row := range sysRows {
 		metricName, _ := row["metric"].(string)
 		val := toInt64(row["value"])
 		switch metricName {
 		case "TCPConnection", "HTTPConnection":
 			m.ConnectionsTotal += int(val)
+			if metricName == "TCPConnection" {
+				native += int(val)
+			}
+		case "MySQLConnection", "PostgreSQLConnection":
+			native += int(val)
 		case "MemoryTracking":
 			m.MemoryUsage = val
 		case "BackgroundMergesAndMutationsPoolTask", "BackgroundPoolTask":
@@ -124,6 +134,7 @@ func (c *collector) Collect(cred credential.Credential) (metrics.ClickHouseDatab
 		}
 	}
 	m.ConnectionsCount = m.ConnectionsTotal
+	m.CustomerConnections = &native
 
 	// Cumulative event counters used for delta rate calculation
 	eventRows, err := c.query(baseURL, cred.Username, password, eventsQuery)
@@ -218,6 +229,7 @@ func (c *collector) Collect(cred credential.Credential) (metrics.ClickHouseDatab
 
 	c.applyPressureRates(&m, events, now)
 	c.collectPressureReads(baseURL, cred.Username, password, &m, now)
+	c.collectCustomerActivity(baseURL, cred.Username, password, &m, now)
 
 	c.lastQueries = &curQueries
 	c.lastSelects = &curSelects
