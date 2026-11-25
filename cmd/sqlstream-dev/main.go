@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -283,6 +284,7 @@ func probeCmd(args []string) error {
 	cancelAfter := fs.Duration("cancel-after", 0, "send Cancel this long after the run starts")
 	quiet := fs.Bool("quiet", false, "print only the summary")
 	show := fs.Bool("show-rows", false, "print every row received, one JSON array a line")
+	ticketCmd := fs.String("ticket-cmd", "", "a shell command that prints the run's ticket, given BPK and RUN in its environment (the backend's own minting)")
 	var t ticketFlags
 	t.bind(fs)
 	_ = fs.Parse(args)
@@ -321,8 +323,21 @@ func probeCmd(args []string) error {
 			return err
 		}
 		runPid := newRunPid()
-		tk, err := k.ticket(t, runPid, bpk)
-		if err != nil {
+		var tk string
+		if *ticketCmd != "" {
+			cmd := exec.Command("sh", "-c", *ticketCmd)
+			cmd.Env = append(os.Environ(), "BPK="+bpk, "RUN="+runPid)
+			cmd.Stderr = os.Stderr
+			out, err := cmd.Output()
+			if err != nil {
+				return fmt.Errorf("-ticket-cmd: %w", err)
+			}
+			lines := strings.Fields(strings.TrimSpace(string(out)))
+			if len(lines) == 0 {
+				return errors.New("-ticket-cmd printed nothing")
+			}
+			tk = lines[len(lines)-1]
+		} else if tk, err = k.ticket(t, runPid, bpk); err != nil {
 			return err
 		}
 		start := time.Now()
