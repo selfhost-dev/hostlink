@@ -12,6 +12,7 @@ import (
 	"errors"
 	"math/rand/v2"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -312,8 +313,21 @@ func (s *Service) dispatch(l sender, f wire.Frame) {
 	case wire.KindGone:
 		r.stop("browser_gone")
 	case wire.KindError:
-		r.stop("relay_refused")
+		r.stop(relayCode(f.Body))
 	}
+}
+
+var codePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,39}$`)
+
+// relayCode is a relay refusal's code (run_too_large ...), or relay_refused when it names none.
+func relayCode(body []byte) string {
+	var b struct {
+		Code string `json:"code"`
+	}
+	if json.Unmarshal(body, &b) == nil && codePattern.MatchString(b.Code) {
+		return b.Code
+	}
+	return "relay_refused"
 }
 
 func (s *Service) reject(l sender, runPid, code string) {
@@ -411,7 +425,11 @@ func (s *Service) serve(ctx context.Context, r *run) {
 		if why == "cancelled" {
 			s.reject(l, claims.Run, "cancelled")
 		}
-		go s.report(claims.Run, Outcome{Status: "cancelled", Reason: why}, 3)
+		o := Outcome{Status: "cancelled", Reason: why}
+		if why != "cancelled" {
+			o.Class = why
+		}
+		go s.report(claims.Run, o, 3)
 		return
 	}
 	env, err := crypto.OpenSealedEnv(claims.Sealed, claims.Run, s.cfg.PrivateKey)

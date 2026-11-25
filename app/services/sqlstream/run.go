@@ -330,6 +330,9 @@ func (r *run) finish(err error) Outcome {
 	case why != "" && (err == nil || errors.Is(err, errStopped) || errors.Is(err, context.Canceled) || cancelledByEngine || errors.Is(err, errUnreachable)):
 		// Stopped from outside: the rows already sent stay.
 		o.Status, o.Reason, o.Truncated = "cancelled", why, false
+		if why != "cancelled" {
+			o.Class = why // browser_gone, relay_lost or the relay's refusal: the backend keeps it as the class
+		}
 		if why == "cancelled" {
 			_ = r.flush()
 			r.end(o)

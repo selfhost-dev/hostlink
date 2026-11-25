@@ -366,7 +366,7 @@ func TestRunCancel(t *testing.T) {
 	if took := time.Since(start); took > time.Second {
 		t.Fatalf("cancel took %v", took)
 	}
-	if o.Status != "cancelled" || o.Reason != "cancelled" {
+	if o.Status != "cancelled" || o.Reason != "cancelled" || o.Class != "" {
 		t.Fatalf("outcome %+v", o)
 	}
 	if qid := <-killed; qid != testRun+"_1" {
@@ -383,7 +383,7 @@ func TestRunCancel(t *testing.T) {
 	time.Sleep(60 * time.Millisecond)
 	before := out.count()
 	r.stop("browser_gone")
-	if o := <-done; o.Status != "cancelled" || o.Reason != "browser_gone" {
+	if o := <-done; o.Status != "cancelled" || o.Reason != "browser_gone" || o.Class != "browser_gone" {
 		t.Fatalf("gone %+v", o)
 	}
 	if after := out.count(); after > before+1 {

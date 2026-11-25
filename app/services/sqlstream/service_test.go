@@ -389,3 +389,16 @@ func TestServiceCancelWhileQueued(t *testing.T) {
 		t.Fatalf("outcome %+v", o)
 	}
 }
+
+func TestRelayCode(t *testing.T) {
+	for body, want := range map[string]string{
+		`{"code":"run_too_large"}`: "run_too_large",
+		`{"code":"Bad Code"}`:      "relay_refused",
+		`not json`:                 "relay_refused",
+		`{}`:                       "relay_refused",
+	} {
+		if got := relayCode([]byte(body)); got != want {
+			t.Errorf("relayCode(%s) = %s, want %s", body, got, want)
+		}
+	}
+}
