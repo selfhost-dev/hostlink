@@ -397,3 +397,34 @@ func TestUnexpectedKindClosesTheConnection(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// After a network drop the old socket can look open to the relay until its read deadline; a
+// resume from a newer connection of the same person takes the run over at once.
+func TestResumeFromANewConnectionWhileTheOldOneLooksOpen(t *testing.T) {
+	f := newFixture(t, nil)
+	a := f.agent(agent1)
+	old := f.browser(user1)
+	send(t, old, wire.KindRun, wire.Header{Run: run1}, []byte(f.ticket(user1, agent1, run1, "j")))
+	recv(t, a)
+
+	fresh := f.browser(user1) // the old one never closed
+	send(t, fresh, wire.KindResume, wire.Header{Run: run1, Seq: wire.SeqOf(0)}, nil)
+	if got := recv(t, a); got.Kind != wire.KindResume {
+		t.Fatalf("agent got %s", got.Kind)
+	}
+	send(t, a, wire.KindData, wire.Header{Run: run1, Seq: wire.SeqOf(1), T: wire.TypeRows}, []byte{1})
+	if got := recv(t, fresh); got.Kind != wire.KindData {
+		t.Fatalf("the new connection got %s", got.Kind)
+	}
+	// The old connection's cancel no longer reaches the run; the new one's does.
+	send(t, old, wire.KindCancel, wire.Header{Run: run1}, nil)
+	send(t, fresh, wire.KindCancel, wire.Header{Run: run1}, nil)
+	if got := recv(t, a); got.Kind != wire.KindCancel {
+		t.Fatalf("agent got %s", got.Kind)
+	}
+	// A resume on the connection that already holds the run is not one.
+	send(t, fresh, wire.KindResume, wire.Header{Run: run1, Seq: wire.SeqOf(0)}, nil)
+	if got := code(t, recv(t, fresh)); got != CodeRunUnknown {
+		t.Fatalf("got %s", got)
+	}
+}

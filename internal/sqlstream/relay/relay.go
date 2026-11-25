@@ -482,7 +482,10 @@ func (s *Server) seen(jti string, now time.Time) bool {
 func (s *Server) resume(c *conn, frame wire.Frame, msg []byte) {
 	s.mu.Lock()
 	r := s.runs[frame.Header.Run]
-	if r == nil || r.user != c.sub || (r.browser != nil && !r.browser.closed) {
+	// The run's own person, from any connection: after a network drop the old socket can look open
+	// here until its read deadline, longer than the grace, so a resume from a newer connection of
+	// the same person takes the run over (the old one gets no more of its frames).
+	if r == nil || r.user != c.sub || r.browser == c {
 		s.mu.Unlock()
 		s.refuse(c, frame.Header.Run, CodeRunUnknown)
 		return
