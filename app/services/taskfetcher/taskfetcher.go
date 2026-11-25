@@ -85,7 +85,7 @@ func (tf *taskfetcher) Fetch() ([]task.Task, error) {
 	if err := tf.signer.SignRequest(req); err != nil {
 		return nil, fmt.Errorf("failed to sign request: %w", err)
 	}
-	req.Header.Set(httpclient.CapabilitiesHeader, httpclient.Capabilities)
+	req.Header.Set(httpclient.CapabilitiesHeader, httpclient.CapabilityList())
 
 	started := time.Now()
 	tasks, err := tf.fetch(req)

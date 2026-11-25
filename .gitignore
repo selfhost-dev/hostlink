@@ -123,3 +123,6 @@ __debug_bin
 
 # Keep the lock file - it should be committed!
 # .terraform.lock.hcl
+
+# The SQL stream test vectors regenerate their own RSA test key (SQLSTREAM_WRITE_VECTORS=1); never commit a private key.
+internal/sqlstream/testdata/agent_rsa_test_key.pem

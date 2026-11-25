@@ -15,6 +15,7 @@ import (
 	"hostlink/app/services/metrics"
 	"hostlink/app/services/requestsigner"
 	"hostlink/app/services/rollout"
+	"hostlink/app/services/sqlstream"
 	"hostlink/app/services/taskfetcher"
 	"hostlink/app/services/taskreporter"
 	"hostlink/app/services/updatecheck"
@@ -24,6 +25,8 @@ import (
 	"hostlink/cmd/upgrade"
 	"hostlink/config"
 	"hostlink/config/appconf"
+	"hostlink/internal/apiserver"
+	"hostlink/internal/crypto"
 	"hostlink/internal/dbconn"
 	"hostlink/internal/httpclient"
 	"hostlink/internal/sdnotify"
@@ -352,6 +355,11 @@ func runServer(ctx context.Context, cmd *cli.Command) error {
 			startSelfUpdateJob(jobCtx)
 		}
 
+		// The SQL stream path's query service (gated by config; the backend decides per agent)
+		if appconf.SQLStreamEnabled() {
+			startSQLStream(jobCtx)
+		}
+
 		<-jobCtx.Done()
 	}()
 
@@ -434,6 +442,40 @@ func logStaleLoopState(snap localtaskstore.Snapshot, logf func(format string, ar
 	}
 	logf("startup: recovered stale loop state: %d in-flight task(s), %d received-not-started, %d unacked final(s), %d unacked output range(s)",
 		inFlight, len(snap.ReceivedNotStarted), len(snap.UnackedFinals), len(snap.UnackedOutput))
+}
+
+// startSQLStream runs the SQL stream path's query service (app/services/sqlstream) beside the
+// task runner, once the agent is registered.
+func startSQLStream(ctx context.Context) {
+	state := agentstate.New(appconf.AgentStatePath())
+	if err := state.Load(); err != nil {
+		log.Printf("sql stream: agent state not loaded: %v", err)
+		return
+	}
+	agentID := state.GetAgentID()
+	if agentID == "" {
+		log.Printf("sql stream: agent ID not available, skipping")
+		return
+	}
+	key, err := crypto.LoadPrivateKey(appconf.AgentPrivateKeyPath())
+	if err != nil {
+		log.Printf("sql stream: agent key not loaded: %v", err)
+		return
+	}
+	client, err := apiserver.NewDefaultClient()
+	if err != nil {
+		log.Printf("sql stream: control plane client: %v", err)
+		return
+	}
+	httpclient.AddCapability(sqlstream.Capability)
+	svc := sqlstream.New(sqlstream.Config{
+		AgentID:       agentID,
+		PrivateKey:    key,
+		API:           sqlstream.NewBackendAPI(client, agentID, key),
+		ClickHouseURL: appconf.SQLStreamClickHouseURL(),
+		UsersDir:      appconf.SQLStreamUsersDir(),
+	})
+	go svc.Run(ctx)
 }
 
 func startSelfUpdateJob(ctx context.Context) {

@@ -103,6 +103,31 @@ func SelfUpdateEnabled() bool {
 	}
 }
 
+// SQLStreamEnabled: the SQL stream path's query service (sql-stream-v1). On unless
+// HOSTLINK_SQL_STREAM_ENABLED is false; the backend still decides for each agent, by handing it a
+// session or not.
+func SQLStreamEnabled() bool {
+	return parseBoolEnabled("HOSTLINK_SQL_STREAM_ENABLED", true)
+}
+
+// SQLStreamClickHouseURL: the database's HTTP port on loopback (HOSTLINK_SQL_STREAM_CLICKHOUSE_URL,
+// for a test harness).
+func SQLStreamClickHouseURL() string {
+	if v := strings.TrimSpace(os.Getenv("HOSTLINK_SQL_STREAM_CLICKHOUSE_URL")); v != "" {
+		return v
+	}
+	return "http://127.0.0.1:8123"
+}
+
+// SQLStreamUsersDir: ClickHouse's users.d, where the SQL editor's account files are
+// (HOSTLINK_SQL_STREAM_USERS_D, for a test harness).
+func SQLStreamUsersDir() string {
+	if v := strings.TrimSpace(os.Getenv("HOSTLINK_SQL_STREAM_USERS_D")); v != "" {
+		return v
+	}
+	return "/etc/clickhouse-server/users.d"
+}
+
 // WebSocketEnabled returns whether the agent WebSocket client is enabled.
 // Controlled by HOSTLINK_WS_ENABLED (default: false).
 func WebSocketEnabled() bool {
