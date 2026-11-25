@@ -26,3 +26,18 @@ _Avoid_: publishing, releasing
 Installing an exact release tag with the installer's `--version` flag, without
 reading `/releases/latest`.
 _Avoid_: versioned install
+
+**Query service**:
+The agent's module that runs SQL editor statements from tickets and streams their rows to a
+browser tab (`app/services/sqlstream`, sql-stream-v1).
+_Avoid_: query runner, SQL job
+
+**Relay**:
+The service that passes the SQL stream path's frames between browser tabs and agents
+(`cmd/sqlrelay`). It reads headers and signed tickets, never a sealed body, and stores nothing.
+_Avoid_: proxy, gateway
+
+**Ticket**:
+A token the backend signs for one SQL run: the agent, the database, the limits, the browser
+tab's key, and the statement sealed for that agent. Valid 60 seconds, used once.
+_Avoid_: run token
