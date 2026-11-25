@@ -369,6 +369,14 @@ func TestServiceCancelWhileQueued(t *testing.T) {
 		}
 	}
 	tb.send(wire.KindCancel, wire.Header{Run: "sqr_00000000000000000013"}, nil)
+	// The cancel goes through the relay; free the workers only once the agent has it, or a worker
+	// can take the run first, and then it is cancelled while it runs instead.
+	waitFor(t, func() bool {
+		h.svc.mu.Lock()
+		r := h.svc.runs["sqr_00000000000000000013"]
+		h.svc.mu.Unlock()
+		return r != nil && r.stoppedWhy() == "cancelled"
+	})
 	// Its refusal comes once a worker is free.
 	release <- struct{}{}
 	release <- struct{}{}
