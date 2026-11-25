@@ -115,8 +115,8 @@ func TestTaskFetcher_Fetch(t *testing.T) {
 				t.Errorf("expected header %s to be set", header)
 			}
 		}
-		if got := capturedRequest.Header.Get(httpclient.CapabilitiesHeader); got != httpclient.Capabilities {
-			t.Errorf("%s = %q, want %q", httpclient.CapabilitiesHeader, got, httpclient.Capabilities)
+		if got := capturedRequest.Header.Get(httpclient.CapabilitiesHeader); got != httpclient.CapabilityList() {
+			t.Errorf("%s = %q, want %q", httpclient.CapabilitiesHeader, got, httpclient.CapabilityList())
 		}
 	})
 
