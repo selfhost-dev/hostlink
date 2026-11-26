@@ -35,6 +35,13 @@ browser tab --wss--> relay (cmd/sqlrelay) <--wss-- agent's query service --http-
 - Runs as the read account with the settings its profile v2 lets it change in read-only mode:
   `framing_output_format`, `send_profile_events=0`, `http_wait_end_of_query=0`, `limit`
   (rows + 1), `max_execution_time`. ClickHouse 26.8 or later.
+- Also sends the HTTP interface's `buffer_size=0`, which is not a setting, so read-only mode lets
+  it through: the profile keeps the job path's first 10 MiB of an answer in the server's memory
+  (`http_response_buffer_size`, which read-only mode refuses to change), and that would hold this
+  path's progress and rows until the statement ended.
+- A statement refused before its first packet comes back as an HTTP error; with framing on
+  (26.8.47) its body is still one exception packet, which the agent opens. Plain-text errors (a
+  login, a refused setting) are read as they are.
 - Two workers (the account's `max_concurrent_queries_for_user`), a queue of 8, `busy` past that.
 - Back-pressure: stops reading from ClickHouse while 4 MiB it sent is unacked.
 - Cancel drops the request (ClickHouse cancels a read whose client goes, within about 0.3 s with
@@ -88,4 +95,11 @@ the backend's job-path parser on every edge case tried (escapes, NULL against th
 arrays and maps as written, 64-bit and 128-bit extremes, invalid UTF-8); 10,000 rows of nine
 columns in 1.3 s; progress every 0.5 s over a 150-million-row scan; Cancel stopping the query
 on the engine about 0.3 s after it was sent; a 48-second query finishing where the job path
-stops at 30 s.
+stops at 30 s. That QA run used a hand-made account without the profile's 10 MiB buffer.
+
+On 2026-11-26, on QA with ClickHouse 26.8.47.5 and the read account's exact profile (UAT console,
+the real relay and agent v0.8.64): every packet waited for the end of the statement (one progress
+frame, at the end) and a refused statement read as `internal` ("The run didn't finish"). With
+`buffer_size=0` and the packet opened, through a local relay and agent as an account with that
+same profile: progress every 0.5 to 0.6 s over 150 million rows, and the unknown column's own
+words as class `engine`, code 47, position 48.

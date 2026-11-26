@@ -298,6 +298,30 @@ func TestRunEngineError(t *testing.T) {
 	if o := execute(r); o.Class != "login_failed" || o.Status != "failed" {
 		t.Fatalf("login %+v", o)
 	}
+
+	// Refused before its first packet with framing on (26.8.47, seen on QA): an HTTP error whose
+	// body is one exception packet. The tab gets ClickHouse's number and words, not the packet
+	// around them (read as plain text, it was class internal: "The run didn't finish").
+	framed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson; payload=string")
+		w.Header().Set("X-ClickHouse-Exception-Code", "47")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"packet":"exception","exception":"Code: 47. DB::Exception: Unknown expression or function identifier ` +
+			"`eventt`" + ` in scope SELECT 1. Maybe you meant: ['event']. (UNKNOWN_IDENTIFIER) (version 26.8.47.5 (official build))"}` + "\n"))
+	}))
+	defer framed.Close()
+	r, out, browser = newTestRun(t, framed.URL, token.Limits{Rows: 10, Bytes: 1 << 20, Secs: 60}, 64<<20, nil)
+	if o := execute(r); o.Status != "failed" || o.Class != "engine" || o.Code != "47" {
+		t.Fatalf("framed refusal %+v", o)
+	}
+	frames = browser.open(out.all())
+	last = frames[len(frames)-1]
+	msg, _ := last.body["message"].(string)
+	if last.t != wire.TypeError || last.body["class"] != "engine" || last.body["code"] != "47" ||
+		!strings.HasPrefix(msg, "Unknown expression or function identifier `eventt`") ||
+		strings.Contains(msg, "packet") || strings.Contains(msg, "UNKNOWN_IDENTIFIER") {
+		t.Fatalf("framed refusal frame %+v", last.body)
+	}
 }
 
 func TestRunBackPressure(t *testing.T) {

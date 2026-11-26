@@ -20,6 +20,13 @@ import (
 // carries the rows in pieces, progress every 100 ms and any exception, as they happen
 // (ClickHouse 26.8, framing_output_format). The account's profile lets exactly these settings
 // change in read-only mode, within bounds (the backend's docs/sql-stream-protocol.md, section 9).
+//
+// The same profile holds the job path's first 10 MiB of every answer in the server's memory
+// (http_response_buffer_size), so that path's errors are never half an answer. That buffer
+// would hold this path's progress and rows too, until the statement ended, for any answer under
+// 10 MiB. Read-only mode refuses that setting (164), but the HTTP interface's own buffer_size
+// parameter, which is not a setting, takes its place for this request: 0 sends each packet as
+// it is written. An error before the first packet still comes back as an HTTP error.
 
 type chRequest struct {
 	BaseURL  string
@@ -166,6 +173,7 @@ func chURL(req chRequest) string {
 	q.Set("framing_output_format", "JSONEachPacketString")
 	q.Set("send_profile_events", "0")
 	q.Set("http_wait_end_of_query", "0")
+	q.Set("buffer_size", "0") // not the profile's 10 MiB: packets as they come (see above)
 	q.Set("limit", strconv.FormatInt(req.Limit, 10))
 	q.Set("max_execution_time", strconv.FormatInt(req.Secs, 10))
 	return strings.TrimRight(req.BaseURL, "/") + "/?" + q.Encode()
@@ -191,9 +199,10 @@ func runClickHouse(ctx context.Context, client *http.Client, req chRequest, sink
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		// Refused before it ran (a login, a constraint): ClickHouse's error as plain text.
+		// Refused before it ran: a login or a constraint as plain text, a statement ClickHouse
+		// could not parse or resolve (62, 47, 60) as one framed exception packet.
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-		return sink.Exception(string(bytes.TrimSpace(body)))
+		return sink.Exception(refusalText(body))
 	}
 
 	dec := json.NewDecoder(resp.Body)
@@ -230,6 +239,30 @@ func runClickHouse(ctx context.Context, client *http.Client, req chRequest, sink
 	}
 }
 
+// refusalText is the error in an HTTP error's body. With framing on (26.8.47), a statement refused
+// before its first packet (`SELEC 1`, an unknown column) still comes back framed:
+// {"packet":"exception","exception":"Code: 62. DB::Exception: ..."}. Read as plain text, that is
+// no ClickHouse error at all, and the tab says the run did not finish. An error raised before
+// framing applies (a login, a setting read-only mode refuses) is plain text, kept as it is.
+func refusalText(body []byte) string {
+	body = bytes.TrimSpace(body)
+	if len(body) > 0 && body[0] == '{' {
+		dec := json.NewDecoder(bytes.NewReader(body))
+		for {
+			var p chPacket
+			if dec.Decode(&p) != nil {
+				break
+			}
+			if p.Packet == "exception" {
+				if text, err := rawString(p.Exception); err == nil {
+					return text
+				}
+			}
+		}
+	}
+	return string(body)
+}
+
 // engineError is ClickHouse's error read as the job path reads it: its number and its words,
 // without its name and version, and where it is, in characters of what ran.
 type engineError struct {
@@ -242,7 +275,8 @@ type engineError struct {
 var (
 	chErrorPattern   = regexp.MustCompile(`(?s)\ACode: (\d+)\. DB::Exception: (.*?)(?: \([A-Z_]+\))?(?: \(version [^)]*\)?\))?\s*\z`)
 	failedAtPosition = regexp.MustCompile(`failed at position (\d+)`)
-	unknownName      = regexp.MustCompile("Unknown (?:expression|table expression) identifier [`'](.+?)[`']")
+	// 26.8.45 says "Unknown expression identifier", 26.8.47 "Unknown expression or function identifier".
+	unknownName = regexp.MustCompile("Unknown (?:expression(?: or function)?|table expression) identifier [`'](.+?)[`']")
 )
 
 const maxMessage = 2000
