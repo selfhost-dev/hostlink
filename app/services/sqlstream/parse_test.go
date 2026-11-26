@@ -108,6 +108,11 @@ func TestEngineErrors(t *testing.T) {
 	if unknown.Code != "47" || unknown.Position == nil || *unknown.Position != 14 {
 		t.Fatalf("%+v %v", unknown, *unknown.Position)
 	}
+	// 26.8.47's words for the same error.
+	newer := parseEngineError("Code: 47. DB::Exception: Unknown expression or function identifier `evnt` in scope SELECT ... Maybe you meant: ['event']. (UNKNOWN_IDENTIFIER) (version 26.8.47.5 (official build))", sql)
+	if newer.Code != "47" || newer.Position == nil || *newer.Position != 14 {
+		t.Fatalf("26.8.47 %+v", newer)
+	}
 	backticked := parseEngineError("Code: 47. DB::Exception: Unknown expression identifier `x y` in scope", "SELECT `x y` FROM t")
 	if backticked.Position == nil || *backticked.Position != 8 {
 		t.Fatalf("backticked position %v", backticked.Position)
@@ -127,10 +132,38 @@ func TestEngineErrors(t *testing.T) {
 	}
 }
 
+func TestRefusalText(t *testing.T) {
+	plain := "Code: 164. DB::Exception: Cannot modify 'http_response_buffer_size' setting in readonly mode. (READONLY) (version 26.8.47.5 (official build))"
+	cases := map[string]string{
+		// 26.8.47 with framing on: one exception packet, its string's escapes undone.
+		`{"packet":"exception","exception":"Code: 62. DB::Exception: Syntax error: failed at position 1 (SELEC): SELEC 1. Expected \"x\""}` + "\n": `Code: 62. DB::Exception: Syntax error: failed at position 1 (SELEC): SELEC 1. Expected "x"`,
+		// A packet before it is passed over.
+		`{"packet":"progress","progress":{"read_rows":"0"}}` + "\n" + `{"packet":"exception","exception":"Code: 60. DB::Exception: Unknown table"}`: "Code: 60. DB::Exception: Unknown table",
+		// Before framing applies (a login, a setting read-only mode refuses): plain text, as it is.
+		plain + "\n":    plain,
+		"proxy said no": "proxy said no",
+		// Not a packet after all: as it is.
+		`{"error":"x"}`: `{"error":"x"}`,
+		`{broken`:       `{broken`,
+	}
+	for in, want := range cases {
+		if got := refusalText([]byte(in)); got != want {
+			t.Errorf("refusalText(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// Unwrapped, it reads as the job path reads it: number, class and where the name is.
+	e := parseEngineError(refusalText([]byte(`{"packet":"exception","exception":"Code: 47. DB::Exception: Unknown expression or function identifier `+
+		"`evnt`"+` in scope SELECT evnt. (UNKNOWN_IDENTIFIER) (version 26.8.47.5 (official build))"}`)), "SELECT evnt")
+	if e.Code != "47" || errorClass(e.Code) != "engine" || e.Position == nil || *e.Position != 8 {
+		t.Fatalf("%+v", e)
+	}
+}
+
 func TestChURLCarriesTheSettingsTheProfileAllows(t *testing.T) {
 	u := chURL(chRequest{BaseURL: "http://127.0.0.1:8123/", Database: "analytics", QueryID: "sqr_0123456789abcdef0123_1", Limit: 10001, Secs: 3600})
 	for _, want := range []string{"framing_output_format=JSONEachPacketString", "send_profile_events=0", "http_wait_end_of_query=0",
-		"limit=10001", "max_execution_time=3600", "query_id=sqr_0123456789abcdef0123_1", "database=analytics", "default_format=TSVWithNamesAndTypes"} {
+		"buffer_size=0", "limit=10001", "max_execution_time=3600", "query_id=sqr_0123456789abcdef0123_1", "database=analytics",
+		"default_format=TSVWithNamesAndTypes"} {
 		if !strings.Contains(u, want) {
 			t.Errorf("%s lacks %s", u, want)
 		}
