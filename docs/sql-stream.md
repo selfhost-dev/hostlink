@@ -58,6 +58,15 @@ in front of it. It closes a connection with 4401 when its hello is refused, 4400
 does not take, 4408 when it cannot keep up, 4409 when a newer connection of the same agent
 replaces it, and 1012 when it restarts. Image: `dockers/sqlrelay.Dockerfile`.
 
+### The published image
+
+`.github/workflows/sqlrelay-image.yml` builds that Dockerfile for every release tag (RCs too) and
+pushes `ghcr.io/selfhost-dev/sqlrelay:<tag>` (linux/amd64; never `latest`: pin the hostlink tag).
+It is separate from the release workflow, so a failed image build does not hold a release back.
+For a tag that predates the workflow, run it by hand: `gh workflow run sqlrelay-image.yml -f tag=v0.8.64`.
+The package is linked to this repo by its source label; a new GHCR package starts private, so make
+it public once (Package settings, Change visibility) for hosts that pull without a login.
+
 ## Running it on a laptop
 
 ```
